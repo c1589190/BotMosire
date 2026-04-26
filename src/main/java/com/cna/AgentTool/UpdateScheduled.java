@@ -52,10 +52,6 @@ public class UpdateScheduled implements DefaultAgentToolUnit {
         try {
             String newSchedule = arguments.path("new_schedule").asText();
 
-            if (newSchedule == null || newSchedule.trim().isEmpty()) {
-                return "ERROR: new_schedule 不能为空，系统不允许存在毫无计划的空转状态。";
-            }
-
             log.info("[Tool][UpdateScheduled] 代理发起调度变更，正在覆写 {}...", TARGET_FILE);
             log.debug("写入内容预览: {}", newSchedule.length() > 50 ? newSchedule.substring(0, 50) + "..." : newSchedule);
 

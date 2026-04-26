@@ -19,6 +19,7 @@ public class ConfigsManager {
     public static final LLMConfig GATEKEEPER_CONFIG;
     public static final LLMConfig BRAIN_CONFIG;
     public static final LLMConfig EMBEDDING_CONFIG;
+    public static final LLMConfig SCHEDULER_CONFIG;
 
     public static final int COGNITIVE_CYCLE_TICKS;
     public static final int MESSAGE_WAITING_TIME;
@@ -86,6 +87,16 @@ public class ConfigsManager {
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.embedding.apiKey", ""))
                 .embeddingModel(getString("llm.embedding.embeddingModel", "Qwen/Qwen3-Embedding-4B"))
                 .temperature(getDouble("llm.embedding.temperature", 0.0))
+                .build();
+
+        SCHEDULER_CONFIG = LLMConfig.builder()
+                .apiBase(getString("llm.scheduler.apiBase", "https://api.siliconflow.cn/v1"))
+                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.scheduler.apiKey", ""))
+                .chatModel(getString("llm.scheduler.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
+                .temperature(getDouble("llm.scheduler.temperature", 0.4))
+                .frequencyPenalty(getDouble("llm.scheduler.frequencyPenalty", 0.4))
+                .presencePenalty(getDouble("llm.scheduler.presencePenalty", 0.5))
+                .enableCoT(getBoolean("llm.scheduler.enableCoT", true))
                 .build();
 
         // ==========================================
