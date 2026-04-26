@@ -31,7 +31,7 @@ public class MemoryManager {
 
     public MemoryManager() {
         this.db = new MemoryDB();
-        this.summaryLLM = new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG);
+        this.summaryLLM = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
         this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
         this.EMB_MEMORY_SIZE = ConfigsManager.EMB_MEMORY_SIZE;
         this.CURRENT_MEMORYS_MAXSIZE = ConfigsManager.CURRENT_MEMORIES_MAXSIZE;

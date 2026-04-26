@@ -5,6 +5,7 @@ import com.cna.AgentInput.NapcatQQInput.QQGroupMessageInput;
 import com.cna.AgentInput.NapcatQQInput.QQPrivateMessageInput;
 import com.cna.AgentTask.DefaultAgentTaskUnit;
 import com.cna.AgentTask.QQChatTask;
+import com.cna.AgentTask.ScheduledTask;
 import com.cna.AgentTask.UpdateThoughtsTask;
 import com.cna.AgentTool.*;
 import com.cna.config.ConfigsManager;
@@ -31,6 +32,9 @@ public class LivingLoop {
     // 累加器：记录度过了多少个 Tick
     private int tickCounter_CognitiveCycle = 0;
 
+    // 累加器：定时任务计数器
+    private int scheduledTaskCounter = 0;
+
     // 累加器：跨线程安全的任务处理计数器，用于触发定期反思
     private final AtomicInteger processedTaskCount = new AtomicInteger(0);
 
@@ -50,6 +54,7 @@ public class LivingLoop {
         DefaultAgentToolUnit privateHisTool = new GetQQPrivateHistory();
         DefaultAgentToolUnit updateInterestsTool = new UpdateInterests();
         DefaultAgentToolUnit updateThoughtsTool = new UpdateThoughts();
+        DefaultAgentToolUnit updateScheduledTool = new UpdateScheduled();
 
         largeLLMToolbox.put(privateMsgTool.getName(), privateMsgTool);
         largeLLMToolbox.put(groupMsgTool.getName(), groupMsgTool);
@@ -57,6 +62,7 @@ public class LivingLoop {
         largeLLMToolbox.put(privateHisTool.getName(), privateHisTool);
         largeLLMToolbox.put(updateThoughtsTool.getName(), updateThoughtsTool);
         largeLLMToolbox.put(updateInterestsTool.getName(), updateInterestsTool);
+        largeLLMToolbox.put(updateScheduledTool.getName(), updateScheduledTool);
         log.info("[LivingLoop] 大模型工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
     }
 
@@ -100,6 +106,14 @@ public class LivingLoop {
 
                     // 构造一个匿名内部类作为系统任务
                     TaskQueue.offerLast(new UpdateThoughtsTask());
+                }
+
+                this.scheduledTaskCounter ++;
+
+                if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME) {
+                    TaskQueue.offerLast(new ScheduledTask());
+                    this.scheduledTaskCounter = 0;
+                    log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
                 }
 
             } catch (Exception e) {
@@ -210,7 +224,7 @@ public class LivingLoop {
                         log.info("========== 常规聊天任务处理完毕 ==========\n");
                     }
                     // ==========================================
-                    // 场景 B：3. 【定时反思任务】处理系统级内心自省
+                    // 场景 B：3. 【定量反思任务】处理系统级内心自省
                     // ==========================================
                     else if (task instanceof UpdateThoughtsTask){
                         log.info("[EXEC] 捕获到 UpdateThoughtsTask，开始执行系统级反思任务...");
@@ -250,6 +264,49 @@ public class LivingLoop {
                         }
 
                         log.info("========== 系统反思任务处理完毕 ==========\n");
+                    }
+
+                    //TODO：在这里仿照UpdateThoughtsTask处理ScheduledTask，这个Task类只是用于识别，不需要调用这个类里面的任何元素
+                    //TODO：定时任务目前应该包括从scheduled_task.md读取需要做的事压入data，然后传给LLManager思考，拿取工具调用结果处理工具调用
+
+                    else if (task instanceof ScheduledTask && !MDManager.read("scheduled_task.md", "").isEmpty()){
+                        log.info("[EXEC] 捕获到 ScheduledTask，开始执行定时任务...");
+
+                        Map<String, Object> data = new HashMap<>();
+                        //data.put("scheduled_tasks", MDManager.read("scheduled_task.md", ""));
+                        data.put("current_thoughts", currentThoughts);
+                        //data.put("current_interests", MDManager.read("interests.md", ""));
+
+                        CallResult result = LLManager.executeScene(
+                                "LivingLoop_CognitiveCycle_Scheduled",
+                                data,
+                                this.largeLLM,
+                                "CORE.md",
+                                toolsDefinitionArray
+                        );
+
+                        if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
+                            // 遍历它所有的工具调用（可能同时调用了多个）
+                            for (JsonNode toolCall : result.getToolCalls()) {
+                                String functionName = toolCall.path("function").path("name").asText();
+                                String argumentsStr = toolCall.path("function").path("arguments").asText();
+
+                                log.info("[EXEC] 定时任务决定调用工具: [{}]", functionName);
+
+                                // 【核心修复】：直接从工具箱拿，拿到什么执行什么！
+                                DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
+                                if (targetTool != null) {
+                                    String execResult = targetTool.execute(mapper.readTree(argumentsStr));
+                                    log.info("[EXEC] 定时任务动作物理归档反馈: {}", execResult);
+                                } else {
+                                    log.warn("[EXEC] 严重幻觉：模型试图调用不存在的工具: {}", functionName);
+                                }
+                            }
+                        } else {
+                            log.info("[EXEC] 大模型放弃定时任务或仅输出文本: \n{}", result.getContent());
+                        }
+
+                        log.info("========== 定时任务处理完毕 ==========\n");
                     }
 
                 } catch (InterruptedException e) {
@@ -459,3 +516,7 @@ public class LivingLoop {
         }
     }
 }
+
+
+
+

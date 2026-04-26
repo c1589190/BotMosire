@@ -23,6 +23,7 @@ public class ConfigsManager {
     public static final int COGNITIVE_CYCLE_TICKS;
     public static final int MESSAGE_WAITING_TIME;
     public static final int CONSUMER_CYCLING_TIME;
+    public static final int SCHEDULE_CYCLING_TIME;
     public static final int TASK_COUNT_FOR_REFLECTION;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
@@ -94,6 +95,7 @@ public class ConfigsManager {
         MESSAGE_WAITING_TIME = getInt("cognitive.messageWaitingTime", 5);
         CONSUMER_CYCLING_TIME = getInt("cognitive.consumerCyclingTime", 10);
         TASK_COUNT_FOR_REFLECTION = getInt("cognitive.taskCountForReflection", 10);
+        SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 30000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
 
         // ==========================================
