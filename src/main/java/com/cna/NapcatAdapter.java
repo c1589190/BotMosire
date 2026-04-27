@@ -140,14 +140,28 @@ public class NapcatAdapter extends WebSocketClient {
         log.error("[WS] 发生底层网络异常", ex);
     }
 
-    private String parseMessageArray(JsonNode messageArray) {
-        if (messageArray == null || !messageArray.isArray()) {
+    private String parseMessageArray(JsonNode messageNode) {
+
+        //log.debug(messageNode.asText());
+
+        // 1. 防空判断
+        if (messageNode == null || messageNode.isMissingNode()) {
+            return "";
+        }
+
+        // 2. 兼容处理：如果 Napcat 返回的是纯字符串格式（CQ码文本）
+        if (messageNode.isTextual()) {
+            return messageNode.asText().trim();
+        }
+
+        // 3. 确保是数组类型再进行后续的遍历解析
+        if (!messageNode.isArray()) {
             return "";
         }
 
         StringBuilder parsedContent = new StringBuilder();
 
-        for (JsonNode segment : messageArray) {
+        for (JsonNode segment : messageNode) {
             String type = segment.path("type").asText("");
             JsonNode data = segment.path("data");
 
@@ -167,6 +181,7 @@ public class NapcatAdapter extends WebSocketClient {
                     parsedContent.append("[表情]");
                     break;
                 default:
+                    // 其他类型可根据需要扩展
                     break;
             }
         }
