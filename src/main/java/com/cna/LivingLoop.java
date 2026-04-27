@@ -254,7 +254,7 @@ public class LivingLoop {
 
                         // 归档动作记忆
                         List<String> list = new LinkedList<>();
-                        list.add("调用工具 [" + functionName + "] 返回: " + execResult);
+                        list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
                         new MemoryManager().inputCurrentMemorys(list);
 
                     } catch (Exception e) {

@@ -16,6 +16,8 @@ public class GetQQGroupHistory implements DefaultAgentToolUnit {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private long GroupID = -1;
+
     public GetQQGroupHistory() {
     }
 
@@ -53,14 +55,14 @@ public class GetQQGroupHistory implements DefaultAgentToolUnit {
     @Override
     public String execute(JsonNode arguments) {
         try {
-            long groupId = Long.parseLong(arguments.path("group_id").asText());
+            this.GroupID = Long.parseLong(arguments.path("group_id").asText());
 
             // 【核心修改】：强制使用 ConfigsManager 里的常量！
             int count = ConfigsManager.HISTORY_VIEW_AMOUNT;
 
-            log.info("[Tool][GetQQGroupHistory] 大模型主动申请查阅群 [{}] 的近期 {} 条历史记录", groupId, count);
+            log.info("[Tool][GetQQGroupHistory] 大模型主动申请查阅群 [{}] 的近期 {} 条历史记录", this.GroupID, count);
 
-            List<String> historyList = GlobalNapcatAdapter.getGroupHistorySync(groupId, count);
+            List<String> historyList = GlobalNapcatAdapter.getGroupHistorySync(this.GroupID, count);
 
             if (historyList == null || historyList.isEmpty()) {
                 return "SYSTEM_FEEDBACK: 该群没有最近的历史记录，或物理层获取失败。";
@@ -74,6 +76,16 @@ public class GetQQGroupHistory implements DefaultAgentToolUnit {
         } catch (Exception e) {
             log.error("执行 get_qq_group_history 发生异常", e);
             return "ERROR: 获取群历史记录失败，底层物理异常: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String getTextRecord(){
+        if(this.GroupID == -1){
+            //该工具没有调用记录
+            return "尝试通过工具获取群聊历史记录，但是这个工具之前并没有被调用过;";
+        } else {
+            return "调用工具，获取了QQ群聊" + this.GroupID + "的历史记录;";
         }
     }
 }

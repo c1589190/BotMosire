@@ -1,5 +1,6 @@
 package com.cna.llm;
 
+import com.cna.Utils;
 import com.cna.config.ConfigsManager;
 import com.cna.db.MDManager;
 import com.cna.db.MemoryManager;
@@ -75,7 +76,9 @@ public class LLManager {
 
         // 1. 调用上面的方法，将参数和模板融合成最终的 Prompt
         Map<String, Object> data = dataModel;
+        //输入一些必要前置参数
         data.put("current_memories", new MemoryManager().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE + ConfigsManager.EMB_MEMORY_SIZE));
+        data.put("now_time", Utils.getNowFormatted());
         String userPrompt = render(sceneName, dataModel);
         //log.debug("[LLMManager] 场景 [{}] 渲染完毕，准备提交大模型...", sceneName);
 

@@ -16,6 +16,8 @@ public class GetQQPrivateHistory implements DefaultAgentToolUnit {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private long UserID = -1;
+
     public GetQQPrivateHistory() {
     }
 
@@ -51,14 +53,14 @@ public class GetQQPrivateHistory implements DefaultAgentToolUnit {
     @Override
     public String execute(JsonNode arguments) {
         try {
-            long userId = Long.parseLong(arguments.path("user_id").asText());
+            this.UserID = Long.parseLong(arguments.path("user_id").asText());
 
             // 【核心修改】：强制使用 ConfigsManager 里的常量！
             int count = ConfigsManager.HISTORY_VIEW_AMOUNT;
 
-            log.info("[Tool][GetQQPrivateHistory] 大模型主动申请查阅私聊对象 [{}] 的近期 {} 条历史记录", userId, count);
+            log.info("[Tool][GetQQPrivateHistory] 大模型主动申请查阅私聊对象 [{}] 的近期 {} 条历史记录", this.UserID, count);
 
-            List<String> historyList = GlobalNapcatAdapter.getFriendHistorySync(userId, count);
+            List<String> historyList = GlobalNapcatAdapter.getFriendHistorySync(this.UserID, count);
 
             if (historyList == null || historyList.isEmpty()) {
                 return "SYSTEM_FEEDBACK: 与该用户的私聊没有最近的历史记录，或物理层获取失败。";
@@ -72,6 +74,16 @@ public class GetQQPrivateHistory implements DefaultAgentToolUnit {
         } catch (Exception e) {
             log.error("执行 get_qq_private_history 发生异常", e);
             return "ERROR: 获取私聊历史记录失败，底层物理异常: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String getTextRecord(){
+        if(this.UserID == -1){
+            //该工具没有调用记录
+            return "尝试通过工具获取私聊历史记录，但是这个工具之前并没有被调用过;";
+        } else {
+            return "调用工具，获取了和QQ号为" + this.UserID + "的用户的历史聊天记录;";
         }
     }
 }

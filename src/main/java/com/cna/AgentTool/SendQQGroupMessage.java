@@ -14,6 +14,9 @@ public class SendQQGroupMessage implements DefaultAgentToolUnit {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private String message = null;
+    private long groupId = -1;
+
     public SendQQGroupMessage() {
 
     }
@@ -54,21 +57,30 @@ public class SendQQGroupMessage implements DefaultAgentToolUnit {
     @Override
     public String execute(JsonNode arguments) {
         try {
-            long groupId = Long.parseLong(arguments.path("group_id").asText());
-            String message = arguments.path("message").asText();
+            this.groupId = Long.parseLong(arguments.path("group_id").asText());
+            this.message = arguments.path("message").asText();
 
-            log.info("[Tool][SendQQGroupMessage] 准备向群聊 [群:{}] 发送消息: {}", groupId, message);
+            log.info("[Tool][SendQQGroupMessage] 准备向群聊 [群:{}] 发送消息: {}", this.groupId, this.message);
 
             // 调用物理层的 WebSocket 发送动作
-            GlobalNapcatAdapter.sendGroupMsg(groupId, message);
+            GlobalNapcatAdapter.sendGroupMsg(this.groupId, this.message);
 
-            return "SUCCESS: 群消息已成功发送至群 " + groupId;
+            return "SUCCESS: 群消息已成功发送至群 " + this.groupId;
         } catch (NumberFormatException e) {
             log.error("执行 send_qq_group_message 失败: 群号格式错误", e);
             return "ERROR: group_id 必须是有效的数字字符串";
         } catch (Exception e) {
             log.error("执行 send_qq_group_message 发生物理异常", e);
             return "ERROR: 发送失败，底层物理异常: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String getTextRecord(){
+        if(this.message == null || this.groupId == -1){
+            return "尝试给QQ群聊发送消息，但是没有发送成功，构建Tool的参数：输入的群聊ID：[" + this.groupId + "], 输入的消息：[" + this.message + "];";
+        } else {
+            return "给ID为[" + this.groupId + "]的qq群聊发送了[" + this.message + "];";
         }
     }
 }

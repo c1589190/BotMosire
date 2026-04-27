@@ -13,4 +13,6 @@ public interface DefaultAgentToolUnit {
     // 3. 真正的物理执行逻辑 (参数是大模型填好的 JSON，返回值是执行结果)
     // 返回 String 是为了把执行结果（比如"发送成功"或"报错了"）再喂给大模型
     String execute(JsonNode arguments);
+
+    String getTextRecord();
 }

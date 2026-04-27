@@ -14,6 +14,9 @@ public class SendQQPrivateMessage implements DefaultAgentToolUnit {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    private String message = null;
+    private long userId = -1;
+
     // 通过构造函数注入底层的 Napcat 适配器
     public SendQQPrivateMessage() {
     }
@@ -57,21 +60,30 @@ public class SendQQPrivateMessage implements DefaultAgentToolUnit {
     @Override
     public String execute(JsonNode arguments) {
         try {
-            long userId = Long.parseLong(arguments.path("user_id").asText());
-            String message = arguments.path("message").asText();
+            this.userId = Long.parseLong(arguments.path("user_id").asText());
+            this.message = arguments.path("message").asText();
 
-            log.info("[Tool][SendQQPrivateMessage] 准备向私聊 [QQ:{}] 发送消息: {}", userId, message);
+            log.info("[Tool][SendQQPrivateMessage] 准备向私聊 [QQ:{}] 发送消息: {}", this.userId, this.message);
 
             // 调用物理层的 WebSocket 发送动作
-            GlobalNapcatAdapter.sendPrivateMsg(userId, message);
+            GlobalNapcatAdapter.sendPrivateMsg(this.userId, this.message);
 
-            return "SUCCESS: 私聊消息已成功发送给 " + userId;
+            return "SUCCESS: 私聊消息已成功发送给 " + this.userId;
         } catch (NumberFormatException e) {
             log.error("执行 send_qq_private_message 失败: QQ号格式错误", e);
             return "ERROR: user_id 必须是有效的数字字符串";
         } catch (Exception e) {
             log.error("执行 send_qq_private_message 发生物理异常", e);
             return "ERROR: 发送失败，底层物理异常: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String getTextRecord(){
+        if(this.message == null || this.userId == -1){
+            return "尝试给QQ用户发送消息，但是没有发送成功，构建Tool的参数：输入的群聊ID：[" + this.userId + "], 输入的消息：[" + this.message + "];";
+        } else {
+            return "给ID为[" + this.userId + "]的qq用户发送了[" + this.message + "];";
         }
     }
 }

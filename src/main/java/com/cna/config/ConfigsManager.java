@@ -6,6 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Properties;
 
 @Slf4j
@@ -33,6 +36,8 @@ public class ConfigsManager {
     public static final int MEMORY_DEPTH;
     public static final String DB_URL;
 
+    public static final String NAPCAT_WS_URL;
+    public static final String NAPCAT_TOEKN;
     public static final int NAPCAT_WS_PORT;
     public static final String NAPCAT_HTTP_URL;
 
@@ -46,18 +51,25 @@ public class ConfigsManager {
         log.info("");
         //只是专门调用一下确保下面的static字段成功调用
     }
+
     // 静态代码块：类加载时读取配置文件并初始化
     static {
-        // 1. 加载 properties 文件
-        try (InputStream in = ConfigsManager.class.getClassLoader().getResourceAsStream("application.properties")) {
-            if (in != null) {
-                // 推荐指定 UTF-8 编码，防止读取中文路径或配置乱码
-                props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+        Path externalConfig = Paths.get("application.properties");
+
+        try {
+            if (Files.exists(externalConfig)) {
+                // 彻底斩断对 JAR 内部资源的依赖，仅从外部物理目录读取
+                try (InputStream in = Files.newInputStream(externalConfig)) {
+                    props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+                    System.out.println("[ConfigsManager] 成功加载外部物理配置文件: " + externalConfig.toAbsolutePath());
+                }
             } else {
-                System.err.println("⚠️ 未在 classpath 下找到 application.properties，将使用代码中的默认值！");
+                // 如果外部没有，直接放弃，绝不去内部找
+                System.err.println("[ConfigsManager] ⚠️ 外部物理目录下未找到 application.properties 文件！");
+                System.err.println("[ConfigsManager] ⚠️ 引擎将全部使用系统硬编码的默认参数运行。若需自定义，请在程序同级目录创建该文件。");
             }
         } catch (Exception e) {
-            System.err.println("❌ 读取配置文件失败: " + e.getMessage());
+            System.err.println("❌ 读取外部配置文件失败: " + e.getMessage());
         }
 
         // ==========================================
@@ -106,7 +118,7 @@ public class ConfigsManager {
         MESSAGE_WAITING_TIME = getInt("cognitive.messageWaitingTime", 5);
         CONSUMER_CYCLING_TIME = getInt("cognitive.consumerCyclingTime", 10);
         TASK_COUNT_FOR_REFLECTION = getInt("cognitive.taskCountForReflection", 10);
-        SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 30000);
+        SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 300000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
 
         // ==========================================
@@ -121,8 +133,10 @@ public class ConfigsManager {
         // ==========================================
         // 4. Napcat 物理通信配置
         // ==========================================
+        NAPCAT_WS_URL = getString("napcat.wsUrl", "127.0.0.1");
         NAPCAT_WS_PORT = getInt("napcat.wsPort", 3001);
         NAPCAT_HTTP_URL = getString("napcat.httpUrl", "http://127.0.0.1:3000");
+        NAPCAT_TOEKN = getString("napcat.token", "");
 
         // ==========================================
         // 5. 提示词文件路径

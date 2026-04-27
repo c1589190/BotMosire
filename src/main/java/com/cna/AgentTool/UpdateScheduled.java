@@ -69,4 +69,9 @@ public class UpdateScheduled implements DefaultAgentToolUnit {
             return "ERROR: 执行更新调度失败，底层异常: " + e.getMessage();
         }
     }
+
+    @Override
+    public String getTextRecord(){
+        return "为自己更新了定时任务列表;";
+    }
 }
