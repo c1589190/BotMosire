@@ -56,17 +56,6 @@ public class LLManager {
         }
     }
 
-    /**
-     * 【核心高阶功能】：一站式场景执行器
-     * 传入场景 -> 渲染 Prompt -> 呼叫大模型 -> 直接返回分析结果
-     *
-     * @param sceneName 场景文件名
-     * @param dataModel 传入的参数 (如 unknownInputs 列表)
-     * @param llm       指定该场景使用的模型适配器 (小模型还是大模型)
-
-     * @param tools     允许使用的工具 (传 null 则为纯文本对话)
-     * @return 统一的 ToolCallResult
-     */
     public static CallResult executeScene(
             String sceneName,
             Map<String, Object> dataModel,
@@ -79,15 +68,17 @@ public class LLManager {
         //输入一些必要前置参数
         data.put("current_memories", new MemoryManager().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE + ConfigsManager.EMB_MEMORY_SIZE));
         data.put("now_time", Utils.getNowFormatted());
+
+        // 这里渲染出了完美的 Prompt
         String userPrompt = render(sceneName, dataModel);
-        //log.debug("[LLMManager] 场景 [{}] 渲染完毕，准备提交大模型...", sceneName);
+        log.info("[LLMManager] Prompt [\n{}\n] 渲染完毕，准备提交大模型.", userPrompt);
 
         // 2. 呼叫大模型并直接返回结果
-        // 如果 tools 为空或 null，generateResponseWithTools 内部应该自动按常规文本请求处理
         if(tools == null){
             CallResult result = new CallResult();
             result.setToolCall(false);
-            result.setContent(llm.generateStreamResponse((String) dataModel.get("user"), MDManager.read(SystemPromptPath), chunk -> {}));
+            // 【关键修复】：把 (String) dataModel.get("user") 替换成 userPrompt
+            result.setContent(llm.generateStreamResponse(userPrompt, MDManager.read(SystemPromptPath), chunk -> {}));
             result.setToolCalls(null);
             return result;
         }

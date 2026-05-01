@@ -3,6 +3,14 @@
 当前时间：
 ${now_time}
 
+<#if current_thoughts?has_content>
+你的目前内心想法，其中包含了之前的你希望自己记住的东西：{
+
+${current_thoughts}
+
+}
+</#if>
+
 以下是您为自己指定的定时任务，请执行其中的各项内容：{
 
 ${scheduled}
@@ -23,6 +31,7 @@ ${scheduled}
 这是之前您自己希望自己记住的东西：{
 
 ${current_thoughts}
+
 }
 </#if>
 

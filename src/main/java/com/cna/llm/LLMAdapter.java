@@ -1,5 +1,6 @@
 package com.cna.llm;
 
+import com.cna.config.ConfigsManager;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -266,5 +267,62 @@ public class LLMAdapter {
         }
 
         return result;
+    }
+
+    /**
+     * 对接视觉大模型 (Vision)
+     * 传入提示词和 Base64 格式的图片，返回对图片的文字描述
+     */
+    public String generateVisionDescription(String promptText, String base64Image) {
+        ObjectNode payload = jsonMapper.createObjectNode();
+        // 注意：这里需要在你的 LLMConfig 中配置一个视觉模型，比如 qwen-vl-max 或 gpt-4o
+        payload.put("model", config.getChatModel());
+        payload.put("temperature", config.getTemperature());
+        payload.put("max_tokens", config.getMax_tokens());
+
+        ArrayNode messages = payload.putArray("messages");
+
+        ObjectNode userMsg = jsonMapper.createObjectNode();
+        userMsg.put("role", "user");
+
+        // 视觉模型的 content 是一个数组
+        ArrayNode contentArray = userMsg.putArray("content");
+
+        // 1. 压入文本指令
+        ObjectNode textNode = jsonMapper.createObjectNode();
+        textNode.put("type", "text");
+        textNode.put("text", promptText);
+        contentArray.add(textNode);
+
+        // 2. 压入 Base64 图片数据
+        ObjectNode imageNode = jsonMapper.createObjectNode();
+        imageNode.put("type", "image_url");
+        ObjectNode imageUrlNode = imageNode.putObject("image_url");
+        // 标准协议要求带上前缀
+        imageUrlNode.put("url", "data:image/jpeg;base64," + base64Image);
+        contentArray.add(imageNode);
+
+        messages.add(userMsg);
+
+        String url = config.getApiBase().endsWith("/") ? config.getApiBase() + "chat/completions" : config.getApiBase() + "/chat/completions";
+
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Content-Type", "application/json")
+                .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                log.error("视觉计算资源请求失败，状态码: {}", response.code());
+                return "[图片解析失败: 服务端无响应]";
+            }
+            JsonNode rootNode = jsonMapper.readTree(response.body().string());
+            return rootNode.path("choices").get(0).path("message").path("content").asText("[图片解析失败: 无内容]");
+        } catch (Exception e) {
+            log.error("视觉模型网络 I/O 异常", e);
+            return "[图片解析失败: 网络异常]";
+        }
     }
 }

@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -34,6 +35,12 @@ public class LivingLoop {
 
     // 累加器：定时任务计数器
     private int scheduledTaskCounter = 0;
+
+    // 新增：Gatekeeper (小模型) 专用异步线程池，防止网络请求阻塞心跳总线
+    private final ExecutorService gatekeeperExecutor = Executors.newSingleThreadExecutor();
+
+    // 新增：Gatekeeper 状态锁。保证小模型一次只专注思考一批消息
+    private final AtomicBoolean isGatekeeperThinking = new AtomicBoolean(false);
 
     // 累加器：跨线程安全的任务处理计数器，用于触发定期反思
     private final AtomicInteger processedTaskCount = new AtomicInteger(0);
@@ -56,6 +63,7 @@ public class LivingLoop {
         DefaultAgentToolUnit updateInterestsTool = new UpdateInterests();
         DefaultAgentToolUnit updateThoughtsTool = new UpdateThoughts();
         DefaultAgentToolUnit updateScheduledTool = new UpdateScheduled();
+        DefaultAgentToolUnit switchModelTool = new SwitchToAdvancedModel();
 
         largeLLMToolbox.put(privateMsgTool.getName(), privateMsgTool);
         largeLLMToolbox.put(groupMsgTool.getName(), groupMsgTool);
@@ -64,6 +72,9 @@ public class LivingLoop {
         largeLLMToolbox.put(updateThoughtsTool.getName(), updateThoughtsTool);
         largeLLMToolbox.put(updateInterestsTool.getName(), updateInterestsTool);
         largeLLMToolbox.put(updateScheduledTool.getName(), updateScheduledTool);
+        largeLLMToolbox.put(new GetScheduled().getName(), new GetScheduled());
+        largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
+        largeLLMToolbox.put(new GetInterests().getName(), new GetInterests());
         log.info("[LivingLoop] 大模型工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
     }
 
@@ -95,7 +106,23 @@ public class LivingLoop {
                 this.tickCounter_CognitiveCycle ++;
 
                 if (this.tickCounter_CognitiveCycle >= ConfigsManager.COGNITIVE_CYCLE_TICKS) {
-                    handleCognitiveCycle();
+                    // 【核心修改】：尝试加锁。如果小模型当前没在思考，就进去。如果在思考，就跳过。
+                    if (isGatekeeperThinking.compareAndSet(false, true)) {
+                        // 把它扔到专属线程里去执行，让心跳线程立刻返回，继续读秒！
+                        gatekeeperExecutor.submit(() -> {
+                            try {
+                                handleCognitiveCycle();
+                            } finally {
+                                // 思考完毕，无论成功报错，必定释放锁
+                                isGatekeeperThinking.set(false);
+                            }
+                        });
+                    }
+                    // else {
+                    //     如果它还在思考，这里什么都不做。
+                    //     新来的 QQ 消息会自动堆积在 Main.AgentInputTasksQueue 中，
+                    //     等它下次释放锁之后，再一次性全部吸干处理，完美符合人类处理消息的逻辑。
+                    // }
                     this.tickCounter_CognitiveCycle = 0;
                 }
 
@@ -152,7 +179,7 @@ public class LivingLoop {
                     finishTool.put("type", "function");
                     ObjectNode finishFunction = finishTool.putObject("function");
                     finishFunction.put("name", "finish_task");
-                    finishFunction.put("description", "当你认为当前任务已经完成，获取了足够的信息，或者不需要进行更多操作时，必须调用此工具以结束思考循环。");
+                    finishFunction.put("description", "当你认为当前任务已经完成所有需要干的事，下一轮不需要进行任何其他行动时，调用此工具以立刻结束思考循环。");
                     finishFunction.putObject("parameters").put("type", "object");
                     toolsDefinitionArray.add(finishTool);
 
@@ -163,29 +190,33 @@ public class LivingLoop {
                     // ==========================================
                     // 任务分发与执行
                     // ==========================================
-                    if (task instanceof QQChatTask) {
-                        baseData.put("taskText", task.getTaskText());
-                        baseData.put("deep_memories", LLManager.getDeepMemories(task.getTaskText(), this.embLLM, ConfigsManager.MEMORY_DEPTH));
+                    switch (task) {
+                        case QQChatTask qqChatTask -> {
+                            baseData.put("taskText", task.getTaskText());
+                            baseData.put("deep_memories", LLManager.getDeepMemories(task.getTaskText(), this.embLLM, ConfigsManager.MEMORY_DEPTH));
 
-                        executeCognitiveCycle("LivingLoop_ConsumerCycle_solveQQChatTask", baseData, this.largeLLM, toolsDefinitionArray, "常规聊天任务");
+                            executeCognitiveCycle("LivingLoop_ConsumerCycle_solveQQChatTask", "LivingLoop_ConsumerCycle_thinkQQChatTask", baseData, this.largeLLM, toolsDefinitionArray, "常规聊天任务");
 
-                        processedTaskCount.incrementAndGet();
-                        log.info("========== 常规聊天任务处理完毕 ==========\n");
+                            processedTaskCount.incrementAndGet();
+                            log.info("========== 常规聊天任务处理完毕 ==========\n");
+                        }
+                        case UpdateThoughtsTask updateThoughtsTask -> {
+                            baseData.put("taskText", task.getTaskText());
+                            baseData.put("current_interests", MDManager.read("interests.md", ""));
 
-                    } else if (task instanceof UpdateThoughtsTask) {
-                        baseData.put("taskText", task.getTaskText());
-                        baseData.put("current_interests", MDManager.read("interests.md", ""));
+                            executeCognitiveCycle("LivingLoop_CognitiveCycle_updateThoughts", "", baseData, this.largeLLM, toolsDefinitionArray, "系统级反思任务");
 
-                        executeCognitiveCycle("LivingLoop_CognitiveCycle_updateThoughts", baseData, this.largeLLM, toolsDefinitionArray, "系统级反思任务");
+                            log.info("========== 系统反思任务处理完毕 ==========\n");
+                        }
+                        case ScheduledTask scheduledTask when !MDManager.read("scheduled.md", "").isEmpty() -> {
+                            baseData.put("scheduled", MDManager.read("scheduled.md", ""));
 
-                        log.info("========== 系统反思任务处理完毕 ==========\n");
+                            executeCognitiveCycle("LivingLoop_CognitiveCycle_Scheduled", "", baseData, this.SchedulerLLM, toolsDefinitionArray, "定时计划任务");
 
-                    } else if (task instanceof ScheduledTask && !MDManager.read("scheduled.md", "").isEmpty()) {
-                        baseData.put("scheduled", MDManager.read("scheduled.md", ""));
-
-                        executeCognitiveCycle("LivingLoop_CognitiveCycle_Scheduled", baseData, this.SchedulerLLM, toolsDefinitionArray, "定时计划任务");
-
-                        log.info("========== 定时任务处理完毕 ==========\n");
+                            log.info("========== 定时任务处理完毕 ==========\n");
+                        }
+                        default -> {
+                        }
                     }
 
                 } catch (InterruptedException e) {
@@ -201,12 +232,47 @@ public class LivingLoop {
     /**
      * 通用认知执行引擎 (支持多轮、每轮多工具并发、自主中断)
      */
-    private void executeCognitiveCycle(String sceneName, Map<String, Object> baseData, LLMAdapter llm, ArrayNode toolsDefinitionArray, String taskDesc) {
+    private void executeCognitiveCycle(String sceneName, String thinkingSceneName, Map<String, Object> baseData, LLMAdapter DefaultLLM, ArrayNode toolsDefinitionArray, String taskDesc) {
         String turnsAddition = "";
         ObjectMapper mapper = new ObjectMapper();
+        LLMAdapter llm = DefaultLLM;
+        //使用默认循环模型
 
+        // ==========================================
+        // 【新增】：第 0 轮 - 强制战略规划阶段 (Plan)
+        // ==========================================
+        log.info("[EXEC-Engine] [{}] 正在进行第 0 轮预思考 (战略规划与任务拆解)...", taskDesc);
+        Map<String, Object> turn0Data = new HashMap<>(baseData);
+        // 通过 turnsAddition 注入强制指令，要求模型分析局势并制定计划
+        //turn0Data.put("user", "【系统强制指令】：当前为前期规划阶段。请仔细分析当前的任务文本、记忆以及系统设定。不要尝试输出任何工具调用的格式。请直接用自然语言输出一段详细的内心独白，分析目前的局势，理解用户的核心意图，并列出你接下来打算分几步、调用哪些工具来完美解决这个问题。");
+
+        if(!Objects.equals(thinkingSceneName, "")){
+            try {
+                // 关键：传入空的工具数组 (emptyTools)，剥夺模型在这一轮调用工具的能力，逼迫它只能思考出字
+                CallResult planResult = LLManager.executeScene(
+                        thinkingSceneName,
+                        turn0Data,
+                        llm,
+                        "CORE.md",
+                        null
+                );
+
+                String planContent = planResult.getContent();
+                log.info("[EXEC-Engine] 💡 第 0 轮预思考完毕，生成战略路线图: \n{}", planContent);
+
+                // 将生成的规划作为记忆前缀，永久烙印在后续正式执行轮次的 turnsAddition 中
+                turnsAddition += "任务前期规划: [\n" + planContent + "\n];";
+
+            } catch (Exception e) {
+                log.warn("[EXEC-Engine] 第 0 轮预思考发生异常，将降级直接进入动作循环。", e);
+            }
+        }
+
+        // ==========================================
+        // 正式动作执行循环阶段 (Solve)
+        // ==========================================
         for (int turn = 1; turn <= ConfigsManager.CONSUMER_CYCLING_TIME; turn++) {
-            log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考...", taskDesc, turn);
+            log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考与动作执行...", taskDesc, turn);
 
             Map<String, Object> turnData = new HashMap<>(baseData);
             turnData.put("turnsAddition", turnsAddition);
@@ -228,7 +294,7 @@ public class LivingLoop {
             StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
             boolean hasFinalAction = false;
 
-            // 并行处理本轮决定的所有工具调用
+            // 循环处理本轮中调用的工具类
             for (JsonNode toolCall : result.getToolCalls()) {
                 String functionName = toolCall.path("function").path("name").asText();
                 String argumentsStr = toolCall.path("function").path("arguments").asText();
@@ -240,6 +306,10 @@ public class LivingLoop {
                     log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
                     hasFinalAction = true;
                     continue; // 这是一个虚拟工具，跳过物理执行
+                }
+                if ("switch_to_advanced_model".equals(functionName)) {
+                    log.info("[EXEC-Engine] 下一轮思考将切换至高级大模型。");
+                    llm = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
                 }
 
                 // 物理执行常规工具
@@ -276,6 +346,10 @@ public class LivingLoop {
                 turnsAddition += "在第 " + turn + " 轮思考中，你获得了以下信息：\n" + toolResults.toString() + "\n";
             }
         }
+    }
+
+    private static Map<String, Object> getTurn0Data(Map<String, Object> turn0Data) {
+        return turn0Data;
     }
 
     /**

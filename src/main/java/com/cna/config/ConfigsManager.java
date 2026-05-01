@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.Properties;
 
 @Slf4j
@@ -17,12 +18,15 @@ public class ConfigsManager {
     private static final Properties props = new Properties();
 
     // ==========================================
-    // 声明为 public static final，保持你原有的调用方式不变
+    // 声明为 public static final
     // ==========================================
     public static final LLMConfig GATEKEEPER_CONFIG;
+    public static final LLMConfig PLANNER_CONFIG; // 【新增】：战略规划/第0轮预思考专用模型
     public static final LLMConfig BRAIN_CONFIG;
+    public static final LLMConfig ADVANCED_BRAIN_CONFIG;
     public static final LLMConfig EMBEDDING_CONFIG;
     public static final LLMConfig SCHEDULER_CONFIG;
+    public static final LLMConfig VISION_MODEL;
 
     public static final int COGNITIVE_CYCLE_TICKS;
     public static final int MESSAGE_WAITING_TIME;
@@ -41,47 +45,55 @@ public class ConfigsManager {
     public static final int NAPCAT_WS_PORT;
     public static final String NAPCAT_HTTP_URL;
 
-    public static final String FILE_CORE_PERSONA;
-    public static final String FILE_ATTENTION_PROMPT;
-    public static final String FILE_DEEP_MEMORY_PROMPT;
     public static final int MAX_TASK_AMOUNT;
 
 
     public static void init(){
-        log.info("");
-        //只是专门调用一下确保下面的static字段成功调用
+        log.info("[ConfigsManager] 配置模块初始化完毕。");
     }
 
     // 静态代码块：类加载时读取配置文件并初始化
     static {
         Path externalConfig = Paths.get("application.properties");
 
+        // 核心逻辑：如果没有配置文件，先从 resources 模板生成一份！
+        if (!Files.exists(externalConfig)) {
+            System.err.println("[ConfigsManager] ⚠️ 未检测到 application.properties，正在从模板生成默认配置文件...");
+            generateDefaultConfigFile(externalConfig);
+        }
+
         try {
-            if (Files.exists(externalConfig)) {
-                // 彻底斩断对 JAR 内部资源的依赖，仅从外部物理目录读取
-                try (InputStream in = Files.newInputStream(externalConfig)) {
-                    props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
-                    System.out.println("[ConfigsManager] 成功加载外部物理配置文件: " + externalConfig.toAbsolutePath());
-                }
-            } else {
-                // 如果外部没有，直接放弃，绝不去内部找
-                System.err.println("[ConfigsManager] ⚠️ 外部物理目录下未找到 application.properties 文件！");
-                System.err.println("[ConfigsManager] ⚠️ 引擎将全部使用系统硬编码的默认参数运行。若需自定义，请在程序同级目录创建该文件。");
+            // 此时文件一定存在（除非生成失败或权限不足），直接读取
+            try (InputStream in = Files.newInputStream(externalConfig)) {
+                props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+                System.out.println("[ConfigsManager] 成功加载外部物理配置文件: " + externalConfig.toAbsolutePath());
             }
         } catch (Exception e) {
             System.err.println("❌ 读取外部配置文件失败: " + e.getMessage());
+            System.err.println("[ConfigsManager] ⚠️ 引擎将使用系统硬编码的默认参数运行。");
         }
 
         // ==========================================
         // 1. 初始化 LLM 混合编排矩阵
         // ==========================================
+
         GATEKEEPER_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.gatekeeper.apiBase", "https://api.siliconflow.cn/v1"))
-                // 优先读取系统环境变量 SILICONFLOW_API_KEY，如果没有则读取文件中的 llm.gatekeeper.apiKey
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.gatekeeper.apiKey", ""))
                 .chatModel(getString("llm.gatekeeper.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
                 .temperature(getDouble("llm.gatekeeper.temperature", 0.3))
                 .enableCoT(getBoolean("llm.gatekeeper.enableCoT", true))
+                .build();
+
+        // 【新增】：战略规划者配置 (第0轮专用)
+        PLANNER_CONFIG = LLMConfig.builder()
+                .apiBase(getString("llm.planner.apiBase", "https://api.siliconflow.cn/v1"))
+                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.planner.apiKey", ""))
+                .chatModel(getString("llm.planner.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
+                .temperature(getDouble("llm.planner.temperature", 0.5))
+                .frequencyPenalty(getDouble("llm.planner.frequencyPenalty", 0.2))
+                .presencePenalty(getDouble("llm.planner.presencePenalty", 0.2))
+                .enableCoT(getBoolean("llm.planner.enableCoT", true))
                 .build();
 
         BRAIN_CONFIG = LLMConfig.builder()
@@ -91,7 +103,17 @@ public class ConfigsManager {
                 .temperature(getDouble("llm.brain.temperature", 0.6))
                 .frequencyPenalty(getDouble("llm.brain.frequencyPenalty", 0.4))
                 .presencePenalty(getDouble("llm.brain.presencePenalty", 0.5))
-                .enableCoT(getBoolean("llm.brain.enableCoT", true))
+                .enableCoT(getBoolean("llm.brain.enableCoT", false))
+                .build();
+
+        ADVANCED_BRAIN_CONFIG = LLMConfig.builder()
+                .apiBase(getString("llm.advanced_brain.apiBase", "https://api.siliconflow.cn/v1"))
+                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.advanced_brain.apiKey", ""))
+                .chatModel(getString("llm.advanced_brain.chatModel", "Pro/deepseek-ai/DeepSeek-R1"))
+                .temperature(getDouble("llm.advanced_brain.temperature", 0.6))
+                .frequencyPenalty(getDouble("llm.advanced_brain.frequencyPenalty", 0.4))
+                .presencePenalty(getDouble("llm.advanced_brain.presencePenalty", 0.5))
+                .enableCoT(getBoolean("llm.advanced_brain.enableCoT", true))
                 .build();
 
         EMBEDDING_CONFIG = LLMConfig.builder()
@@ -109,6 +131,16 @@ public class ConfigsManager {
                 .frequencyPenalty(getDouble("llm.scheduler.frequencyPenalty", 0.4))
                 .presencePenalty(getDouble("llm.scheduler.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.scheduler.enableCoT", true))
+                .build();
+
+        VISION_MODEL = LLMConfig.builder()
+                .apiBase(getString("llm.vision.apiBase", "https://api.siliconflow.cn/v1"))
+                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.vision.apiKey", "")) // 修复了这里原本的 llm.svision.apiKey
+                .chatModel(getString("llm.vision.chatModel", "Qwen/Qwen3.6-35B-A3B"))
+                .temperature(getDouble("llm.vision.temperature", 0.0))
+                //.frequencyPenalty(getDouble("llm.vision.frequencyPenalty", 0.4))
+                //.presencePenalty(getDouble("llm.vision.presencePenalty", 0.5))
+                //.enableCoT(getBoolean("llm.vision.enableCoT", true))
                 .build();
 
         // ==========================================
@@ -138,28 +170,38 @@ public class ConfigsManager {
         NAPCAT_HTTP_URL = getString("napcat.httpUrl", "http://127.0.0.1:3000");
         NAPCAT_TOEKN = getString("napcat.token", "");
 
-        // ==========================================
-        // 5. 提示词文件路径
-        // ==========================================
-        FILE_CORE_PERSONA = getString("prompts.corePersona", "promptForChatCore.md");
-        FILE_ATTENTION_PROMPT = getString("prompts.attention", "promptForAttention.md");
-        FILE_DEEP_MEMORY_PROMPT = getString("prompts.deepMemory", "promptForGetDeepMemory.md");
+    }
+
+    /**
+     * 从 resources 目录下的模板释放 application.properties 文件
+     */
+    private static void generateDefaultConfigFile(Path targetPath) {
+        String templateName = "/application-template.properties";
+
+        try (InputStream in = ConfigsManager.class.getResourceAsStream(templateName)) {
+            if (in == null) {
+                System.err.println("[ConfigsManager] ❌ 致命错误：在 resources 目录下找不到模板文件: " + templateName);
+                return;
+            }
+
+            // 将内部的资源流直接复制到外部路径
+            Files.copy(in, targetPath, StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("[ConfigsManager] ✅ 已成功从 resources 模板释放默认配置文件到: " + targetPath.toAbsolutePath());
+
+        } catch (Exception e) {
+            System.err.println("[ConfigsManager] ❌ 从 resources 拷贝配置文件失败: " + e.getMessage());
+        }
     }
 
     // ==========================================
     // 辅助工具方法 (带默认值和类型转换)
     // ==========================================
 
-    /**
-     * 获取配置字符串（支持优先从系统环境变量读取）
-     */
     private static String getEnvOrProp(String envKey, String propKey, String defaultValue) {
-        // 1. 尝试读环境变量 (例如在 Docker/Linux 环境中配置的密钥)
         String envValue = System.getenv(envKey);
         if (envValue != null && !envValue.trim().isEmpty()) {
             return envValue;
         }
-        // 2. 降级读取 properties 文件
         return props.getProperty(propKey, defaultValue);
     }
 
