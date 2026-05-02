@@ -38,6 +38,7 @@ public class ConfigsManager {
     public static final int EMB_MEMORY_SIZE;
     public static final int HISTORY_VIEW_AMOUNT;
     public static final int MEMORY_DEPTH;
+    public static final double RANDOM_CHAT_CHANCE;
     public static final String DB_URL;
 
     public static final String NAPCAT_WS_URL;
@@ -152,6 +153,7 @@ public class ConfigsManager {
         TASK_COUNT_FOR_REFLECTION = getInt("cognitive.taskCountForReflection", 10);
         SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 300000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
+        RANDOM_CHAT_CHANCE = getDouble("cognitive.randomChatChance", 0.05);
 
         // ==========================================
         // 3. 海马体记忆参数

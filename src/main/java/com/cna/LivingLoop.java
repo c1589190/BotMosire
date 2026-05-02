@@ -165,7 +165,7 @@ public class LivingLoop {
 
                     log.info("\n[执行总线] 开始处理任务: {}", task.getClass().getSimpleName());
 
-                    String currentThoughts = MDManager.read("thoughts.md", "");
+                    //String currentThoughts = MDManager.read("thoughts.md", "");
 
                     ArrayNode toolsDefinitionArray = mapper.createArrayNode();
                     for (DefaultAgentToolUnit tool : largeLLMToolbox.values()) {
@@ -185,7 +185,6 @@ public class LivingLoop {
 
                     // 准备基础数据容器
                     Map<String, Object> baseData = new HashMap<>();
-                    baseData.put("current_thoughts", currentThoughts);
 
                     // ==========================================
                     // 任务分发与执行
@@ -445,6 +444,7 @@ public class LivingLoop {
                     log.warn("[Gatekeeper] 未触发工具，产生了非标输出: {}", result.getContent());
                 }
 
+                // 处理被小模型放行的消息
                 for (DefaultAgentInputUnit input : interestingInputs) {
                     long senderId = -1;
                     String text = "";
@@ -476,6 +476,56 @@ public class LivingLoop {
                         updatedQQIds.add(senderId);
                     }
                 }
+
+                // ==========================================
+                // 阶段 2.5：无聊打发时间 (随机捞回被拦截的消息)
+                // ==========================================
+                // 如果本轮没有任何消息被处理（意味着所有的未知消息都被门卫拦截了，且没有旧任务）
+                if (updatedQQIds.isEmpty()) {
+                    // 找出所有被小模型抛弃的垃圾消息
+                    List<DefaultAgentInputUnit> rejectedInputs = new ArrayList<>(unknownInputs);
+                    rejectedInputs.removeAll(interestingInputs);
+
+                    if (!rejectedInputs.isEmpty()) {
+                        // 设置“无聊打捞”的概率，比如 10% (0.1)
+                        double salvageChance = 0.1;
+
+                        if (Math.random() < salvageChance) {
+                            log.info("[CognitiveCycle] 💤 系统闲得发慌，决定从垃圾桶里捞一条消息随便回回...");
+
+                            // 随机挑一条被拦截的消息
+                            DefaultAgentInputUnit luckyInput = rejectedInputs.get(new java.util.Random().nextInt(rejectedInputs.size()));
+
+                            long senderId = -1;
+                            String text = "";
+
+                            if (luckyInput instanceof QQGroupMessageInput) {
+                                senderId = Long.parseLong(((QQGroupMessageInput) luckyInput).getSenderID());
+                                text = luckyInput.getInputText();
+                            } else if (luckyInput instanceof QQPrivateMessageInput) {
+                                senderId = Long.parseLong(((QQPrivateMessageInput) luckyInput).getSenderID());
+                                text = luckyInput.getInputText();
+                            }
+
+                            if (senderId != -1) {
+                                QQChatTask task = new QQChatTask(senderId);
+
+                                // 【精髓注入】：给大脑模型加戏，让它知道自己为什么要回这条消息
+                                String innerMonologue = "【系统环境注入】：这条消息 [ " + text + " ] 原本不在你的兴趣雷达内，你觉得它是废话。但是因为你现在实在太无聊了，没有任何人找你，你决定勉为其难地随便回复一下它，找点乐子或者发发牢骚。";
+                                task.addContext(innerMonologue);
+
+                                QQTaskPreparationPool.put(senderId, task);
+                                updatedQQIds.add(senderId); // 加入存活名单，防止立刻被催熟
+
+                                List<String> l = new LinkedList<>();
+                                l.add("实在太闲了，从垃圾桶里捞了一条原本不想理的消息来回复。");
+                                new MemoryManager().inputCurrentMemorys(l);
+
+                                log.info("🎲 运气爆发，被拦截的消息 [QQ:{}] 成功复活进入预备池", senderId);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -498,6 +548,20 @@ public class LivingLoop {
                 }
             }
         }
+    }
+    /**
+     * 【补充方法】：获取允许主动发起对话的目标列表
+     * 你需要在这个方法里对接你的 NapcatAdapter，把它的 friendNameCache 或 groupNameCache 的 Key 拿出来
+     */
+    private List<Long> getAvailableTargetsForProactiveChat() {
+        List<Long> targets = new ArrayList<>();
+        // 示例思路：如果你在 LivingLoop 里能拿到 NapcatAdapter 的实例（假设叫 napcatClient）
+        // targets.addAll(napcatClient.getFriendNameCache().keySet());
+        // targets.addAll(napcatClient.getGroupNameCache().keySet());
+
+        // 注意：如果你不想让它随便去骚扰陌生的群，可以在这里加白名单过滤！
+
+        return targets;
     }
 
     private ArrayNode buildAttentionToolDefinition() {

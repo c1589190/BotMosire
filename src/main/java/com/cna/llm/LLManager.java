@@ -68,6 +68,7 @@ public class LLManager {
         //输入一些必要前置参数
         data.put("current_memories", new MemoryManager().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE + ConfigsManager.EMB_MEMORY_SIZE));
         data.put("now_time", Utils.getNowFormatted());
+        data.put("current_thoughts", MDManager.read("thoughts.md", ""));
 
         // 这里渲染出了完美的 Prompt
         String userPrompt = render(sceneName, dataModel);
