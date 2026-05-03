@@ -92,10 +92,9 @@ public class MemoryManager {
         Map<String, Object> data = new HashMap<>();
         data.put("text", sb.toString());
         String summary = LLManager.executeScene(
-                "MemoryManager_GetDeepMemory",
+                MDManager.read("prompts/MemoryManager_GetDeepMemory.md"),
                 data,
                 summaryLLM,
-                "CORE.md",
                 null
         ).getContent();
 

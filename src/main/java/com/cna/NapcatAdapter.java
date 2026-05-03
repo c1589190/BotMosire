@@ -1,7 +1,6 @@
 package com.cna;
 
-import com.cna.AgentInput.NapcatQQInput.QQGroupMessageInput;
-import com.cna.AgentInput.NapcatQQInput.QQPrivateMessageInput;
+import com.cna.agent.AgentInput.ChatMessageInput;
 import com.cna.config.ConfigsManager;
 import com.cna.llm.LLMAdapter;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -216,11 +215,21 @@ public class NapcatAdapter extends WebSocketClient {
 
             System.out.println(String.format("[群聊|%s] %s: %s", groupName, senderName, content));
 
+            /*
             QQGroupMessageInput input = new QQGroupMessageInput(
                     Utils.getNowFormatted(),
                     String.valueOf(groupId),
                     groupName,
                     String.valueOf(senderId),
+                    senderName,
+                    content
+            );
+
+             */
+            ChatMessageInput input = new ChatMessageInput(
+                    "qq_group:"+String.valueOf(groupId),
+                    groupName,
+                    "qqid:"+String.valueOf(senderId),
                     senderName,
                     content
             );
@@ -237,9 +246,20 @@ public class NapcatAdapter extends WebSocketClient {
 
             System.out.println(String.format("[私聊|%s] -> %s", senderName, content));
 
+            /*
             QQPrivateMessageInput input = new QQPrivateMessageInput(
                     Utils.getNowFormatted(),
                     String.valueOf(senderId),
+                    senderName,
+                    content
+            );
+            //旧代码
+             */
+
+            ChatMessageInput input = new ChatMessageInput(
+                    "qq_private",
+                    "QQ私聊",
+                    "qqid:"+String.valueOf(senderId),
                     senderName,
                     content
             );
