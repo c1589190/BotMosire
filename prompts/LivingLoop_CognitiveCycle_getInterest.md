@@ -10,6 +10,15 @@ ${current_interests}
 }
 </#if>
 
+<#if current_memories?? && (current_memories?size > 0)>
+这是您最近与外界的交互记录：{
+<#list current_memories as mem>
+- ${mem}
+</#list>
+}
+如果其中你之前回复的人在下文中再次发送了消息，且似乎是对于你的回答，那么你就应该注意这条消息；
+</#if>
+
 你需要根据以上标准，提交应该注意的消息之编号；
 
 以下是你需要判定的最新信息，它们按编号排列：{
