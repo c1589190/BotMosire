@@ -178,9 +178,8 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                     rejectedInputs.removeAll(interestingInputs);
 
                     if (!rejectedInputs.isEmpty()) {
-                        double salvageChance = 0.1;
 
-                        if (Math.random() < salvageChance) {
+                        if (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE) {
                             log.info("[CognitiveCycle] 💤 系统闲得发慌，决定从垃圾桶里捞一条消息随便回回...");
 
                             DefaultAgentInputUnit luckyInput = rejectedInputs.get(new java.util.Random().nextInt(rejectedInputs.size()));
