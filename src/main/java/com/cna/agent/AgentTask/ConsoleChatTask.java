@@ -20,4 +20,8 @@ public class ConsoleChatTask implements DefaultAgentTaskUnit {
     public String getTaskText() {
         return "来自部署者后台终端的直接消息:{\n" + context + "\n}";
     }
+    @Override
+    public int getPriority(){
+        return 1;
+    }
 }

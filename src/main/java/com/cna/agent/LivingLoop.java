@@ -42,16 +42,20 @@ public class LivingLoop implements MosireAPI {
     // 累加器：定时任务计数器
     private int scheduledTaskCounter = 0;
 
-    // 新增：Gatekeeper (小模型) 专用异步线程池，防止网络请求阻塞心跳总线
+    // Gatekeeper (小模型) 专用异步线程池，防止网络请求阻塞心跳总线
     private final ExecutorService gatekeeperExecutor = Executors.newSingleThreadExecutor();
 
-    // 新增：Gatekeeper 状态锁。保证小模型一次只专注思考一批消息
+    // Gatekeeper 状态锁。保证小模型一次只专注思考一批消息
     private final AtomicBoolean isGatekeeperThinking = new AtomicBoolean(false);
 
     // 累加器：跨线程安全的任务处理计数器，用于触发定期反思
     private final AtomicInteger processedTaskCount = new AtomicInteger(0);
 
-    private BlockingDeque<DefaultAgentTaskUnit> TaskQueue = new LinkedBlockingDeque<>();
+    // 将双端队列替换为优先级阻塞队列，根据 priority 升序排列（数值越小，越先出队）
+    private PriorityBlockingQueue<DefaultAgentTaskUnit> TaskQueue = new PriorityBlockingQueue<>(
+            1145, Comparator.comparingInt(DefaultAgentTaskUnit::getPriority)
+    );
+
     private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
 
     private final Map<Class<? extends DefaultAgentTaskUnit>, DefaultAgentTaskHandler> taskHandlerRegistry = new ConcurrentHashMap<>();
@@ -109,10 +113,6 @@ public class LivingLoop implements MosireAPI {
     // 插件系统 API：工具箱动态装配接口
     // ==========================================
 
-    /**
-     * 供外部插件动态注册新工具
-     * @param tool 自定义的 Agent 工具
-     */
     @Override
     public void registerTool(DefaultAgentToolUnit tool) {
         if (tool == null || tool.getName() == null) {
@@ -125,10 +125,6 @@ public class LivingLoop implements MosireAPI {
         log.info("[PluginSystem] 成功动态挂载外部工具: {}", tool.getName());
     }
 
-    /**
-     * 供外部插件在卸载时注销工具
-     * @param toolName 工具的名称
-     */
     public void unregisterTool(String toolName) {
         if (toolName == null || !largeLLMToolbox.containsKey(toolName)) {
             return;
@@ -144,7 +140,7 @@ public class LivingLoop implements MosireAPI {
         log.info("[PluginSystem] 挂载任务处理器: {} 负责处理 {}",
                 handler.getClass().getSimpleName(), handler.getSupportedTaskClass().getSimpleName());
     }
-    // 开放注册接口给插件
+
     @Override
     public void registerInputHandler(DefaultAgentInputHandler handler) {
         if (handler == null || handler.getSupportedInputClass() == null) return;
@@ -158,10 +154,10 @@ public class LivingLoop implements MosireAPI {
 
     }
 
-    // 开放一个方法，让 Handler 催熟后能把 Task 塞进主队列
     @Override
     public void pushTask(DefaultAgentTaskUnit task) {
-        this.TaskQueue.offerLast(task);
+        // PBQ 使用 offer 直接入队，自动触发排序
+        this.TaskQueue.offer(task);
         this.trimTaskQueue();
     }
 
@@ -172,10 +168,19 @@ public class LivingLoop implements MosireAPI {
 
     private void trimTaskQueue() {
         while (TaskQueue.size() > ConfigsManager.MAX_TASK_AMOUNT) {
-            // 注意这里变成了 pollFirst！因为现在队首是最老的
-            DefaultAgentTaskUnit droppedTask = TaskQueue.pollFirst();
-            if (droppedTask != null) {
-                log.info("[TaskQueue] 队列积压，已抛弃最老的任务: {}", droppedTask.getClass().getSimpleName());
+            // 队列积压时，遍历找到优先级数值最大（即优先级最低）的任务进行移除
+            DefaultAgentTaskUnit lowestPriorityTask = null;
+            for (DefaultAgentTaskUnit t : TaskQueue) {
+                if (lowestPriorityTask == null || t.getPriority() > lowestPriorityTask.getPriority()) {
+                    lowestPriorityTask = t;
+                }
+            }
+            if (lowestPriorityTask != null) {
+                TaskQueue.remove(lowestPriorityTask);
+                log.info("[TaskQueue] 队列积压，已抛弃最低优先级的任务: {} (Priority: {})",
+                        lowestPriorityTask.getClass().getSimpleName(), lowestPriorityTask.getPriority());
+            } else {
+                break;
             }
         }
     }
@@ -191,40 +196,33 @@ public class LivingLoop implements MosireAPI {
                 this.tickCounter_CognitiveCycle ++;
 
                 if (this.tickCounter_CognitiveCycle >= ConfigsManager.COGNITIVE_CYCLE_TICKS) {
-                    // 【核心修改】：尝试加锁。如果小模型当前没在思考，就进去。如果在思考，就跳过。
                     if (isGatekeeperThinking.compareAndSet(false, true)) {
-                        // 把它扔到专属线程里去执行，让心跳线程立刻返回，继续读秒！
                         gatekeeperExecutor.submit(() -> {
                             try {
                                 handleCognitiveCycle();
                             } finally {
-                                // 思考完毕，无论成功报错，必定释放锁
                                 isGatekeeperThinking.set(false);
                             }
                         });
                     }
-                    // else {
-                    //     如果它还在思考，这里什么都不做。
-                    //     新来的 QQ 消息会自动堆积在 Main.AgentInputTasksQueue 中，
-                    //     等它下次释放锁之后，再一次性全部吸干处理，完美符合人类处理消息的逻辑。
-                    // }
                     this.tickCounter_CognitiveCycle = 0;
                 }
 
-                // 【定时反思任务】检查处理总量，达标则抛入系统反思任务
+                // 【定时反思任务】
                 if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION) {
-                    processedTaskCount.set(0); // 瞬间归零，重新计数
+                    processedTaskCount.set(0);
                     log.info("[System] 达到任务处理阈值，正在向潜意识抛入强制反思任务...");
-                    TaskQueue.offerLast(new UpdateThoughtsTask());
-                    this.trimTaskQueue(); // 塞完立马修剪
+                    TaskQueue.offer(new UpdateThoughtsTask()); // 变更为 offer
+                    this.trimTaskQueue();
                 }
 
                 this.scheduledTaskCounter ++;
 
+                // 【定时计划任务】
                 if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME) {
                     log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
-                    TaskQueue.offerLast(new ScheduledTask());
-                    this.trimTaskQueue(); // 塞完立马修剪
+                    TaskQueue.offer(new ScheduledTask()); // 变更为 offer
+                    this.trimTaskQueue();
                     this.scheduledTaskCounter = 0;
                 }
 
@@ -242,8 +240,8 @@ public class LivingLoop implements MosireAPI {
 
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    // 从队尾（最新端）拿取任务
-                    DefaultAgentTaskUnit task = TaskQueue.pollLast(1, TimeUnit.SECONDS);
+                    // 【修改点 4】：使用 poll 拿取队列头部任务（因为构造器传了升序比较器，所以拿到的必定是优先级数值最小的，即最高优任务）
+                    DefaultAgentTaskUnit task = TaskQueue.poll(1, TimeUnit.SECONDS);
                     if (task == null) {
                         continue;
                     }
@@ -251,7 +249,6 @@ public class LivingLoop implements MosireAPI {
                     log.info("\n[执行总线] 开始处理任务: {}", task.getClass().getSimpleName());
 
 
-                    //自动装配所有Tool
                     ArrayNode toolsDefinitionArray = mapper.createArrayNode();
                     for (DefaultAgentToolUnit tool : largeLLMToolbox.values()) {
                         if(tool.isAutoLoad()){
@@ -259,9 +256,6 @@ public class LivingLoop implements MosireAPI {
                         }
                     }
 
-                    // ==========================================
-                    // 注入终结工具 (赋予模型主动刹车的能力)
-                    // ==========================================
                     ObjectNode finishTool = mapper.createObjectNode();
                     finishTool.put("type", "function");
                     ObjectNode finishFunction = finishTool.putObject("function");
@@ -270,19 +264,12 @@ public class LivingLoop implements MosireAPI {
                     finishFunction.putObject("parameters").put("type", "object");
                     toolsDefinitionArray.add(finishTool);
 
-                    // 准备基础数据容器
                     Map<String, Object> baseData = new HashMap<>();
 
-                    // ==========================================
-                    // 任务分发与执行 (动态策略路由)
-                    // ==========================================
                     DefaultAgentTaskHandler handler = taskHandlerRegistry.get(task.getClass());
 
                     if (handler != null) {
-                        // 找到了对应的处理器，直接移交执行权！
                         handler.handleTask(task, LivingLoop.this, toolsDefinitionArray);
-
-                        // 全局处理计数器 +1
                         processedTaskCount.incrementAndGet();
                     } else {
                         log.warn("[执行总线] 遇到未知的任务类型 [{}], 且没有挂载对应的 Handler，已跳过处理。", task.getClass().getSimpleName());
@@ -298,10 +285,6 @@ public class LivingLoop implements MosireAPI {
         });
     }
 
-    /**
-     * 通用实践引擎 (支持多轮、每轮多工具并发、自主中断)
-     * 处理各类任务的地方
-     */
     public void executeCognitiveCycle(
             String sceneName,
             String thinkingSceneName,
@@ -312,16 +295,10 @@ public class LivingLoop implements MosireAPI {
         String turnsAddition = "";
         ObjectMapper mapper = new ObjectMapper();
         LLMAdapter llm = DefaultLLM;
-        //使用默认循环模型
-
-        // ==========================================
-        // 第 0 轮 - 强制战略规划阶段 (Plan)
-        // ==========================================
 
         log.info("[EXEC-Engine] [{}] 正在进行第 0 轮预思考 (战略规划与任务拆解)...", taskDesc);
         Map<String, Object> turn0Data = new HashMap<>(baseData);
 
-        // 1. 将工具数组格式化为美观的 JSON 字符串
         String toolsDescString = "";
         try {
             toolsDescString = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(toolsDefinitionArray);
@@ -329,12 +306,10 @@ public class LivingLoop implements MosireAPI {
             log.warn("序列化工具列表失败", e);
         }
 
-        // 2. 将工具字符串注入到模版数据中
         turn0Data.put("available_tools", toolsDescString);
 
         if(!Objects.equals(thinkingSceneName, "")){
             try {
-                // 关键：第四个参数依然传 null，剥夺物理调用能力，只让它“看”工具
                 CallResult planResult = LLManager.executeScene(
                         MDManager.read("prompts/" + thinkingSceneName + ".md"),
                         turn0Data,
@@ -345,7 +320,6 @@ public class LivingLoop implements MosireAPI {
                 String planContent = planResult.getContent();
                 log.info("[EXEC-Engine] 💡 第 0 轮预思考完毕，生成战略路线图: \n{}", planContent);
 
-                // 将生成的规划作为记忆前缀，永久烙印在后续正式执行轮次的 turnsAddition 中
                 turnsAddition += "任务前期规划: [\n" + planContent + "\n];\n";
 
             } catch (Exception e) {
@@ -353,9 +327,6 @@ public class LivingLoop implements MosireAPI {
             }
         }
 
-        // ==========================================
-        // 正式动作执行循环阶段 (Solve)
-        // ==========================================
         for (int turn = 1; turn <= ConfigsManager.CONSUMER_CYCLING_TIME; turn++) {
             log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考与动作执行...", taskDesc, turn);
 
@@ -369,7 +340,6 @@ public class LivingLoop implements MosireAPI {
                     toolsDefinitionArray
             );
 
-            // 中断条件 1：模型输出纯文本，未调用任何工具 (自然闭环)
             if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
                 log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
                 break;
@@ -378,25 +348,22 @@ public class LivingLoop implements MosireAPI {
             StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
             boolean hasFinalAction = false;
 
-            // 循环处理本轮中调用的工具类
             for (JsonNode toolCall : result.getToolCalls()) {
                 String functionName = toolCall.path("function").path("name").asText();
                 String argumentsStr = toolCall.path("function").path("arguments").asText();
 
                 log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
 
-                // 中断条件 2：模型主动调用了结束工具 (强制闭环)
                 if ("finish_task".equals(functionName)) {
                     log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
                     hasFinalAction = true;
-                    continue; // 这是一个虚拟工具，跳过物理执行
+                    continue;
                 }
                 if ("switch_to_advanced_model".equals(functionName)) {
                     log.info("[EXEC-Engine] 下一轮思考将切换至高级大模型。");
                     llm = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
                 }
 
-                // 物理执行常规工具
                 DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
                 if (targetTool != null) {
                     try {
@@ -406,7 +373,6 @@ public class LivingLoop implements MosireAPI {
 
                         toolResults.append("调用工具 [").append(functionName).append("] 返回 [").append(execResult).append("];\n");
 
-                        // 归档动作记忆
                         List<String> list = new LinkedList<>();
                         list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
                         new MemoryManager().inputCurrentMemorys(list);
@@ -421,7 +387,6 @@ public class LivingLoop implements MosireAPI {
                 }
             }
 
-            // 评估是否跳出循环
             if (hasFinalAction) {
                 log.info("[EXEC-Engine] 终结指令已下达，思考回路闭合。");
                 break;
@@ -432,25 +397,18 @@ public class LivingLoop implements MosireAPI {
         }
     }
 
-    /**
-     * 认知周期处理
-     * 让小模型判断兴趣、为之前添加过的聊天信息增加信息的地方
-     */
     private void handleCognitiveCycle() {
-        // 1. 瞬间抽干当前感官缓冲池中的所有消息
         List<DefaultAgentInputUnit> currentBatch = new ArrayList<>();
         Main.AgentInputTasksQueue.drainTo(currentBatch);
 
         if (!currentBatch.isEmpty()) {
             log.info("[CognitiveCycle] 触发认知觉醒，捕获到 {} 条待处理的感知输入", currentBatch.size());
 
-            // 将混合的 Input 按类型分组
             Map<Class<? extends DefaultAgentInputUnit>, List<DefaultAgentInputUnit>> groupedInputs = new HashMap<>();
             for (DefaultAgentInputUnit input : currentBatch) {
                 groupedInputs.computeIfAbsent(input.getClass(), k -> new ArrayList<>()).add(input);
             }
 
-            // 路由分发给对应的 Handler 处理
             for (Map.Entry<Class<? extends DefaultAgentInputUnit>, List<DefaultAgentInputUnit>> entry : groupedInputs.entrySet()) {
                 DefaultAgentInputHandler handler = inputHandlerRegistry.get(entry.getKey());
                 if (handler != null) {
@@ -461,7 +419,6 @@ public class LivingLoop implements MosireAPI {
             }
         }
 
-        // 2. 触发所有已注册感知处理器的 tick (催熟心跳)
         for (DefaultAgentInputHandler handler : inputHandlerRegistry.values()) {
             handler.tick(this);
         }

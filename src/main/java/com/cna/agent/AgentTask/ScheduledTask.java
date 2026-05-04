@@ -22,4 +22,9 @@ public class ScheduledTask implements DefaultAgentTaskUnit {
     public String getTaskText() {
         return this.taskText;
     }
+
+    @Override
+    public int getPriority(){
+        return 2;
+    }
 }

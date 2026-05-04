@@ -2,6 +2,7 @@ package com.cna.agent.AgentTasksHandlers;
 
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTask.ScheduledTask;
+import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.db.MDManager;
@@ -22,6 +23,10 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
 
     @Override
     public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
+
+        //增加复写固态记忆文件的Tool
+        toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
+
         // 读取外部日程文件
         String scheduledContent = MDManager.read("scheduled.md", "");
 

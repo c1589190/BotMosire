@@ -58,10 +58,6 @@ public class ChatTask implements DefaultAgentTaskUnit{
         return this.uuid;
     }
 
-    public AgentTaskType getType() {
-        return AgentTaskType.QQChat;
-    }
-
     @Override
     public String getTaskText() {
         StringBuilder ret = new StringBuilder();
