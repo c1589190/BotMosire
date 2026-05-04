@@ -15,4 +15,8 @@ public interface DefaultAgentToolUnit {
     String execute(JsonNode arguments);
 
     String getTextRecord();
+
+    default boolean isAutoLoad() {
+        return true;
+    }
 }

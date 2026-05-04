@@ -2,6 +2,7 @@ package com.cna.db;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -67,6 +68,28 @@ public class MDManager {
             return true;
         } catch (Exception e) {
             log.error("覆写 MD 文件 {} 失败", fileName, e);
+            return false;
+        }
+    }
+
+    /**
+     * 向 Markdown 文件末尾追加内容
+     * * @param fileName 目标文件名（如 "thoughts.md"）
+     * @param content  要追加的具体内容
+     * @return 是否成功
+     */
+    public static boolean append(String fileName, String content) {
+        Path path = Paths.get(fileName);
+        try {
+            // StandardOpenOption.CREATE: 如果文件不存在，自动创建
+            // StandardOpenOption.APPEND: 如果文件存在，在末尾追加
+            Files.write(path,
+                    content.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+            return true;
+        } catch (IOException e) {
+            log.error("[MDManager] 向文件 {} 追加内容时发生底层异常", fileName, e);
             return false;
         }
     }

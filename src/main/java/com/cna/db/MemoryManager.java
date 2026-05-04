@@ -121,28 +121,62 @@ public class MemoryManager {
         return db.getLatestCurrentMemories(n);
     }
 
-    // ==========================================
-    // 功能 4: 向量召回长期记忆
-    // ==========================================
     public List<String> getDeepMemorys(double[] queryVector, int n) {
         List<MemoryDB.DeepMemoryEntry> allMemories = db.getAllDeepMemories();
-        if (allMemories.isEmpty()) return new ArrayList<>();
 
-        // 优先队列（最大堆）：按余弦相似度降序排列
+        // 增加调试日志：看看数据库到底吐出来几条
+        log.info("[MemoryManager] 深度记忆库原始数据量: {}, 准备召回 Top: {}", allMemories.size(), n);
+
+        if (allMemories.isEmpty()) {
+            log.warn("[MemoryManager] 警告：深度记忆库目前是空的。");
+            return new ArrayList<>();
+        }
+
         PriorityQueue<SimilarityRecord> pq = new PriorityQueue<>(
                 (a, b) -> Double.compare(b.similarity, a.similarity)
         );
 
         for (MemoryDB.DeepMemoryEntry entry : allMemories) {
+            // 检查向量维度是否一致
+            if (entry.vector == null || entry.vector.length != queryVector.length) {
+                log.error("[MemoryManager] 维度不匹配！库内维度: {}, 查询维度: {}",
+                        (entry.vector != null ? entry.vector.length : "null"), queryVector.length);
+                continue;
+            }
+
             double sim = cosineSimilarity(queryVector, entry.vector);
             pq.offer(new SimilarityRecord(entry.content, sim));
         }
 
         List<String> result = new ArrayList<>();
-        for (int i = 0; i < n && !pq.isEmpty(); i++) {
-            result.add(pq.poll().content);
+        // 这里确保即使 pq 里的数量不足 n，也会返回全部
+        while (!pq.isEmpty() && result.size() < n) {
+            SimilarityRecord record = pq.poll();
+            // 建议增加一个极低的相似度过滤（可选），防止完全无关的内容干扰模型
+            if (record.similarity > 0.1) {
+                result.add(record.content);
+            }
         }
+
+        log.info("[MemoryManager] 最终召回记忆数量: {}", result.size());
         return result;
+    }
+
+    // ==========================================
+    // 功能 5: 文本直搜深度记忆 (桥接方法供 Tool 调用)
+    // ==========================================
+    public List<String> searchDeepMemoryByText(String queryText, int n) {
+        log.info("[MemoryManager] 正在将查询词向量化: {}", queryText);
+        // 调用 Embedding 模型将搜索词转化为向量
+        double[] queryVector = embLLM.getEmbedding(queryText);
+
+        if (queryVector == null || queryVector.length == 0) {
+            log.error("[MemoryManager] 查询词向量化失败！");
+            return new ArrayList<>();
+        }
+
+        // 调用你已有的向量召回方法
+        return getDeepMemorys(queryVector, n);
     }
 
     // 余弦相似度数学计算

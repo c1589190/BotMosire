@@ -97,38 +97,92 @@ public class NapcatAdapter extends WebSocketClient {
 
     @Override
     public void onMessage(String message) {
-        // 丢入单线程队列异步执行
         messageProcessorThread.submit(() -> {
             try {
                 JsonNode event = jsonMapper.readTree(message);
+                String postType = event.path("post_type").asText();
 
-                if (!event.has("post_type") || !"message".equals(event.path("post_type").asText())) {
-                    return;
+                // --- 原有的消息处理逻辑 ---
+                if ("message".equals(postType)) {
+                    handleMessageEvent(event);
                 }
-
-                String messageType = event.path("message_type").asText();
-                long senderId = event.path("user_id").asLong();
-
-                if (event.has("self_id") && senderId == event.path("self_id").asLong()) {
-                    return;
-                }
-
-                String rawContent = parseMessageArray(event.path("message"));
-
-                if (rawContent == null || rawContent.isBlank()) {
-                    return;
-                }
-
-                if ("group".equals(messageType)) {
-                    handleGroupMessage(event, senderId, rawContent);
-                } else if ("private".equals(messageType)) {
-                    handlePrivateMessage(event, senderId, rawContent);
+                // --- 新增：处理通知事件（如撤回） ---
+                else if ("notice".equals(postType)) {
+                    //handleNoticeEvent(event);
+                    //对撤回消息的适配未完工
                 }
 
             } catch (Throwable t) {
                 log.error("[拦截追踪] 异步解析事件流发生崩溃, payload: {}", message, t);
             }
         });
+    }
+
+    private void handleMessageEvent(JsonNode event) {
+        String messageType = event.path("message_type").asText();
+        long senderId = event.path("user_id").asLong();
+
+        if (event.has("self_id") && senderId == event.path("self_id").asLong()) {
+            return;
+        }
+
+        String rawContent = parseMessageArray(event.path("message"));
+        if (rawContent == null || rawContent.isBlank()) return;
+
+        if ("group".equals(messageType)) {
+            handleGroupMessage(event, senderId, rawContent);
+        } else if ("private".equals(messageType)) {
+            handlePrivateMessage(event, senderId, rawContent);
+        }
+    }
+
+    private void handleNoticeEvent(JsonNode event) {
+        String noticeType = event.path("notice_type").asText();
+
+        // 兼容群撤回和好友撤回
+        if ("group_recall".equals(noticeType) || "friend_recall".equals(noticeType)) {
+            long userId = event.path("user_id").asLong();         // 消息发送者
+            long operatorId = event.path("operator_id").asLong(); // 执行撤回的人
+            long messageId = event.path("message_id").asLong();   // 被撤回的消息ID
+
+            String operatorName = getFriendNameSync(operatorId);
+            if (operatorName.isBlank()) operatorName = String.valueOf(operatorId);
+
+            String senderName = getFriendNameSync(userId);
+            if (senderName.isBlank()) senderName = String.valueOf(userId);
+
+            String noticeContent;
+            if (userId == operatorId) {
+                noticeContent = String.format("[系统提示] %s 撤回了一条自己的消息。", operatorName);
+            } else {
+                noticeContent = String.format("[系统提示] 管理员 %s 撤回了 %s 的消息。", operatorName, senderName);
+            }
+
+            // 确定 Namespace
+            String targetNamespace;
+            String sceneName;
+
+            if ("group_recall".equals(noticeType)) {
+                long groupId = event.path("group_id").asLong();
+                targetNamespace = "qq_group:" + groupId;
+                sceneName = getGroupNameSync(groupId);
+            } else {
+                targetNamespace = "qq_private";
+                sceneName = "QQ私聊";
+            }
+
+            // 生成一条特殊的系统输入压入队列
+            ChatMessageInput input = new ChatMessageInput(
+                    targetNamespace,
+                    sceneName,
+                    "qqid:"+operatorId,  // 标记为系统发送
+                    "有关系统提示",
+                    noticeContent
+            );
+
+            log.info("[感知引擎] 检测到撤回事件: {}", noticeContent);
+            Main.AgentInputTasksQueue.add(input);
+        }
     }
 
     @Override

@@ -85,6 +85,10 @@ public class LivingLoop implements MosireAPI {
         largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
         largeLLMToolbox.put(new GetInterests().getName(), new GetInterests());
 
+        this.registerTool(new GetMoreCurrentMemorys());
+        this.registerTool(new QueryDeepMemory());
+        this.registerTool(new ReflectiveCompactionTool());
+
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
 
@@ -110,6 +114,7 @@ public class LivingLoop implements MosireAPI {
      * 供外部插件动态注册新工具
      * @param tool 自定义的 Agent 工具
      */
+    @Override
     public void registerTool(DefaultAgentToolUnit tool) {
         if (tool == null || tool.getName() == null) {
             return;
@@ -133,7 +138,7 @@ public class LivingLoop implements MosireAPI {
         log.info("[PluginSystem] 成功卸载外部工具: {}", toolName);
     }
 
-
+    @Override
     public void registerTaskHandler(DefaultAgentTaskHandler handler) {
         if (handler == null || handler.getSupportedTaskClass() == null) return;
         taskHandlerRegistry.put(handler.getSupportedTaskClass(), handler);
@@ -141,6 +146,7 @@ public class LivingLoop implements MosireAPI {
                 handler.getClass().getSimpleName(), handler.getSupportedTaskClass().getSimpleName());
     }
     // 开放注册接口给插件
+    @Override
     public void registerInputHandler(DefaultAgentInputHandler handler) {
         if (handler == null || handler.getSupportedInputClass() == null) return;
         inputHandlerRegistry.put(handler.getSupportedInputClass(), handler);
@@ -154,6 +160,7 @@ public class LivingLoop implements MosireAPI {
     }
 
     // 开放一个方法，让 Handler 催熟后能把 Task 塞进主队列
+    @Override
     public void pushTask(DefaultAgentTaskUnit task) {
         this.TaskQueue.offerLast(task);
         this.trimTaskQueue();
@@ -248,7 +255,9 @@ public class LivingLoop implements MosireAPI {
                     //自动装配所有Tool
                     ArrayNode toolsDefinitionArray = mapper.createArrayNode();
                     for (DefaultAgentToolUnit tool : largeLLMToolbox.values()) {
-                        toolsDefinitionArray.add(tool.getToolDefinition());
+                        if(tool.isAutoLoad()){
+                            toolsDefinitionArray.add(tool.getToolDefinition());
+                        }
                     }
 
                     // ==========================================
@@ -307,16 +316,26 @@ public class LivingLoop implements MosireAPI {
         //使用默认循环模型
 
         // ==========================================
-        // 【新增】：第 0 轮 - 强制战略规划阶段 (Plan)
+        // 第 0 轮 - 强制战略规划阶段 (Plan)
         // ==========================================
+
         log.info("[EXEC-Engine] [{}] 正在进行第 0 轮预思考 (战略规划与任务拆解)...", taskDesc);
         Map<String, Object> turn0Data = new HashMap<>(baseData);
-        // 通过 turnsAddition 注入强制指令，要求模型分析局势并制定计划
-        //turn0Data.put("user", "【系统强制指令】：当前为前期规划阶段。请仔细分析当前的任务文本、记忆以及系统设定。不要尝试输出任何工具调用的格式。请直接用自然语言输出一段详细的内心独白，分析目前的局势，理解用户的核心意图，并列出你接下来打算分几步、调用哪些工具来完美解决这个问题。");
+
+        // 1. 将工具数组格式化为美观的 JSON 字符串
+        String toolsDescString = "";
+        try {
+            toolsDescString = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(toolsDefinitionArray);
+        } catch (Exception e) {
+            log.warn("序列化工具列表失败", e);
+        }
+
+        // 2. 将工具字符串注入到模版数据中
+        turn0Data.put("available_tools", toolsDescString);
 
         if(!Objects.equals(thinkingSceneName, "")){
             try {
-                // 关键：传入空的工具数组 (emptyTools)，剥夺模型在这一轮调用工具的能力，逼迫它只能思考出字
+                // 关键：第四个参数依然传 null，剥夺物理调用能力，只让它“看”工具
                 CallResult planResult = LLManager.executeScene(
                         MDManager.read("prompts/" + thinkingSceneName + ".md"),
                         turn0Data,
@@ -328,7 +347,7 @@ public class LivingLoop implements MosireAPI {
                 log.info("[EXEC-Engine] 💡 第 0 轮预思考完毕，生成战略路线图: \n{}", planContent);
 
                 // 将生成的规划作为记忆前缀，永久烙印在后续正式执行轮次的 turnsAddition 中
-                turnsAddition += "任务前期规划: [\n" + planContent + "\n];";
+                turnsAddition += "任务前期规划: [\n" + planContent + "\n];\n";
 
             } catch (Exception e) {
                 log.warn("[EXEC-Engine] 第 0 轮预思考发生异常，将降级直接进入动作循环。", e);

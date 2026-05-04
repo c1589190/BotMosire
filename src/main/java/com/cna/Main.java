@@ -2,6 +2,7 @@ package com.cna;
 
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.LivingLoop;
+import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
 import com.cna.plugin.PluginsManager;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ public class Main {
     public static void main(String[] args){
 
         ConfigsManager.init();
+        ConfigsLoader.loadAll();
 
         try {
             GlobalNapcatAdapter = new NapcatAdapter();
