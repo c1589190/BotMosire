@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.agent.AgentTasksHandlers.ChatTaskHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -59,16 +60,29 @@ public class SendChatMessage implements DefaultAgentToolUnit {
             this.lastTarget = target;
             this.lastMessage = msg;
 
+            // 從 ThreadLocal 讀取 replyToMessageId
+            long replyToId = ChatTaskHandler.CURRENT_REPLY_TO_ID.get();
+
             if (target.startsWith("qq_group:")) {
                 long groupId = Long.parseLong(target.substring(9));
-                GlobalNapcatAdapter.sendGroupMsg(groupId, msg);
-                log.info("[Tool][SendChatMessage] 代理向群聊 [{}] 发送了消息", groupId);
+                if (replyToId > 0) {
+                    GlobalNapcatAdapter.sendGroupMsgWithReply(groupId, msg, replyToId);
+                    log.info("[Tool][SendChatMessage] 代理向群聊 [{}] 发送了引用回复消息，引用ID: {}", groupId, replyToId);
+                } else {
+                    GlobalNapcatAdapter.sendGroupMsg(groupId, msg);
+                    log.info("[Tool][SendChatMessage] 代理向群聊 [{}] 发送了消息", groupId);
+                }
                 return "SUCCESS: 消息已成功发送至群聊 " + target;
 
             } else if (target.startsWith("qqid:")) {
                 long userId = Long.parseLong(target.substring(5));
-                GlobalNapcatAdapter.sendPrivateMsg(userId, msg);
-                log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了私聊消息", userId);
+                if (replyToId > 0) {
+                    GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, msg, replyToId);
+                    log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了引用回复私聊消息，引用ID: {}", userId, replyToId);
+                } else {
+                    GlobalNapcatAdapter.sendPrivateMsg(userId, msg);
+                    log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了私聊消息", userId);
+                }
                 return "SUCCESS: 消息已成功发送至用户 " + target;
 
             } else {

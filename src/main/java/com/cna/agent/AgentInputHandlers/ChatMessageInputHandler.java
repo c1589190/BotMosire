@@ -60,6 +60,12 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                     existingChatTask = ChatTaskPreparationPool.get(senderRole);
                     existingChatTask.addContext(((ChatMessageInput) input).getContent());
 
+                    // 若這條消息有引用，更新任務的 replyToMessageId
+                    long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
+                    if (quotedId > 0) {
+                        existingChatTask.setReplyToMessageId(quotedId);
+                    }
+
                     // 【修复2】：直接使用全局的 updatedRoles
                     updatedRoles.add(senderRole);
 
@@ -145,8 +151,15 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                     }
 
                     if (senderRole != null && !senderRole.isBlank()) {
+                        long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
+
                         if (ChatTaskPreparationPool.containsKey(senderRole)) {
-                            ChatTaskPreparationPool.get(senderRole).addContext(text);
+                            ChatTask existingTask = ChatTaskPreparationPool.get(senderRole);
+                            existingTask.addContext(text);
+                            // 若這條消息有引用，更新任務的 replyToMessageId
+                            if (quotedId > 0) {
+                                existingTask.setReplyToMessageId(quotedId);
+                            }
 
                             List<String> l = new LinkedList<>();
                             l.add("想要回复这条消息:{\n" + input.getInputText() + "\n};");
@@ -154,7 +167,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                             log.info("小模型判定有价值，为当前批次的新目标 [Role:{}] 合并追加了连贯消息", senderRole);
                         } else {
-                            ChatTask task = new ChatTask(source, source_name, senderRole, senderName);
+                            ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
                             task.addContext(text);
                             ChatTaskPreparationPool.put(senderRole, task);
 
@@ -199,7 +212,8 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                             }
 
                             if (senderRole != null && !senderRole.isBlank()) {
-                                ChatTask task = new ChatTask(source, source_name, senderRole, senderName);
+                                long quotedId = ((ChatMessageInput) luckyInput).getQuotedMessageId();
+                                ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
 
                                 String innerMonologue = "【系统环境注入】：这条消息 [ " + text + " ] 原本不在你的兴趣雷达内，你觉得它是废话。但是因为你现在实在太无聊了，没有任何人找你，你决定勉为其难地随便回复一下它，找点乐子或者发发牢骚。";
                                 task.addContext(innerMonologue);

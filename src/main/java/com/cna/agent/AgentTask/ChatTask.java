@@ -19,6 +19,8 @@ public class ChatTask implements DefaultAgentTaskUnit{
     @Getter
     int static_cnt = 0;
     //在任务更新循环中未被更新的次数
+    @Getter
+    private long replyToMessageId = 0; //被引用回覆的源消息ID，0表示無引用
 
     public ChatTask(String source, String source_name, String role, String role_name){
         this.source = source;
@@ -26,6 +28,16 @@ public class ChatTask implements DefaultAgentTaskUnit{
         this.uuid = UUID.randomUUID();
         this.role = role;
         this.role_name = role_name;
+        this.replyToMessageId = 0;
+    }
+
+    public ChatTask(String source, String source_name, String role, String role_name, long replyToMessageId){
+        this.source = source;
+        this.source_name = source_name;
+        this.uuid = UUID.randomUUID();
+        this.role = role;
+        this.role_name = role_name;
+        this.replyToMessageId = replyToMessageId;
     }
 
     public void addContext(String text){
@@ -34,6 +46,11 @@ public class ChatTask implements DefaultAgentTaskUnit{
     }
     public void addStatic(){
         this.static_cnt++;
+    }
+
+    /** 設置被引用回覆的源消息ID */
+    public void setReplyToMessageId(long id) {
+        this.replyToMessageId = id;
     }
 
     @Override
