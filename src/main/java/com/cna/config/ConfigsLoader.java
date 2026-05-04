@@ -21,6 +21,8 @@ public class ConfigsLoader {
         String promptDir = "/prompts/";
         String[] promptFiles = {
                 "CORE.md",
+                "SolveConsoleChatTask.md",
+                "ThinkConsoleChatTask.md",
                 "LivingLoop_CognitiveCycle_getInterest.md",
                 "LivingLoop_CognitiveCycle_Scheduled.md",
                 "LivingLoop_CognitiveCycle_updateThoughts.md",

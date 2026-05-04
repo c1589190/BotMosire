@@ -2,6 +2,7 @@ package com.cna;
 
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.LivingLoop;
+import com.cna.cmd.ConsoleCommandSystem;
 import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
 import com.cna.plugin.PluginsManager;
@@ -20,6 +21,8 @@ public class Main {
     public static LivingLoop loop = new LivingLoop();
     // 声明插件管理器
     public static PluginsManager pluginsManager;
+
+    public static ConsoleCommandSystem consoleCommandSystem;
 
     public static void main(String[] args){
 
@@ -41,6 +44,18 @@ public class Main {
         pluginsManager.loadPlugins();
 
         // 3. 注册 JVM 关闭钩子 (安全停机)
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("[System] 正在关闭系统，准备安全卸载插件...");
+            if (pluginsManager != null) {
+                pluginsManager.disableAll();
+            }
+            loop.stop();
+        }));
+
+        consoleCommandSystem = new ConsoleCommandSystem();
+        consoleCommandSystem.start();
+
+        // 4. 注册 JVM 关闭钩子 (安全停机)
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("[System] 正在关闭系统，准备安全卸载插件...");
             if (pluginsManager != null) {

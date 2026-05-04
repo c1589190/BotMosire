@@ -10,14 +10,11 @@ import com.cna.agent.AgentTask.ScheduledTask;
 import com.cna.agent.AgentTask.UpdateThoughtsTask;
 import com.cna.Main;
 import com.cna.Utils;
+import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
-import com.cna.agent.AgentTasksHandlers.ChatTaskHandler;
-import com.cna.agent.AgentTasksHandlers.ScheduledTaskHandler;
-import com.cna.agent.AgentTasksHandlers.UpdateThoughtsTaskHandler;
 import com.cna.config.ConfigsManager;
 import com.cna.llm.LLManager;
 import com.cna.db.MemoryManager;
-import com.cna.agent.AgentTasksHandlers.DefaultAgentTaskHandler;
 import com.cna.plugin.MosireAPI;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -88,6 +85,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new GetMoreCurrentMemorys());
         this.registerTool(new QueryDeepMemory());
         this.registerTool(new ReflectiveCompactionTool());
+        this.registerTool(new SendConsoleMessage());
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -97,6 +95,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTaskHandler(new UpdateThoughtsTaskHandler());  // 潜意识反思
 
         this.registerInputHandler(new ChatMessageInputHandler());
+        this.registerTaskHandler(new ConsoleChatTaskHandler());
     }
 
     private void initLLM(){
