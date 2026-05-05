@@ -3,6 +3,15 @@
 当前时间：
 ${now_time}
 
+<#if turnsAddition?has_content>
+本轮思考并不是第一轮，以下是您之前几轮的思考结果：{
+
+${turnsAddition}
+
+}
+请牢记前几轮工具调用为您带来的补充信息；
+</#if>
+
 <#if current_thoughts?has_content>
 你的目前内心想法，其中包含了之前的你希望自己记住的东西：{
 
