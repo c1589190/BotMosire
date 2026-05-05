@@ -3,6 +3,7 @@ package com.cna.agent.AgentTasksHandlers;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.ConsoleChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
+import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.llm.LLMAdapter;
@@ -22,6 +23,9 @@ public class ConsoleChatTaskHandler implements DefaultAgentTaskHandler{
 
     @Override
     public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
+
+        toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
+
         ConsoleChatTask Task = (ConsoleChatTask) task;
 
         Map<String, Object> baseData = new HashMap<>();
