@@ -30,7 +30,7 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", thoughtsTask.getTaskText());
         baseData.put("current_interests", MDManager.read("interests.md", ""));
-        baseData.put("current_scheduled", MDManager.read("scheduled.md", ""));
+        baseData.put("scheduled", MDManager.read("scheduled.md", ""));
 
         // 调用 LivingLoop 的公共引擎，使用 largeLLM
         engine.executeCognitiveCycle(
