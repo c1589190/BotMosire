@@ -27,7 +27,7 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
 
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你觉得当前的短期记忆不够用，由于失忆导致无法理解别人在说什么，需要回溯更长一段时间的自身交互记录和想法时调用此工具。您不知道是否能获得完整记忆，建议搭配长期记忆查询工具一起使用。");
+        function.put("description", "当你觉得当前的短期记忆不够用，由于失忆导致无法理解别人在说什么，需要回溯更长一段时间的自身交互记录和想法时调用此工具。您不知道是否能获得完整记忆，建议搭配长期记忆查询工具一起使用。如果你已经调用过了这个工具，请不要重复调用！");
 
         // 无需必须参数，直接给一个空的 properties
         ObjectNode parameters = function.putObject("parameters");
@@ -72,5 +72,10 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
         } else {
             return "调用工具，回想了最近的 " + this.fetchedCount + " 条短期记忆;";
         }
+    }
+
+    @Override
+    public boolean isAutoMemory() {
+        return false;
     }
 }

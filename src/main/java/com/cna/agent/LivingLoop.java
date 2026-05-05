@@ -373,9 +373,11 @@ public class LivingLoop implements MosireAPI {
 
                         toolResults.append("调用工具 [").append(functionName).append("] 返回 [").append(execResult).append("];\n");
 
-                        List<String> list = new LinkedList<>();
-                        list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
-                        new MemoryManager().inputCurrentMemorys(list);
+                        if(targetTool.isAutoMemory()){
+                            List<String> list = new LinkedList<>();
+                            list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
+                            new MemoryManager().inputCurrentMemorys(list);
+                        }
 
                     } catch (Exception e) {
                         log.error("[EXEC-Engine] 工具解析或执行异常", e);

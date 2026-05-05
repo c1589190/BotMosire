@@ -19,4 +19,7 @@ public interface DefaultAgentToolUnit {
     default boolean isAutoLoad() {
         return true;
     }
+    default boolean isAutoMemory(){
+        return true;
+    }
 }
