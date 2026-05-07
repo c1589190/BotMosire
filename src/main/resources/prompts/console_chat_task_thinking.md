@@ -32,9 +32,9 @@ ${current_thoughts}
 
 <#list deep_memories as d_mem>
 - ${d_mem}
-  </#list>
-  }
-  </#if>
+</#list>
+}
+</#if>
 
 以下是你在之后的行动中可以调用的虚拟工具列表:{
 
