@@ -15,19 +15,20 @@ public class ConfigsLoader {
     static {
         // 1. 基础配置文件 (模板 -> 实际配置)
         FILE_MAP.put("/application-template.properties", "application.properties");
+        FILE_MAP.put("/PromptScenesPath.properties", "PromptScenesPath.properties");
         //FILE_MAP.put("/logback.xml", "logback.xml");
 
         // 2. LivingLoop 认知循环相关 Prompts
         String promptDir = "/prompts/";
         String[] promptFiles = {
                 "CORE.md",
-                "SolveConsoleChatTask.md",
-                "ThinkConsoleChatTask.md",
-                "LivingLoop_CognitiveCycle_getInterest.md",
-                "LivingLoop_CognitiveCycle_Scheduled.md",
-                "LivingLoop_CognitiveCycle_updateThoughts.md",
-                "LivingLoop_ConsumerCycle_solveQQChatTask.md",
-                "LivingLoop_ConsumerCycle_thinkQQChatTask.md",
+                "console_chat_task_solving.md",
+                "console_chat_task_thinking.md",
+                "getInterest.md",
+                "scheduled_task_solving.md",
+                "update_thoughts_task_solving.md",
+                "chat_task_thinking.md",
+                "chat_task_solving.md",
                 "MemoryManager_GetDeepMemory.md"
         };
 

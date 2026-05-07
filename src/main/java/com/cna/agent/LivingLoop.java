@@ -13,6 +13,7 @@ import com.cna.Utils;
 import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLManager;
 import com.cna.db.MemoryManager;
 import com.cna.plugin.MosireAPI;
@@ -286,8 +287,7 @@ public class LivingLoop implements MosireAPI {
     }
 
     public void executeCognitiveCycle(
-            String sceneName,
-            String thinkingSceneName,
+            ScenePromptsManager scenePrompts,
             Map<String, Object> baseData,
             LLMAdapter DefaultLLM,
             ArrayNode toolsDefinitionArray,
@@ -308,10 +308,10 @@ public class LivingLoop implements MosireAPI {
 
         turn0Data.put("available_tools", toolsDescString);
 
-        if(!Objects.equals(thinkingSceneName, "")){
+        if(!Objects.equals(scenePrompts.getThinkingPrompt(), "") || !scenePrompts.getThinkingPrompt().isEmpty()){
             try {
                 CallResult planResult = LLManager.executeScene(
-                        MDManager.read("prompts/" + thinkingSceneName + ".md"),
+                        scenePrompts.getThinkingPrompt(),
                         turn0Data,
                         llm,
                         null
@@ -334,7 +334,7 @@ public class LivingLoop implements MosireAPI {
             turnData.put("turnsAddition", turnsAddition);
 
             CallResult result = LLManager.executeScene(
-                    MDManager.read("prompts/" + sceneName + ".md"),
+                    scenePrompts.getSolvingPrompt(),
                     turnData,
                     llm,
                     toolsDefinitionArray

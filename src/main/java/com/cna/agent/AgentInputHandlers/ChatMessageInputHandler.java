@@ -6,6 +6,7 @@ import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
 import com.cna.db.MemoryManager;
 import com.cna.llm.CallResult;
@@ -98,7 +99,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                 data.put("current_interests", MDManager.read("interests.md", ""));
 
                 CallResult result = LLManager.executeScene(
-                        MDManager.read("prompts/LivingLoop_CognitiveCycle_getInterest.md"),
+                        new ScenePromptsManager(ChatMessageInput.class.getName()).getSolvingPrompt(),
                         data,
                         new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG), // 或者用 engine.getLittleLLM()
                         buildAttentionToolDefinition()

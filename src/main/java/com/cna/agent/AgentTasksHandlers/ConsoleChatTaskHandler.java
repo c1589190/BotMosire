@@ -6,6 +6,7 @@ import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -34,8 +35,7 @@ public class ConsoleChatTaskHandler implements DefaultAgentTaskHandler{
 
         // 调用 LivingLoop 的公共引擎
         engine.executeCognitiveCycle(
-                "SolveConsoleChatTask",
-                "ThinkConsoleChatTask",
+                new ScenePromptsManager(ConsoleChatTask.class.getName()),
                 baseData,
                 new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
                 toolsDefinitionArray,

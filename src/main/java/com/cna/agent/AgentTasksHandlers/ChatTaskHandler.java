@@ -4,6 +4,7 @@ import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -36,8 +37,7 @@ public class ChatTaskHandler implements DefaultAgentTaskHandler {
 
         // 调用 LivingLoop 的公共引擎
         engine.executeCognitiveCycle(
-                "LivingLoop_ConsumerCycle_solveQQChatTask",
-                "LivingLoop_ConsumerCycle_thinkQQChatTask",
+                new ScenePromptsManager(ChatTask.class.getName()),
                 baseData,
                 new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
                 toolsDefinitionArray,

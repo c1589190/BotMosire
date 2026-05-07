@@ -40,7 +40,7 @@ public class MDManager {
                 return Files.readString(path, StandardCharsets.UTF_8);
             } else {
                 // 文件不存在
-                if (defaultContent != null) {
+                if (defaultContent != null || defaultContent.equals(" ")) {
                     log.info("MD文件 [{}] 不存在，正在物理层自动生成并注入默认配置...", fileName);
                     // 复用下方的 write 方法创建文件
                     write(fileName, defaultContent);

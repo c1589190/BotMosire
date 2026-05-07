@@ -5,6 +5,7 @@ import com.cna.agent.AgentTask.ScheduledTask;
 import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
 import com.cna.llm.LLMAdapter;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,8 +41,7 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
 
         // 调用 LivingLoop 的公共引擎，注意这里传入的是 engine.getSchedulerLLM()
         engine.executeCognitiveCycle(
-                "LivingLoop_CognitiveCycle_Scheduled",
-                "",
+                new ScenePromptsManager(ScheduledTask.class.getName()),
                 baseData,
                 new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
                 toolsDefinitionArray,
