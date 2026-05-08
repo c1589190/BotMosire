@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,10 +23,12 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
         // 【核心说明】：明确告诉大模型这是压缩用的，平时不能用
-        function.put("description", "【最高权限工具】仅在系统触发的'定时反思'阶段可用。用于将你过去积累的琐碎想法、日程和兴趣规则进行总结、提炼和压缩，并完全覆写旧文件。这有助于为你清理大脑内存。你可以选择性地覆写其中一个或多个文件。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -35,17 +38,17 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
         // 想法压缩
         ObjectNode compactedThoughts = properties.putObject("compacted_thoughts");
         compactedThoughts.put("type", "string");
-        compactedThoughts.put("description", "(可选) 提炼压缩后的最新内省与核心认知。留空则不修改 thoughts.md。");
+        compactedThoughts.put("description", p.getCustomDescription("compacted_thoughts"));
 
         // 日程压缩
         ObjectNode compactedSchedule = properties.putObject("compacted_schedule");
         compactedSchedule.put("type", "string");
-        compactedSchedule.put("description", "(可选) 清理掉已完成任务后，重新整理的最新待办日程。留空则不修改 scheduled.md。");
+        compactedSchedule.put("description", p.getCustomDescription("compacted_schedule"));
 
         // 兴趣压缩
         ObjectNode compactedInterests = properties.putObject("compacted_interests");
         compactedInterests.put("type", "string");
-        compactedInterests.put("description", "(可选) 梳理去重后的最新注意力雷达与过滤规则。留空则不修改 interests.md。");
+        compactedInterests.put("description", p.getCustomDescription("compacted_interests"));
 
         // 设为空数组，代表参数都是可选的，大模型可以按需覆写
         parameters.putArray("required");

@@ -1,9 +1,9 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.OkHttpClient;
@@ -42,11 +42,11 @@ public class WebSearch implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description",
-                "当你需要查询最新信息、实时数据、新闻、或任何你不确定的事实时调用此工具进行网络搜索。" +
-                "英文关键词往往能得到更丰富的结果。搜索到结果后，可以进一步调用 read_webpage 工具深入阅读特定页面。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -55,11 +55,11 @@ public class WebSearch implements DefaultAgentToolUnit {
 
         ObjectNode query = properties.putObject("query");
         query.put("type", "string");
-        query.put("description", "搜索关键词，建议使用简洁的词组");
+        query.put("description", p.getCustomDescription("query"));
 
         ObjectNode count = properties.putObject("count");
         count.put("type", "integer");
-        count.put("description", "返回结果数量，默认 5，最大 8");
+        count.put("description", p.getCustomDescription("count"));
 
         parameters.putArray("required").add("query");
         return tool;

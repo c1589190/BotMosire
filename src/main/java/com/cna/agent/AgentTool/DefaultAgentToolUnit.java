@@ -22,4 +22,6 @@ public interface DefaultAgentToolUnit {
     default boolean isAutoMemory(){
         return true;
     }
+
+
 }

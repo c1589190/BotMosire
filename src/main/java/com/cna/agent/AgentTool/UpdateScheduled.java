@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,10 +26,11 @@ public class UpdateScheduled implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        // 说明书：强调是追加
-        function.put("description", "当你需要规划新的未来行动、添加待办事项时调用此工具。这会将新任务追加到日程表的末尾，不会影响已有计划。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -37,7 +39,7 @@ public class UpdateScheduled implements DefaultAgentToolUnit {
 
         ObjectNode taskItem = properties.putObject("task_item");
         taskItem.put("type", "string");
-        taskItem.put("description", "需要添加的具体计划内容，建议包含时间点和具体目标。");
+        taskItem.put("description", p.getCustomDescription("task_item"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("task_item");

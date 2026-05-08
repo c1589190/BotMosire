@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -35,12 +36,11 @@ public class ReadWebPage implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description",
-                "读取指定 URL 网页的文字内容，以 Markdown 格式返回。" +
-                "适合在 web_search 找到相关链接后，需要深入阅读某篇文章时调用。" +
-                "也可以读取用户直接贴给你的链接。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -49,11 +49,11 @@ public class ReadWebPage implements DefaultAgentToolUnit {
 
         ObjectNode url = properties.putObject("url");
         url.put("type", "string");
-        url.put("description", "要读取的完整 URL，必须以 http:// 或 https:// 开头");
+        url.put("description", p.getCustomDescription("url"));
 
         ObjectNode maxChars = properties.putObject("max_chars");
         maxChars.put("type", "integer");
-        maxChars.put("description", "最多读取的字符数，默认 4000，最大 8000");
+        maxChars.put("description", p.getCustomDescription("max_chars"));
 
         parameters.putArray("required").add("url");
         return tool;
@@ -93,7 +93,7 @@ public class ReadWebPage implements DefaultAgentToolUnit {
         try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
                 return "ERROR: 读取页面失败，HTTP " + response.code() +
-                       "。请检查 URL 是否有效或该网站是否允许访问。";
+                        "。请检查 URL 是否有效或该网站是否允许访问。";
             }
 
             String content = response.body().string();

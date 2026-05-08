@@ -39,7 +39,6 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
         // 每次收到新消息时清空全局状态，准备记录本轮活跃的 Role
         updatedRoles.clear();
 
-        // 【修复1】：不再从 Main 抽干队列，直接使用参数传进来的 inputs
         if (!inputs.isEmpty()) {
             log.info("[CognitiveCycle] ChatMessage处理器捕获到 {} 条待处理的感知输入", inputs.size());
 
@@ -48,7 +47,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
             // ==========================================
             // 阶段 1：本地极速分拣
             // ==========================================
-            for (DefaultAgentInputUnit input : inputs) { // 【修复1】：遍历 inputs
+            for (DefaultAgentInputUnit input : inputs) {
                 ChatTask existingChatTask;
                 String senderRole = null;
 
@@ -66,7 +65,6 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                         existingChatTask.setReplyToMessageId(quotedId);
                     }
 
-                    // 【修复2】：直接使用全局的 updatedRoles
                     updatedRoles.add(senderRole);
 
                     List<String> l = new LinkedList<>();
@@ -100,27 +98,32 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                 CallResult result = LLManager.executeScene(
                         new ScenePromptsManager(ChatMessageInput.class.getName()).getSolvingPrompt(),
                         data,
-                        new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG), // 或者用 engine.getLittleLLM()
+                        new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG),
                         buildAttentionToolDefinition()
                 );
 
-                List<DefaultAgentInputUnit> interestingInputs = new ArrayList<>();
+                // 【修改】：使用 Map 来存储消息单元以及对应的判断理由
+                Map<DefaultAgentInputUnit, String> interestingInputsWithReasons = new LinkedHashMap<>();
+
                 if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
-                    // ... 解析 submit_attention_list 的逻辑不变 ...
                     JsonNode firstToolCall = result.getToolCalls().get(0);
                     if ("submit_attention_list".equals(firstToolCall.path("function").path("name").asText())) {
                         String argumentsStr = firstToolCall.path("function").path("arguments").asText();
                         try {
                             ObjectMapper mapper = new ObjectMapper();
                             JsonNode argsNode = mapper.readTree(argumentsStr);
-                            JsonNode indicesArray = argsNode.path("selected_indices");
 
-                            if (indicesArray.isArray() && !indicesArray.isEmpty()) {
-                                log.info("[Gatekeeper] 命中！提取到高价值信号索引: {}", indicesArray.toString());
-                                for (JsonNode indexNode : indicesArray) {
-                                    int index = indexNode.asInt();
+                            // 【修改】：解析新的 selected_items 结构
+                            JsonNode itemsArray = argsNode.path("selected_items");
+
+                            if (itemsArray.isArray() && !itemsArray.isEmpty()) {
+                                log.info("[Gatekeeper] 命中！提取到高价值信号及理由: {}", itemsArray.toString());
+                                for (JsonNode itemNode : itemsArray) {
+                                    int index = itemNode.path("index").asInt(-1);
+                                    String reason = itemNode.path("reason").asText("");
+
                                     if (index >= 0 && index < unknownInputs.size()) {
-                                        interestingInputs.add(unknownInputs.get(index));
+                                        interestingInputsWithReasons.put(unknownInputs.get(index), reason);
                                     }
                                 }
                             } else {
@@ -135,7 +138,10 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                 }
 
                 // 处理被小模型放行的消息
-                for (DefaultAgentInputUnit input : interestingInputs) {
+                for (Map.Entry<DefaultAgentInputUnit, String> entry : interestingInputsWithReasons.entrySet()) {
+                    DefaultAgentInputUnit input = entry.getKey();
+                    String reason = entry.getValue();
+
                     String source = null;
                     String source_name = null;
                     String senderRole = null;
@@ -153,31 +159,35 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                     if (senderRole != null && !senderRole.isBlank()) {
                         long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
 
+                        // 组装要添加到上下文中供主脑参考的理由
+                        String reasonContext = "( 注意到这条消息的理由: " + reason + " )";
+
                         if (ChatTaskPreparationPool.containsKey(senderRole)) {
                             ChatTask existingTask = ChatTaskPreparationPool.get(senderRole);
+                            existingTask.addContext(reasonContext);
                             existingTask.addContext(text);
-                            // 若這條消息有引用，更新任務的 replyToMessageId
+
                             if (quotedId > 0) {
                                 existingTask.setReplyToMessageId(quotedId);
                             }
 
                             List<String> l = new LinkedList<>();
-                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n};");
+                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
                             MemoryManager.getInstance().inputCurrentMemorys(l);
 
-                            log.info("小模型判定有价值，为当前批次的新目标 [Role:{}] 合并追加了连贯消息", senderRole);
+                            log.info("小模型判定有价值，为当前批次的新目标 [Role:{}] 合并追加了连贯消息及理由", senderRole);
                         } else {
                             ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
                             task.addContext(text);
+                            task.addContext(reasonContext); // 【修改】：追加判断理由
                             ChatTaskPreparationPool.put(senderRole, task);
 
                             List<String> l = new LinkedList<>();
-                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n};");
+                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
                             MemoryManager.getInstance().inputCurrentMemorys(l);
 
-                            log.info("小模型判定有价值，为新目标 [Role:{}] 创建了预备任务", senderRole);
+                            log.info("小模型判定有价值，为新目标 [Role:{}] 创建了预备任务及理由", senderRole);
                         }
-                        // 【修复2】：直接使用全局的 updatedRoles
                         updatedRoles.add(senderRole);
                     }
                 }
@@ -185,10 +195,10 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                 // ==========================================
                 // 阶段 2.5：无聊打发时间 (随机捞回被拦截的消息)
                 // ==========================================
-                // 【修复2】：直接使用全局的 updatedRoles
                 if (updatedRoles.isEmpty()) {
                     List<DefaultAgentInputUnit> rejectedInputs = new ArrayList<>(unknownInputs);
-                    rejectedInputs.removeAll(interestingInputs);
+                    // 【修改】：从原来的 interestingInputs 改为从 Map 的 KeySet 中移除
+                    rejectedInputs.removeAll(interestingInputsWithReasons.keySet());
 
                     if (!rejectedInputs.isEmpty()) {
 
@@ -215,12 +225,11 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                                 long quotedId = ((ChatMessageInput) luckyInput).getQuotedMessageId();
                                 ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
 
-                                String innerMonologue = "【系统环境注入】：这条消息 [ " + text + " ] 原本不在你的兴趣雷达内，你觉得它是废话。但是因为你现在实在太无聊了，没有任何人找你，你决定勉为其难地随便回复一下它，找点乐子或者发发牢骚。";
+                                String innerMonologue = "这条消息 [ " + text + " ] 原本不在你的兴趣雷达内，你觉得它是废话。但是因为你现在实在太无聊了，没有任何人找你，你决定勉为其难地随便回复一下它。";
                                 task.addContext(innerMonologue);
 
                                 ChatTaskPreparationPool.put(senderRole, task);
 
-                                // 【修复2】：直接使用全局的 updatedRoles
                                 updatedRoles.add(senderRole);
 
                                 List<String> l = new LinkedList<>();
@@ -262,11 +271,10 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
                 }
             }
         }
-
-        // 催熟完毕后，清空 updatedRoles 等待下一个 Tick
         updatedRoles.clear();
     }
 
+    // 【修改】：重构 Tool 定义，让大模型返回对象数组包含 index 和 reason
     private ArrayNode buildAttentionToolDefinition() {
         ObjectMapper mapper = new ObjectMapper();
         ArrayNode tools = mapper.createArrayNode();
@@ -276,22 +284,35 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
         ObjectNode function = tool.putObject("function");
         function.put("name", "submit_attention_list");
-        function.put("description", "提交主脑需要关注的消息编号列表");
+        function.put("description", "提交主脑需要关注的消息列表及选中理由");
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
 
         ObjectNode properties = parameters.putObject("properties");
 
-        ObjectNode selectedIndices = properties.putObject("selected_indices");
-        selectedIndices.put("type", "array");
-        selectedIndices.put("description", "被选中的消息的数字编号（index）列表");
+        ObjectNode selectedItems = properties.putObject("selected_items");
+        selectedItems.put("type", "array");
+        selectedItems.put("description", "被选中的消息及其理由的列表");
 
-        ObjectNode items = selectedIndices.putObject("items");
-        items.put("type", "integer");
+        ObjectNode items = selectedItems.putObject("items");
+        items.put("type", "object");
+
+        ObjectNode itemProperties = items.putObject("properties");
+
+        ObjectNode indexNode = itemProperties.putObject("index");
+        indexNode.put("type", "integer");
+        indexNode.put("description", "被选中消息的数字编号（index）");
+
+        ObjectNode reasonNode = itemProperties.putObject("reason");
+        reasonNode.put("type", "string");
+        reasonNode.put("description", "判定这条消息有价值并需要回复的详细理由");
+
+        ArrayNode itemRequired = items.putArray("required");
+        itemRequired.add("index").add("reason");
 
         ArrayNode required = parameters.putArray("required");
-        required.add("selected_indices");
+        required.add("selected_items");
 
         return tools;
     }

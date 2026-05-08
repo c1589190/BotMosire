@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MemoryManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +18,7 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
 
     @Override
     public String getName() {
+        // 【修复】：大模型的 tool name 通常不支持带 "." 的全限定类名，建议改成下划线格式
         return "get_more_current_memorys";
     }
 
@@ -25,9 +27,13 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        // 实例化提示词管理器
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你觉得当前的短期记忆不够用，由于失忆导致无法理解别人在说什么，需要回溯更长一段时间的自身交互记录和想法时调用此工具。您不知道是否能获得完整记忆，建议搭配长期记忆查询工具一起使用。如果你已经调用过了这个工具，请不要重复调用！");
+        // 获取工具描述
+        function.put("description", p.getToolDescription());
 
         // 无需必须参数，直接给一个空的 properties
         ObjectNode parameters = function.putObject("parameters");

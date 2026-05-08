@@ -2,6 +2,7 @@ package com.cna.agent.AgentTool;
 
 import com.cna.ChatAdaptersManager;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -25,9 +26,13 @@ public class GetChatHistory implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        // 实例化提示词管理器
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你发觉当前上下文中信息缺失，需要查阅历史聊天记录时调用此工具。支持格式：QQ群聊传 'qq_group:groupId'，QQ私聊传 'qqid:userId'，Discord频道传 'discord_guild:guildId:channelId'，Discord私聊传 'discord_dm:userId'。");
+        // 获取工具描述
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -36,7 +41,8 @@ public class GetChatHistory implements DefaultAgentToolUnit {
 
         ObjectNode targetNamespace = properties.putObject("target_namespace");
         targetNamespace.put("type", "string");
-        targetNamespace.put("description", "需要查询历史记录的目标标识符。必须包含前缀！");
+        // 获取参数描述
+        targetNamespace.put("description", p.getCustomDescription("target_namespace"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("target_namespace");

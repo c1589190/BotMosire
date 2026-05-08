@@ -29,7 +29,8 @@ public class ConfigsLoader {
                 "update_thoughts_task_solving.md",
                 "chat_task_thinking.md",
                 "chat_task_solving.md",
-                "MemoryManager_GetDeepMemory.md"
+                "MemoryManager_GetDeepMemory.md",
+                "ToolPrompts.properties"
         };
 
         for (String fileName : promptFiles) {

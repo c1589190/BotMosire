@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,9 +28,11 @@ public class GetScheduled implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你需要查看当前的日程安排、待办事项或定时计划时调用此工具。系统会自动为你展示 scheduled.md 文件中的最新内容。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");

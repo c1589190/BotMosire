@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,10 +28,11 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        // 【说明书更新】：强调这是“增量更新”
-        function.put("description", "当你产生了新的认知、感悟或需要记住的新准则时，调用此工具。这会将新想法追加到你的内心文件中，不会删除旧内容。请尽量简洁明了地描述这一条新认知。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -39,7 +41,7 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
 
         ObjectNode thoughtItem = properties.putObject("thought_item");
         thoughtItem.put("type", "string");
-        thoughtItem.put("description", "需要追加的一条具体认知或内心独白。");
+        thoughtItem.put("description", p.getCustomDescription("thought_item"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("thought_item");

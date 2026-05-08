@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -18,10 +19,11 @@ public class SwitchToAdvancedModel implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        // Description 写得越清晰，大模型触发它的时机就越准
-        function.put("description", "当你遇到极度复杂的逻辑推理、长代码编写、或者发现当前模型能力不足以完成任务时，必须调用此工具将思考核心切换至参数更大、更全能的高级深度思考模型。调用后下一轮思考将由更强的模型接管。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -29,7 +31,7 @@ public class SwitchToAdvancedModel implements DefaultAgentToolUnit {
         ObjectNode properties = parameters.putObject("properties");
         ObjectNode reasonNode = properties.putObject("reason");
         reasonNode.put("type", "string");
-        reasonNode.put("description", "简述需要切换到高级模型的原因（例如：'需要编写复杂的Java框架代码'）");
+        reasonNode.put("description", p.getCustomDescription("reason"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("reason");

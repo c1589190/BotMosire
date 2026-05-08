@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,10 +24,11 @@ public class UpdateInterests implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        // 说明书：明确告诉模型，这是在丰富雷达库
-        function.put("description", "当你发现新的感兴趣话题，或需要增加新的噪音屏蔽规则时调用。这会将规则追加到注意力雷达文件中，底层感知系统会参考所有已记录的规则进行过滤。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -35,7 +37,7 @@ public class UpdateInterests implements DefaultAgentToolUnit {
 
         ObjectNode ruleItem = properties.putObject("rule_item");
         ruleItem.put("type", "string");
-        ruleItem.put("description", "新增的兴趣描述或屏蔽规则（例如：‘关注所有关于量子计算的进展’ 或 ‘屏蔽所有带广告标签的消息’）。");
+        ruleItem.put("description", p.getCustomDescription("rule_item"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("rule_item");

@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MemoryManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,9 +28,11 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你发现当前上下文缺乏关键信息，需要回想起很久以前发生的事件、人物设定、长期总结或过去的某个特定话题时调用。请传入准确的关键词或自然语言描述。您不知道是否能获得完整记忆，建议搭配短期记忆获取工具一起使用。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -38,7 +41,7 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
 
         ObjectNode queryNode = properties.putObject("query");
         queryNode.put("type", "string");
-        queryNode.put("description", "用于唤醒长期记忆的搜索词，例如：'关于洗脑和格式化的讨论' 或 'ConstantinXIV 是谁'");
+        queryNode.put("description", p.getCustomDescription("query"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("query");

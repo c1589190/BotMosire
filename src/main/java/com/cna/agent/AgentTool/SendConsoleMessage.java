@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -22,10 +23,11 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        // 【说明书】：明确告诉大模型这是用来和部署者/后台终端直接沟通的
-        function.put("description", "当你需要直接向控制台（后台终端）输出信息、向部署者报告内部运行状态、或者发送调试警告时调用此工具。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -34,7 +36,7 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
 
         ObjectNode message = properties.putObject("message");
         message.put("type", "string");
-        message.put("description", "要输出到控制台的具体文本内容。");
+        message.put("description", p.getCustomDescription("message"));
 
         ArrayNode required = parameters.putArray("required");
         required.add("message");
