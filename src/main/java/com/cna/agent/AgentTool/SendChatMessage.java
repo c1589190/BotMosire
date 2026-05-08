@@ -1,17 +1,12 @@
 package com.cna.agent.AgentTool;
 
-import com.cna.Utils;
+import com.cna.ChatAdapterManager;
 import com.cna.agent.AgentTasksHandlers.ChatTaskHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
-
-import java.util.List;
-
-import static com.cna.Main.GlobalDiscordAdapter;
-import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
 public class SendChatMessage implements DefaultAgentToolUnit {
@@ -57,74 +52,14 @@ public class SendChatMessage implements DefaultAgentToolUnit {
 
     @Override
     public String execute(JsonNode arguments) {
-        try {
-            String target = arguments.path("target_namespace").asText().trim();
-            String msg = arguments.path("message").asText();
+        String target = arguments.path("target_namespace").asText().trim();
+        String msg    = arguments.path("message").asText();
+        long replyToId = ChatTaskHandler.CURRENT_REPLY_TO_ID.get();
 
-            this.lastTarget = target;
-            this.lastMessage = msg;
+        this.lastTarget  = target;
+        this.lastMessage = msg;
 
-            // 從 ThreadLocal 讀取 replyToMessageId
-            long replyToId = ChatTaskHandler.CURRENT_REPLY_TO_ID.get();
-
-            if (target.startsWith("qq_group:")) {
-                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送群聊消息。";
-                long groupId = Long.parseLong(target.substring(9));
-                if (replyToId > 0) {
-                    GlobalNapcatAdapter.sendGroupMsgWithReply(groupId, msg, replyToId);
-                    log.info("[Tool][SendChatMessage] 代理向群聊 [{}] 发送了引用回复消息，引用ID: {}", groupId, replyToId);
-                } else {
-                    GlobalNapcatAdapter.sendGroupMsg(groupId, msg);
-                    log.info("[Tool][SendChatMessage] 代理向群聊 [{}] 发送了消息", groupId);
-                }
-                return "SUCCESS: 消息已成功发送至群聊 " + target;
-
-            } else if (target.startsWith("qqid:")) {
-                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
-                long userId = Long.parseLong(target.substring(5));
-                if (replyToId > 0) {
-                    GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, msg, replyToId);
-                    log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了引用回复私聊消息，引用ID: {}", userId, replyToId);
-                } else {
-                    GlobalNapcatAdapter.sendPrivateMsg(userId, msg);
-                    log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了私聊消息", userId);
-                }
-                return "SUCCESS: 消息已成功发送至用户 " + target;
-
-            } else if (target.startsWith("qq_private:")) {
-                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
-                long userId = Long.parseLong(target.substring("qq_private:".length()));
-                GlobalNapcatAdapter.sendPrivateMsg(userId, msg);
-                log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了私聊消息(source路由)", userId);
-                return "SUCCESS: 消息已成功发送至用户 " + target;
-
-            } else if (target.startsWith("discord_dm:") || target.startsWith("discord_guild:")) {
-                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected()) {
-                    return "ERROR: Discord adapter 未連線或未啟用。";
-                }
-                List<String> chunks = Utils.splitForDiscord(msg);
-                for (String chunk : chunks) {
-                    String r = GlobalDiscordAdapter.sendMessage(target, chunk);
-                    if (r.startsWith("ERROR")) {
-                        log.warn("[Tool][SendChatMessage] Discord 分段發送失敗: {}", r);
-                        return r;
-                    }
-                }
-                log.info("[Tool][SendChatMessage] Discord 發送完畢 [{}]，共 {} 段", target, chunks.size());
-                return "SUCCESS: 消息已发送至 Discord " + target;
-
-            } else {
-                log.warn("[Tool][SendChatMessage] 无法识别的目标格式: {}", target);
-                return "ERROR: 无法识别的 target_namespace 格式。必须带有 'qq_group:'、'qqid:'、'discord_dm:' 或 'discord_guild:' 前缀。";
-            }
-
-        } catch (NumberFormatException e) {
-            log.error("执行 send_chat_message 失败: 标识符解析错误", e);
-            return "ERROR: target_namespace 前缀后的 ID 必须是有效的数字。";
-        } catch (Exception e) {
-            log.error("执行 send_chat_message 发生异常", e);
-            return "ERROR: 消息发送失败，底层异常: " + e.getMessage();
-        }
+        return ChatAdapterManager.send(target, msg, replyToId);
     }
 
     @Override
