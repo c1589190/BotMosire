@@ -1,6 +1,6 @@
 package com.cna.agent.AgentTool;
 
-import com.cna.ChatAdapterManager;
+import com.cna.ChatAdaptersManager;
 import com.cna.config.ConfigsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -50,7 +50,7 @@ public class GetChatHistory implements DefaultAgentToolUnit {
         this.lastQueriedTarget = targetNamespace;
         int count = ConfigsManager.HISTORY_VIEW_AMOUNT;
         log.info("[Tool][GetChatHistory] 大模型申请查阅目标 [{}] 的近期 {} 条历史记录", targetNamespace, count);
-        return ChatAdapterManager.getHistory(targetNamespace, count);
+        return ChatAdaptersManager.getHistory(targetNamespace, count);
     }
 
     @Override

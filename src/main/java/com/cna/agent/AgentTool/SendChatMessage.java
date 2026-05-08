@@ -1,6 +1,6 @@
 package com.cna.agent.AgentTool;
 
-import com.cna.ChatAdapterManager;
+import com.cna.ChatAdaptersManager;
 import com.cna.agent.AgentTasksHandlers.ChatTaskHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -59,7 +59,7 @@ public class SendChatMessage implements DefaultAgentToolUnit {
         this.lastTarget  = target;
         this.lastMessage = msg;
 
-        return ChatAdapterManager.send(target, msg, replyToId);
+        return ChatAdaptersManager.send(target, msg, replyToId);
     }
 
     @Override

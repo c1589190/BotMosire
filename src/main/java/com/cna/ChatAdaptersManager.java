@@ -8,7 +8,7 @@ import static com.cna.Main.GlobalDiscordAdapter;
 import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
-public class ChatAdapterManager {
+public class ChatAdaptersManager {
 
     public static String send(String namespace, String message, long replyToId) {
         try {
@@ -17,10 +17,10 @@ public class ChatAdapterManager {
                 long groupId = Long.parseLong(namespace.substring(9));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendGroupMsgWithReply(groupId, message, replyToId);
-                    log.info("[ChatAdapterManager] 向群聊 [{}] 发送了引用回复，引用ID: {}", groupId, replyToId);
+                    log.info("[ChatAdaptersManager] 向群聊 [{}] 发送了引用回复，引用ID: {}", groupId, replyToId);
                 } else {
                     GlobalNapcatAdapter.sendGroupMsg(groupId, message);
-                    log.info("[ChatAdapterManager] 向群聊 [{}] 发送了消息", groupId);
+                    log.info("[ChatAdaptersManager] 向群聊 [{}] 发送了消息", groupId);
                 }
                 return "SUCCESS: 消息已成功发送至群聊 " + namespace;
 
@@ -29,10 +29,10 @@ public class ChatAdapterManager {
                 long userId = Long.parseLong(namespace.substring(5));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, message, replyToId);
-                    log.info("[ChatAdapterManager] 向用户 [{}] 发送了引用回复私聊，引用ID: {}", userId, replyToId);
+                    log.info("[ChatAdaptersManager] 向用户 [{}] 发送了引用回复私聊，引用ID: {}", userId, replyToId);
                 } else {
                     GlobalNapcatAdapter.sendPrivateMsg(userId, message);
-                    log.info("[ChatAdapterManager] 向用户 [{}] 发送了私聊消息", userId);
+                    log.info("[ChatAdaptersManager] 向用户 [{}] 发送了私聊消息", userId);
                 }
                 return "SUCCESS: 消息已成功发送至用户 " + namespace;
 
@@ -44,7 +44,7 @@ public class ChatAdapterManager {
                 } else {
                     GlobalNapcatAdapter.sendPrivateMsg(userId, message);
                 }
-                log.info("[ChatAdapterManager] 向用户 [{}] 发送了私聊消息(source路由)", userId);
+                log.info("[ChatAdaptersManager] 向用户 [{}] 发送了私聊消息(source路由)", userId);
                 return "SUCCESS: 消息已成功发送至用户 " + namespace;
 
             } else if (namespace.startsWith("discord_dm:") || namespace.startsWith("discord_guild:")) {
@@ -55,22 +55,22 @@ public class ChatAdapterManager {
                 for (String chunk : chunks) {
                     String r = GlobalDiscordAdapter.sendMessage(namespace, chunk);
                     if (r.startsWith("ERROR")) {
-                        log.warn("[ChatAdapterManager] Discord 分段發送失敗: {}", r);
+                        log.warn("[ChatAdaptersManager] Discord 分段發送失敗: {}", r);
                         return r;
                     }
                 }
-                log.info("[ChatAdapterManager] Discord 發送完畢 [{}]，共 {} 段", namespace, chunks.size());
+                log.info("[ChatAdaptersManager] Discord 發送完畢 [{}]，共 {} 段", namespace, chunks.size());
                 return "SUCCESS: 消息已发送至 Discord " + namespace;
 
             } else {
-                log.warn("[ChatAdapterManager] 无法识别的 namespace: {}", namespace);
+                log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
                 return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qqid:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
         } catch (NumberFormatException e) {
-            log.error("[ChatAdapterManager] ID 解析错误: {}", namespace, e);
+            log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
             return "ERROR: namespace 前缀后的 ID 必须是有效的数字。";
         } catch (Exception e) {
-            log.error("[ChatAdapterManager] 发送消息异常", e);
+            log.error("[ChatAdaptersManager] 发送消息异常", e);
             return "ERROR: 消息发送失败，底层异常: " + e.getMessage();
         }
     }
@@ -105,7 +105,7 @@ public class ChatAdapterManager {
                 historyList = GlobalDiscordAdapter.getChannelHistorySync(channelId, count);
                 chatTypeDesc = "Discord频道";
             } else {
-                log.warn("[ChatAdapterManager] 无法识别的 namespace: {}", namespace);
+                log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
                 return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qqid:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
 
@@ -117,10 +117,10 @@ public class ChatAdapterManager {
                     namespace, historyList.size(), chatTypeDesc, String.join("\n", historyList));
 
         } catch (NumberFormatException e) {
-            log.error("[ChatAdapterManager] ID 解析错误: {}", namespace, e);
+            log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
             return "ERROR: namespace 前缀后的 ID 必须是数字";
         } catch (Exception e) {
-            log.error("[ChatAdapterManager] 获取历史记录异常", e);
+            log.error("[ChatAdaptersManager] 获取历史记录异常", e);
             return "ERROR: 获取历史记录失败，底层异常: " + e.getMessage();
         }
     }
