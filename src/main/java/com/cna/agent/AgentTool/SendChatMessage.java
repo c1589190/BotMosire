@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.Utils;
 import com.cna.agent.AgentTasksHandlers.ChatTaskHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -7,12 +8,15 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.List;
+
+import static com.cna.Main.GlobalDiscordAdapter;
 import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
 public class SendChatMessage implements DefaultAgentToolUnit {
 
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper mapper = new ObjectMapper();
 
     private String lastTarget = null;
     private String lastMessage = null;
@@ -29,7 +33,7 @@ public class SendChatMessage implements DefaultAgentToolUnit {
 
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你需要发送消息时调用此工具。如果要在群聊中回复，请将目标设为消息的 source（如 'qq_group:12345'）；如果要私聊回复某人，请将目标设为消息的 role（如 'qqid:12345'）。");
+        function.put("description", "当你需要发送消息时调用此工具。如果要在群聊中回复，请将目标设为消息的 source（如 'qq_group:12345'）；如果要私聊回复某人，请将目标设为消息的 role（如 'qqid:12345'）。Discord 私聊用 'discord_dm:{userId}'，Discord 頻道用 'discord_guild:{guildId}:{channelId}'。");
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -64,6 +68,7 @@ public class SendChatMessage implements DefaultAgentToolUnit {
             long replyToId = ChatTaskHandler.CURRENT_REPLY_TO_ID.get();
 
             if (target.startsWith("qq_group:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送群聊消息。";
                 long groupId = Long.parseLong(target.substring(9));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendGroupMsgWithReply(groupId, msg, replyToId);
@@ -75,6 +80,7 @@ public class SendChatMessage implements DefaultAgentToolUnit {
                 return "SUCCESS: 消息已成功发送至群聊 " + target;
 
             } else if (target.startsWith("qqid:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
                 long userId = Long.parseLong(target.substring(5));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, msg, replyToId);
@@ -85,9 +91,31 @@ public class SendChatMessage implements DefaultAgentToolUnit {
                 }
                 return "SUCCESS: 消息已成功发送至用户 " + target;
 
+            } else if (target.startsWith("qq_private:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
+                long userId = Long.parseLong(target.substring("qq_private:".length()));
+                GlobalNapcatAdapter.sendPrivateMsg(userId, msg);
+                log.info("[Tool][SendChatMessage] 代理向用户 [{}] 发送了私聊消息(source路由)", userId);
+                return "SUCCESS: 消息已成功发送至用户 " + target;
+
+            } else if (target.startsWith("discord_dm:") || target.startsWith("discord_guild:")) {
+                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected()) {
+                    return "ERROR: Discord adapter 未連線或未啟用。";
+                }
+                List<String> chunks = Utils.splitForDiscord(msg);
+                for (String chunk : chunks) {
+                    String r = GlobalDiscordAdapter.sendMessage(target, chunk);
+                    if (r.startsWith("ERROR")) {
+                        log.warn("[Tool][SendChatMessage] Discord 分段發送失敗: {}", r);
+                        return r;
+                    }
+                }
+                log.info("[Tool][SendChatMessage] Discord 發送完畢 [{}]，共 {} 段", target, chunks.size());
+                return "SUCCESS: 消息已发送至 Discord " + target;
+
             } else {
                 log.warn("[Tool][SendChatMessage] 无法识别的目标格式: {}", target);
-                return "ERROR: 无法识别的 target_namespace 格式。必须带有 'qq_group:' 或 'qqid:' 前缀。";
+                return "ERROR: 无法识别的 target_namespace 格式。必须带有 'qq_group:'、'qqid:'、'discord_dm:' 或 'discord_guild:' 前缀。";
             }
 
         } catch (NumberFormatException e) {

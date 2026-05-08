@@ -36,6 +36,7 @@ public class NapcatAdapter extends WebSocketClient {
 
     // 【关键修复 1】：改用单线程异步队列。既不阻塞 WebSocket 掉线，又保证消息严格按时间线排队，防止小模型因乱序拒收消息！
     private final ExecutorService messageProcessorThread = Executors.newSingleThreadExecutor();
+    private volatile boolean isShuttingDown = false;
 
     // 【关键修复 2】：把视觉大模型设为单例复用，防止每次收到图片都 new 导致 OkHttp 线程池爆炸卡死
     private LLMAdapter visionLLM;
@@ -182,13 +183,30 @@ public class NapcatAdapter extends WebSocketClient {
             );
 
             log.info("[感知引擎] 检测到撤回事件: {}", noticeContent);
-            Main.AgentInputTasksQueue.add(input);
+            Main.AgentInputTasksQueue.offer(input);
         }
     }
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
         log.warn("[WS] 物理链路被切断: Code: {}, Reason: {}, 由远端发起: {}", code, reason, remote);
+    }
+
+    public void shutdown() {
+        isShuttingDown = true;
+        try {
+            this.closeConnection(1000, "Shutting down");
+        } catch (Exception ignored) {}
+        messageProcessorThread.shutdown();
+        try {
+            if (!messageProcessorThread.awaitTermination(2, TimeUnit.SECONDS)) {
+                messageProcessorThread.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            messageProcessorThread.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        log.info("[NapcatAdapter] 消息处理线程已关闭。");
     }
 
     @Override
@@ -285,7 +303,7 @@ public class NapcatAdapter extends WebSocketClient {
                     content,
                     replyToMessageId
             );
-            Main.AgentInputTasksQueue.add(input);
+            Main.AgentInputTasksQueue.offer(input);
         } catch (Throwable t) {
             log.error("[拦截追踪] 群消息推入主线队列失败", t);
         }
@@ -299,14 +317,14 @@ public class NapcatAdapter extends WebSocketClient {
             System.out.println(String.format("[私聊|%s] -> %s", senderName, content));
 
             ChatMessageInput input = new ChatMessageInput(
-                    "qq_private",
+                    "qq_private:" + senderId,
                     "QQ私聊",
                     "qqid:"+String.valueOf(senderId),
                     senderName,
                     content,
                     replyToMessageId
             );
-            Main.AgentInputTasksQueue.add(input);
+            Main.AgentInputTasksQueue.offer(input);
         } catch (Throwable t) {
             log.error("[拦截追踪] 私聊消息推入主线队列失败", t);
         }

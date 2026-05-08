@@ -67,7 +67,7 @@ public class LLManager {
 
         Map<String, Object> data = dataModel;
         // 注入一些必要前置参数
-        data.put("current_memories", new MemoryManager().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+        data.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
         data.put("now_time", Utils.getNowFormatted());
         data.put("current_thoughts", MDManager.read("thoughts.md", ""));
 
@@ -92,6 +92,6 @@ public class LLManager {
     }
 
     public static List<String> getDeepMemories(String text, LLMAdapter emb, int depth) {
-        return new MemoryManager().getDeepMemorys(getTextVector(text, emb), depth);
+        return MemoryManager.getInstance().getDeepMemorys(getTextVector(text, emb), depth);
     }
 }

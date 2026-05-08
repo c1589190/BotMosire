@@ -44,7 +44,7 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
             log.info("[Tool][GetMoreCurrentMemorys] 潜意识申请回想最近的 {} 条短期记忆", count);
 
             // 调用 MemoryManager 的现有方法
-            List<String> memories = new MemoryManager().getCurrentMemorys(count);
+            List<String> memories = MemoryManager.getInstance().getCurrentMemorys(count);
 
             if (memories == null || memories.isEmpty()) {
                 this.fetchedCount = 0;

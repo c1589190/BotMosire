@@ -9,12 +9,13 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 
+import static com.cna.Main.GlobalDiscordAdapter;
 import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
 public class GetChatHistory implements DefaultAgentToolUnit {
 
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper mapper = new ObjectMapper();
 
     private String lastQueriedTarget = null;
 
@@ -30,7 +31,7 @@ public class GetChatHistory implements DefaultAgentToolUnit {
 
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你发觉当前上下文中信息缺失，需要查阅历史聊天记录时调用此工具。查阅群历史请传入 source（如 'qq_group:12345'），查阅某人的私聊历史请传入 role（如 'qqid:12345'）。");
+        function.put("description", "当你发觉当前上下文中信息缺失，需要查阅历史聊天记录时调用此工具。支持格式：QQ群聊传 'qq_group:groupId'，QQ私聊传 'qqid:userId'，Discord频道传 'discord_guild:guildId:channelId'，Discord私聊传 'discord_dm:userId'。");
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");
@@ -60,16 +61,32 @@ public class GetChatHistory implements DefaultAgentToolUnit {
             log.info("[Tool][GetChatHistory] 大模型申请查阅目标 [{}] 的近期 {} 条历史记录", targetNamespace, count);
 
             if (targetNamespace.startsWith("qq_group:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
                 long groupId = Long.parseLong(targetNamespace.substring(9));
                 historyList = GlobalNapcatAdapter.getGroupHistorySync(groupId, count);
-                chatTypeDesc = "群聊";
+                chatTypeDesc = "QQ群聊";
             } else if (targetNamespace.startsWith("qqid:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
                 long userId = Long.parseLong(targetNamespace.substring(5));
                 historyList = GlobalNapcatAdapter.getFriendHistorySync(userId, count);
-                chatTypeDesc = "私聊";
+                chatTypeDesc = "QQ私聊";
+            } else if (targetNamespace.startsWith("discord_dm:")) {
+                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
+                    return "ERROR: Discord 适配器未连线。";
+                String userId = targetNamespace.substring("discord_dm:".length());
+                historyList = GlobalDiscordAdapter.getDmHistorySync(userId, count);
+                chatTypeDesc = "Discord私聊";
+            } else if (targetNamespace.startsWith("discord_guild:")) {
+                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
+                    return "ERROR: Discord 适配器未连线。";
+                String[] parts = targetNamespace.split(":");
+                if (parts.length < 3) return "ERROR: discord_guild 格式需为 discord_guild:{guildId}:{channelId}";
+                long channelId = Long.parseLong(parts[2]);
+                historyList = GlobalDiscordAdapter.getChannelHistorySync(channelId, count);
+                chatTypeDesc = "Discord频道";
             } else {
                 log.warn("[Tool][GetChatHistory] 格式异常: {}", targetNamespace);
-                return "ERROR: 无法识别的 target_namespace 格式。必须带有 'qq_group:' 或 'qqid:' 前缀。";
+                return "ERROR: 无法识别的 target_namespace 格式。支持 'qq_group:'、'qqid:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
 
             if (historyList == null || historyList.isEmpty()) {

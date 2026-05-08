@@ -34,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class LivingLoop implements MosireAPI {
+    private static final ObjectMapper sharedMapper = new ObjectMapper();
+
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
 
@@ -65,6 +67,8 @@ public class LivingLoop implements MosireAPI {
 
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
+    private LLMAdapter advancedLLM;
+    private LLMAdapter plannerLLM;
     private LLMAdapter SchedulerLLM;
     private LLMAdapter embLLM;
 
@@ -86,6 +90,8 @@ public class LivingLoop implements MosireAPI {
         largeLLMToolbox.put(new GetScheduled().getName(), new GetScheduled());
         largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
         largeLLMToolbox.put(new GetInterests().getName(), new GetInterests());
+        largeLLMToolbox.put(new WebSearch().getName(), new WebSearch());
+        largeLLMToolbox.put(new ReadWebPage().getName(), new ReadWebPage());
 
         this.registerTool(new GetMoreCurrentMemorys());
         this.registerTool(new QueryDeepMemory());
@@ -104,11 +110,19 @@ public class LivingLoop implements MosireAPI {
     }
 
     private void initLLM(){
-        this.littleLLM = new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG);
-        this.largeLLM = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
+        this.littleLLM    = new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG);
+        this.largeLLM     = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
+        this.advancedLLM  = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
+        this.plannerLLM   = new LLMAdapter(ConfigsManager.PLANNER_CONFIG);
         this.SchedulerLLM = new LLMAdapter(ConfigsManager.SCHEDULER_CONFIG);
-        this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
+        this.embLLM       = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
     }
+
+    public LLMAdapter getLittleLLM()    { return littleLLM; }
+    public LLMAdapter getLargeLLM()     { return largeLLM; }
+    public LLMAdapter getAdvancedLLM()  { return advancedLLM; }
+    public LLMAdapter getSchedulerLLM() { return SchedulerLLM; }
+    public LLMAdapter getEmbLLM()       { return embLLM; }
 
     // ==========================================
     // 插件系统 API：工具箱动态装配接口
@@ -361,7 +375,7 @@ public class LivingLoop implements MosireAPI {
                 }
                 if ("switch_to_advanced_model".equals(functionName)) {
                     log.info("[EXEC-Engine] 下一轮思考将切换至高级大模型。");
-                    llm = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
+                    llm = advancedLLM;
                 }
 
                 DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
@@ -376,7 +390,7 @@ public class LivingLoop implements MosireAPI {
                         if(targetTool.isAutoMemory()){
                             List<String> list = new LinkedList<>();
                             list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
-                            new MemoryManager().inputCurrentMemorys(list);
+                            MemoryManager.getInstance().inputCurrentMemorys(list);
                         }
 
                     } catch (Exception e) {
@@ -430,6 +444,7 @@ public class LivingLoop implements MosireAPI {
         log.info("[BrainLoop] 收到停机指令，正在关闭心跳引擎...");
         scheduler.shutdown();
         executorService.shutdown();
+        gatekeeperExecutor.shutdown();
         try {
             if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
@@ -437,9 +452,13 @@ public class LivingLoop implements MosireAPI {
             if (!executorService.awaitTermination(2, TimeUnit.SECONDS)) {
                 executorService.shutdownNow();
             }
+            if (!gatekeeperExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                gatekeeperExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             scheduler.shutdownNow();
             executorService.shutdownNow();
+            gatekeeperExecutor.shutdownNow();
         }
     }
 }

@@ -14,6 +14,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class MemoryManager {
 
+    private static volatile MemoryManager INSTANCE;
+
+    public static MemoryManager getInstance() {
+        if (INSTANCE == null) {
+            synchronized (MemoryManager.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = new MemoryManager();
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
     private final MemoryDB db;
     private final LLMAdapter summaryLLM;
     private final LLMAdapter embLLM;
@@ -29,7 +42,7 @@ public class MemoryManager {
     // 【新增】：防止精神分裂的锁。如果后台正在折叠，就不允许触发新的折叠
     private final AtomicBoolean isConsolidating = new AtomicBoolean(false);
 
-    public MemoryManager() {
+    private MemoryManager() {
         this.db = new MemoryDB();
         this.summaryLLM = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
         this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);

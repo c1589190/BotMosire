@@ -7,7 +7,7 @@ import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
-import com.cna.llm.LLMAdapter;
+import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
@@ -38,12 +38,12 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
 
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("scheduled", scheduledContent);
+        baseData.put("deep_memories", LLManager.getDeepMemories(scheduledContent, engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
 
-        // 调用 LivingLoop 的公共引擎，注意这里传入的是 engine.getSchedulerLLM()
         engine.executeCognitiveCycle(
                 new ScenePromptsManager(ScheduledTask.class.getName()),
                 baseData,
-                new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
+                engine.getSchedulerLLM(),
                 toolsDefinitionArray,
                 "定时计划任务"
         );

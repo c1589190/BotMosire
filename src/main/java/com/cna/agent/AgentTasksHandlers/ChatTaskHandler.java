@@ -5,7 +5,6 @@ import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
-import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
@@ -33,13 +32,13 @@ public class ChatTaskHandler implements DefaultAgentTaskHandler {
 
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", chatTask.getTaskText());
-        baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG), ConfigsManager.MEMORY_DEPTH));
+        baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
 
         // 调用 LivingLoop 的公共引擎
         engine.executeCognitiveCycle(
                 new ScenePromptsManager(ChatTask.class.getName()),
                 baseData,
-                new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
+                engine.getLargeLLM(),
                 toolsDefinitionArray,
                 "常规聊天任务"
         );

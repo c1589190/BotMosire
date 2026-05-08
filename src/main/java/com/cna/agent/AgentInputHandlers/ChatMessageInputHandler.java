@@ -17,18 +17,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
 
 import java.util.*;
 
 @Slf4j
 public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
-    // 把原本 LivingLoop 里的预备池搬到这里来！这是聊天消息专属的孵化器！
-    private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
+    private static final ObjectMapper sharedMapper = new ObjectMapper();
 
-    // 记录上一轮被更新的 Role，用于跨方法判定（比如 tick 里催熟用）
+    private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
     private Set<String> updatedRoles = new HashSet<>();
+    private final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Override
     public Class<? extends DefaultAgentInputUnit> getSupportedInputClass() {
@@ -72,7 +71,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                     List<String> l = new LinkedList<>();
                     l.add("为自己创建了任务，有关于 [ " + input.getInputText() + " ]");
-                    new MemoryManager().inputCurrentMemorys(l);
+                    MemoryManager.getInstance().inputCurrentMemorys(l);
 
                     log.debug("为已有任务 [Role:{}] 追加了新消息", senderRole);
                 } else {
@@ -164,7 +163,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                             List<String> l = new LinkedList<>();
                             l.add("想要回复这条消息:{\n" + input.getInputText() + "\n};");
-                            new MemoryManager().inputCurrentMemorys(l);
+                            MemoryManager.getInstance().inputCurrentMemorys(l);
 
                             log.info("小模型判定有价值，为当前批次的新目标 [Role:{}] 合并追加了连贯消息", senderRole);
                         } else {
@@ -174,7 +173,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                             List<String> l = new LinkedList<>();
                             l.add("想要回复这条消息:{\n" + input.getInputText() + "\n};");
-                            new MemoryManager().inputCurrentMemorys(l);
+                            MemoryManager.getInstance().inputCurrentMemorys(l);
 
                             log.info("小模型判定有价值，为新目标 [Role:{}] 创建了预备任务", senderRole);
                         }
@@ -226,7 +225,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                                 List<String> l = new LinkedList<>();
                                 l.add("实在太闲了，从垃圾桶里捞了一条原本不想理的消息来回复:{\n" + luckyInput.getInputText() + "\n};");
-                                new MemoryManager().inputCurrentMemorys(l);
+                                MemoryManager.getInstance().inputCurrentMemorys(l);
 
                                 log.info("🎲 运气爆发，被拦截的消息 [Role:{}] 成功复活进入预备池", senderRole);
                             }
@@ -249,12 +248,17 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
             if (!updatedRoles.contains(roleId)) {
                 task.addStatic();
                 if (task.getStatic_cnt() > ConfigsManager.MESSAGE_WAITING_TIME) {
-                    log.info("任务 [Role:{}] 已熟透，移交至执行总线", roleId);
-
-                    // 【核心】：用 engine 的接口把任务塞进大模型消费队列！
-                    engine.pushTask(task);
-
-                    iterator.remove();
+                    long now = System.currentTimeMillis();
+                    Long lastPushed = lastTaskPushedTime.get(roleId);
+                    if (lastPushed != null && now - lastPushed < ConfigsManager.RATE_LIMIT_MS) {
+                        log.info("[RateLimit] 用户 [{}] 请求过于频繁，跳过本次推送", roleId);
+                        iterator.remove();
+                    } else {
+                        log.info("任务 [Role:{}] 已熟透，移交至执行总线", roleId);
+                        lastTaskPushedTime.put(roleId, now);
+                        engine.pushTask(task);
+                        iterator.remove();
+                    }
                 }
             }
         }

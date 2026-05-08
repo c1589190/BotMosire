@@ -56,7 +56,7 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
             int limit = ConfigsManager.MEMORY_DEPTH;
             log.info("[Tool][QueryDeepMemory] 大模型尝试潜入深层记忆网络，搜索关键词: [{}]", query);
 
-            List<String> deepMemories = new MemoryManager().searchDeepMemoryByText(query, limit);
+            List<String> deepMemories = MemoryManager.getInstance().searchDeepMemoryByText(query, limit);
 
             if (deepMemories == null || deepMemories.isEmpty()) {
                 this.fetchedCount = 0;
