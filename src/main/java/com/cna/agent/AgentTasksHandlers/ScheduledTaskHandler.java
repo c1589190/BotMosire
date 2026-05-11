@@ -40,7 +40,8 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
         baseData.put("scheduled", scheduledContent);
         baseData.put("deep_memories", LLManager.getDeepMemories(scheduledContent, engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
 
-        engine.executeCognitiveCycle(
+        DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
+                task,
                 new ScenePromptsManager(ScheduledTask.class.getName()),
                 baseData,
                 engine.getSchedulerLLM(),
@@ -48,6 +49,11 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
                 "定时计划任务"
         );
 
-        log.info("========== 定时任务处理完毕 ==========\n");
+        if (retTask == null) {
+            log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
+            return;
+        }
+
+        engine.pushTask(retTask);
     }
 }

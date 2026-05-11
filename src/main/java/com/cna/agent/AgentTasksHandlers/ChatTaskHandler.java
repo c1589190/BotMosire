@@ -15,37 +15,43 @@ import java.util.Map;
 @Slf4j
 public class ChatTaskHandler implements DefaultAgentTaskHandler {
 
-    /** 當前線程正在處理的 ChatTask 的 replyToMessageId（0 表示無引用） */
     public static final ThreadLocal<Long> CURRENT_REPLY_TO_ID = ThreadLocal.withInitial(() -> 0L);
 
     @Override
     public Class<? extends DefaultAgentTaskUnit> getSupportedTaskClass() {
-        return ChatTask.class; // 认领 ChatTask
+        return ChatTask.class;
     }
 
     @Override
     public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         ChatTask chatTask = (ChatTask) task;
 
-        // 把 replyToMessageId 存入 ThreadLocal，供 SendChatMessage 讀取
         CURRENT_REPLY_TO_ID.set(chatTask.getReplyToMessageId());
 
-        Map<String, Object> baseData = new HashMap<>();
-        baseData.put("taskText", chatTask.getTaskText());
-        baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
+        try {
+            Map<String, Object> baseData = new HashMap<>();
+            baseData.put("taskText", chatTask.getTaskText());
+            baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
 
-        // 调用 LivingLoop 的公共引擎
-        engine.executeCognitiveCycle(
-                new ScenePromptsManager(ChatTask.class.getName()),
-                baseData,
-                engine.getLargeLLM(),
-                toolsDefinitionArray,
-                "常规聊天任务"
-        );
+            DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
+                    task,
+                    new ScenePromptsManager(ChatTask.class.getName()),
+                    baseData,
+                    engine.getLargeLLM(),
+                    toolsDefinitionArray,
+                    "常规聊天任务"
+            );
 
-        // 清理 ThreadLocal
-        CURRENT_REPLY_TO_ID.remove();
+            if (retTask == null) {
+                log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
+                return;
+            }
 
-        log.info("========== 常规聊天任务处理完毕 ==========\n");
+            engine.pushTask(retTask);
+
+        } finally {
+            // 【关键修复】：无论成功还是异常，绝对保证清理 ThreadLocal
+            CURRENT_REPLY_TO_ID.remove();
+        }
     }
 }

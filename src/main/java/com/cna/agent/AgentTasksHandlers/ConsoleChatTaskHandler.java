@@ -34,7 +34,8 @@ public class ConsoleChatTaskHandler implements DefaultAgentTaskHandler{
         baseData.put("deep_memories", LLManager.getDeepMemories(Task.getTaskText(), new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG), ConfigsManager.MEMORY_DEPTH));
 
         // 调用 LivingLoop 的公共引擎
-        engine.executeCognitiveCycle(
+        DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
+                Task,
                 new ScenePromptsManager(ConsoleChatTask.class.getName()),
                 baseData,
                 new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
@@ -42,6 +43,11 @@ public class ConsoleChatTaskHandler implements DefaultAgentTaskHandler{
                 "系统聊天任务"
         );
 
-        log.info("========== 常规聊天任务处理完毕 ==========\n");
+        if (retTask == null) {
+            log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
+            return;
+        }
+
+        engine.pushTask(retTask);
     }
 }

@@ -5,7 +5,15 @@ import java.util.UUID;
 public interface DefaultAgentTaskUnit {
     UUID getUUID();
     String getTaskText();
-    default int getPriority(){
-        return 3;
-    }; // 可选：为任务添加优先级，数值越小优先级越高
+
+    double getPriority();
+
+    // 记录当前执行到了第几轮
+    int getCurrentTurn();
+    void setCurrentTurn(int turn);
+
+    // 记录已经发生过的思考和工具调用记录
+    String getTurnsAddition();
+    void setTurnsAddition(String addition);
+
 }

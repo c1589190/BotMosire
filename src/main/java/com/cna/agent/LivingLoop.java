@@ -56,7 +56,7 @@ public class LivingLoop implements MosireAPI {
 
     // 将双端队列替换为优先级阻塞队列，根据 priority 升序排列（数值越小，越先出队）
     private PriorityBlockingQueue<DefaultAgentTaskUnit> TaskQueue = new PriorityBlockingQueue<>(
-            1145, Comparator.comparingInt(DefaultAgentTaskUnit::getPriority)
+            1145, Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
     );
 
     private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
@@ -88,7 +88,7 @@ public class LivingLoop implements MosireAPI {
         largeLLMToolbox.put(updateInterestsTool.getName(), updateInterestsTool);
         largeLLMToolbox.put(updateScheduledTool.getName(), updateScheduledTool);
         largeLLMToolbox.put(new GetScheduled().getName(), new GetScheduled());
-        largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
+        //largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
         largeLLMToolbox.put(new GetInterests().getName(), new GetInterests());
         largeLLMToolbox.put(new WebSearch().getName(), new WebSearch());
         largeLLMToolbox.put(new ReadWebPage().getName(), new ReadWebPage());
@@ -279,7 +279,7 @@ public class LivingLoop implements MosireAPI {
                     finishFunction.putObject("parameters").put("type", "object");
                     toolsDefinitionArray.add(finishTool);
 
-                    Map<String, Object> baseData = new HashMap<>();
+                    //Map<String, Object> baseData = new HashMap<>();
 
                     DefaultAgentTaskHandler handler = taskHandlerRegistry.get(task.getClass());
 
@@ -300,117 +300,116 @@ public class LivingLoop implements MosireAPI {
         });
     }
 
-    public void executeCognitiveCycle(
+    // 返回 null 代表任务已终结，可以被销毁
+    public DefaultAgentTaskUnit executeCognitiveCycle(
+            DefaultAgentTaskUnit taskUnit,
             ScenePromptsManager scenePrompts,
             Map<String, Object> baseData,
             LLMAdapter DefaultLLM,
             ArrayNode toolsDefinitionArray,
             String taskDesc) {
-        String turnsAddition = "";
+
         ObjectMapper mapper = new ObjectMapper();
+
+        // 【修复点 1】：动态决定使用哪个模型（支持高级模型切换）
         LLMAdapter llm = DefaultLLM;
+        int turn = taskUnit.getCurrentTurn();
 
-        log.info("[EXEC-Engine] [{}] 正在进行第 0 轮预思考 (战略规划与任务拆解)...", taskDesc);
-        Map<String, Object> turn0Data = new HashMap<>(baseData);
+        log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考与动作执行...", taskDesc, turn);
 
-        String toolsDescString = "";
-        try {
-            toolsDescString = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(toolsDefinitionArray);
-        } catch (Exception e) {
-            log.warn("序列化工具列表失败", e);
+        Map<String, Object> turnData = new HashMap<>(baseData);
+        // 注入之前的思考轨迹
+        turnData.put("turnsAddition", taskUnit.getTurnsAddition());
+
+        CallResult result;
+        if (turn == 1) {
+            result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
+        } else {
+            result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+        }
+        StringBuilder nowTurnAddition = new StringBuilder();
+        nowTurnAddition.append(taskUnit.getTurnsAddition());//把之前的工具调用结果压入
+
+
+        nowTurnAddition.append("在第" + turn + "轮思考中，");
+        if(result.getContent() != null && !result.getContent().isEmpty() && !result.getContent().equals("") && !result.getContent().equals(" ")) {
+            nowTurnAddition.append("你产生了以下想法:{\n");
+            nowTurnAddition.append(result.getContent());
+            nowTurnAddition.append("\n};\n");
         }
 
-        turn0Data.put("available_tools", toolsDescString);
-
-        if(!Objects.equals(scenePrompts.getThinkingPrompt(), "") || !scenePrompts.getThinkingPrompt().isEmpty()){
-            try {
-                CallResult planResult = LLManager.executeScene(
-                        scenePrompts.getThinkingPrompt(),
-                        turn0Data,
-                        llm,
-                        null
-                );
-
-                String planContent = planResult.getContent();
-                log.info("[EXEC-Engine] 💡 第 0 轮预思考完毕，生成战略路线图: \n{}", planContent);
-
-                turnsAddition += "任务前期规划: [\n" + planContent + "\n];\n";
-
-            } catch (Exception e) {
-                log.warn("[EXEC-Engine] 第 0 轮预思考发生异常，将降级直接进入动作循环。", e);
+        // 如果没有调用任何工具，直接判定闭环
+        if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
+            log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
+            nowTurnAddition.append("你没有调用任何工具;\n");
+            nowTurnAddition.append("（也许你该结束这次任务了？或是自己一时抽抽，忘记把工具调用JSON错误地放到了文本栏一起输出了？自行判断吧）\n");
+            taskUnit.setTurnsAddition(nowTurnAddition.toString());
+            taskUnit.setCurrentTurn(turn + 1); // 向前推进一步！
+            if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
+                log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+                return null; // 超出轮数，销毁
             }
+            return taskUnit; // 返回更新后的任务，准备重新入队
         }
 
-        for (int turn = 1; turn <= ConfigsManager.CONSUMER_CYCLING_TIME; turn++) {
-            log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考与动作执行...", taskDesc, turn);
 
-            Map<String, Object> turnData = new HashMap<>(baseData);
-            turnData.put("turnsAddition", turnsAddition);
+        StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
 
-            CallResult result = LLManager.executeScene(
-                    scenePrompts.getSolvingPrompt(),
-                    turnData,
-                    llm,
-                    toolsDefinitionArray
-            );
+        for (JsonNode toolCall : result.getToolCalls()) {
+            String functionName = toolCall.path("function").path("name").asText();
+            String argumentsStr = toolCall.path("function").path("arguments").asText();
 
-            if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
-                log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
-                break;
+            log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
+
+            if ("finish_task".equals(functionName)) {
+                log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
+                return null; // 直接终结任务
             }
 
-            StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
-            boolean hasFinalAction = false;
+            if ("switch_to_advanced_model".equals(functionName)) {
+                log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
+                //没想好怎么写
+                toolResults.append("（已成功切换至高级大模型，请继续执行任务;）\n");
+                continue;
+            }
 
-            for (JsonNode toolCall : result.getToolCalls()) {
-                String functionName = toolCall.path("function").path("name").asText();
-                String argumentsStr = toolCall.path("function").path("arguments").asText();
+            DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
+            if (targetTool != null) {
+                try {
+                    JsonNode argsNode = mapper.readTree(argumentsStr);
+                    String execResult = targetTool.execute(argsNode);
+                    log.info("[EXEC-Engine] 动作反馈: {}", execResult);
 
-                log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
+                    toolResults.append("调用工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 
-                if ("finish_task".equals(functionName)) {
-                    log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
-                    hasFinalAction = true;
-                    continue;
-                }
-                if ("switch_to_advanced_model".equals(functionName)) {
-                    log.info("[EXEC-Engine] 下一轮思考将切换至高级大模型。");
-                    llm = advancedLLM;
-                }
-
-                DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
-                if (targetTool != null) {
-                    try {
-                        JsonNode argsNode = mapper.readTree(argumentsStr);
-                        String execResult = targetTool.execute(argsNode);
-                        log.info("[EXEC-Engine] 动作反馈: {}", execResult);
-
-                        toolResults.append("调用工具 [").append(functionName).append("] 返回 [").append(execResult).append("];\n");
-
-                        if(targetTool.isAutoMemory()){
-                            List<String> list = new LinkedList<>();
-                            list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
-                            MemoryManager.getInstance().inputCurrentMemorys(list);
-                        }
-
-                    } catch (Exception e) {
-                        log.error("[EXEC-Engine] 工具解析或执行异常", e);
-                        toolResults.append("调用工具 [").append(functionName).append("] 发生程序错误;\n");
+                    if(targetTool.isAutoMemory()){
+                        List<String> list = new LinkedList<>();
+                        list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
+                        MemoryManager.getInstance().inputCurrentMemorys(list);
                     }
-                } else {
-                    toolResults.append("系统警告：工具 [").append(functionName).append("] 调用失败，该工具不存在。\n");
-                    log.warn("[EXEC-Engine] 严重幻觉：模型试图调用不存在的工具: {}", functionName);
-                }
-            }
 
-            if (hasFinalAction) {
-                log.info("[EXEC-Engine] 终结指令已下达，思考回路闭合。");
-                break;
+                } catch (Exception e) {
+                    log.error("[EXEC-Engine] 工具解析或执行异常", e);
+                    toolResults.append("调用工具 [").append(functionName).append("] 发生程序错误;\n");
+                }
             } else {
-                log.info("[EXEC-Engine] 获取到观察线索，转入下一轮思考...");
-                turnsAddition += "在第 " + turn + " 轮思考中，你获得了以下信息：\n" + toolResults.toString() + "\n";
+                toolResults.append("系统警告：工具 [").append(functionName).append("] 调用失败，该工具不存在。\n");
             }
         }
+
+        // 【修复点 3】：推进轮数，并检查最大循环限制
+        log.info("[EXEC-Engine] 获取到观察线索，转入下一轮思考...");
+        nowTurnAddition.append(toolResults.toString());
+
+        taskUnit.setTurnsAddition(nowTurnAddition.toString());
+        taskUnit.setCurrentTurn(turn + 1); // 核心：向前推进一步！
+
+        if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
+            log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+            return null; // 超出轮数，销毁
+        }
+
+        return taskUnit; // 返回更新后的任务，准备重新入队
     }
 
     private void handleCognitiveCycle() {

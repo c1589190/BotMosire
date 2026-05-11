@@ -1,30 +1,17 @@
 package com.cna.agent.AgentTask;
 
-import java.util.UUID;
+public class ScheduledTask extends AbstractAgentTask {
 
-public class ScheduledTask implements DefaultAgentTaskUnit {
-    private final UUID uuid;
-
-    // 固定的系统反思指令
     private final String taskText;
 
-    public ScheduledTask(){
-        this.uuid = UUID.randomUUID();
+    public ScheduledTask() {
+        super();
+        this.priority = 2;
         this.taskText = "";
-    }
-
-    @Override
-    public UUID getUUID() {
-        return this.uuid;
     }
 
     @Override
     public String getTaskText() {
         return this.taskText;
-    }
-
-    @Override
-    public int getPriority(){
-        return 2;
     }
 }

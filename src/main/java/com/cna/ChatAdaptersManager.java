@@ -24,19 +24,7 @@ public class ChatAdaptersManager {
                 }
                 return "SUCCESS: 消息已成功发送至群聊 " + namespace;
 
-            } else if (namespace.startsWith("qqid:")) {
-                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
-                long userId = Long.parseLong(namespace.substring(5));
-                if (replyToId > 0) {
-                    GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, message, replyToId);
-                    log.info("[ChatAdaptersManager] 向用户 [{}] 发送了引用回复私聊，引用ID: {}", userId, replyToId);
-                } else {
-                    GlobalNapcatAdapter.sendPrivateMsg(userId, message);
-                    log.info("[ChatAdaptersManager] 向用户 [{}] 发送了私聊消息", userId);
-                }
-                return "SUCCESS: 消息已成功发送至用户 " + namespace;
-
-            } else if (namespace.startsWith("qq_private:")) {
+            }  else if (namespace.startsWith("qq_private:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
                 long userId = Long.parseLong(namespace.substring("qq_private:".length()));
                 if (replyToId > 0) {
@@ -64,7 +52,7 @@ public class ChatAdaptersManager {
 
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
-                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qqid:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
+                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
         } catch (NumberFormatException e) {
             log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
@@ -85,7 +73,7 @@ public class ChatAdaptersManager {
                 long groupId = Long.parseLong(namespace.substring(9));
                 historyList = GlobalNapcatAdapter.getGroupHistorySync(groupId, count);
                 chatTypeDesc = "QQ群聊";
-            } else if (namespace.startsWith("qqid:")) {
+            } else if (namespace.startsWith("qq_private:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
                 long userId = Long.parseLong(namespace.substring(5));
                 historyList = GlobalNapcatAdapter.getFriendHistorySync(userId, count);
@@ -106,7 +94,7 @@ public class ChatAdaptersManager {
                 chatTypeDesc = "Discord频道";
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
-                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qqid:'、'discord_dm:'、'discord_guild:' 前缀。";
+                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
 
             if (historyList == null || historyList.isEmpty()) {

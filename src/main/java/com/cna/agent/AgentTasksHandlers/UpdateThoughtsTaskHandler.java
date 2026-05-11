@@ -34,7 +34,8 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
         baseData.put("scheduled", MDManager.read("scheduled.md", ""));
 
         // 调用 LivingLoop 的公共引擎，使用 largeLLM
-        engine.executeCognitiveCycle(
+        DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
+                task,
                 new ScenePromptsManager(UpdateThoughtsTask.class.getName()),
                 baseData,
                 new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
@@ -42,6 +43,11 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
                 "系统级反思任务"
         );
 
-        log.info("========== 系统反思任务处理完毕 ==========\n");
+        if (retTask == null) {
+            log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
+            return;
+        }
+
+        engine.pushTask(retTask);
     }
 }
