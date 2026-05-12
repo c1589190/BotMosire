@@ -333,7 +333,11 @@ public class LivingLoop implements MosireAPI {
             }
             MemoryManager.getInstance().inputCurrentMemorys(t);
             lastSolvingTask = taskUnit;
-            result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
+            if(scenePrompts.getThinkingPrompt() != null && !scenePrompts.getThinkingPrompt().isEmpty() && !scenePrompts.getThinkingPrompt().equals("")) {
+                result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
+            } else {
+                result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+            }
         } else {
             result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
         }
