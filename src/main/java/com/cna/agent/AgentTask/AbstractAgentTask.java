@@ -24,6 +24,11 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     public UUID getUUID() { return this.uuid; }
 
     @Override
+    public String getTaskName(){
+        return this.getClass().getName();
+    }
+
+    @Override
     public int getCurrentTurn() { return this.currentTurn; }
 
     @Override

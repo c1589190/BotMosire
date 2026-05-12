@@ -5,7 +5,7 @@ import com.cna.agent.LivingLoop;
 import com.cna.cmd.ConsoleCommandSystem;
 import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
-import com.cna.db.MemoryManager;
+import com.cna.agent.MemoryManager;
 import com.cna.plugin.PluginsManager;
 import lombok.extern.slf4j.Slf4j;
 

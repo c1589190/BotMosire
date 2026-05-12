@@ -3,7 +3,7 @@ package com.cna.llm;
 import com.cna.Utils;
 import com.cna.config.ConfigsManager;
 import com.cna.db.MDManager;
-import com.cna.db.MemoryManager;
+import com.cna.agent.MemoryManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import freemarker.template.Configuration;
 import freemarker.template.Template;

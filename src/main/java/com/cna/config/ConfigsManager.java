@@ -37,6 +37,7 @@ public class ConfigsManager {
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
     public static final int HISTORY_VIEW_AMOUNT;
+    public static final int CHATHISTORY_VIEW_AMOUNT;
     public static final int MEMORY_DEPTH;
     public static final double RANDOM_CHAT_CHANCE;
     public static final String DB_URL;
@@ -171,6 +172,7 @@ public class ConfigsManager {
         CURRENT_MEMORIES_MAXSIZE = getInt("memory.currentMemoriesMaxSize", 64);
         EMB_MEMORY_SIZE = getInt("memory.embMemorySize", 32);
         HISTORY_VIEW_AMOUNT = getInt("memory.historyViewAmount", 20);
+        CHATHISTORY_VIEW_AMOUNT = getInt("memory.chatHistoryViewAmount", 20);
         MEMORY_DEPTH = getInt("memory.memoryDepth", 3);
         DB_URL = getString("memory.dbUrl", "jdbc:sqlite:agent_memory.db");
 

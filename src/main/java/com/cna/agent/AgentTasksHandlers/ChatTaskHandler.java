@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTasksHandlers;
 
+import com.cna.ChatAdaptersManager;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
@@ -29,8 +30,18 @@ public class ChatTaskHandler implements DefaultAgentTaskHandler {
         CURRENT_REPLY_TO_ID.set(chatTask.getReplyToMessageId());
 
         try {
+            // 1. 获取消息来源的 namespace (注意：这里的 getNamespace() 需要根据你 ChatTask 实际的 getter 方法名调整，比如 getSource() 等)
+            String namespace = chatTask.getSource();
+            log.info(namespace);
+
+            // 2. 提前拉取该区域的近期聊天记录
+            String recentHistory = ChatAdaptersManager.getHistory(namespace, ConfigsManager.CHATHISTORY_VIEW_AMOUNT);
+            log.info("[ChatTaskHandler] 已为当前任务自动预载入目标 [{}] 的近期聊天上下文", namespace);
+
+            // 3. 装配提示词所需的数据模型
             Map<String, Object> baseData = new HashMap<>();
             baseData.put("taskText", chatTask.getTaskText());
+            baseData.put("recent_history", recentHistory); // 【新增】：将刚刚获取的历史记录塞入 data
             baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
 
             DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(

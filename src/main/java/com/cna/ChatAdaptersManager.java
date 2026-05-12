@@ -14,7 +14,8 @@ public class ChatAdaptersManager {
         try {
             if (namespace.startsWith("qq_group:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送群聊消息。";
-                long groupId = Long.parseLong(namespace.substring(9));
+                // 【修复】：用 length() 代替写死的数字，防手抖
+                long groupId = Long.parseLong(namespace.substring("qq_group:".length()));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendGroupMsgWithReply(groupId, message, replyToId);
                     log.info("[ChatAdaptersManager] 向群聊 [{}] 发送了引用回复，引用ID: {}", groupId, replyToId);
@@ -37,22 +38,23 @@ public class ChatAdaptersManager {
 
             } else if (namespace.startsWith("discord_dm:") || namespace.startsWith("discord_guild:")) {
                 if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected()) {
-                    return "ERROR: Discord adapter 未連線或未啟用。";
+                    return "ERROR: Discord adapter 未连线或未启用。";
                 }
                 List<String> chunks = Utils.splitForDiscord(message);
                 for (String chunk : chunks) {
                     String r = GlobalDiscordAdapter.sendMessage(namespace, chunk);
                     if (r.startsWith("ERROR")) {
-                        log.warn("[ChatAdaptersManager] Discord 分段發送失敗: {}", r);
+                        log.warn("[ChatAdaptersManager] Discord 分段发送失败: {}", r);
                         return r;
                     }
                 }
-                log.info("[ChatAdaptersManager] Discord 發送完畢 [{}]，共 {} 段", namespace, chunks.size());
+                log.info("[ChatAdaptersManager] Discord 发送完毕 [{}]，共 {} 段", namespace, chunks.size());
                 return "SUCCESS: 消息已发送至 Discord " + namespace;
 
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
-                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
+                // 【修复】：去掉了多余重复的 'qq_private:'
+                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
         } catch (NumberFormatException e) {
             log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
@@ -70,20 +72,25 @@ public class ChatAdaptersManager {
 
             if (namespace.startsWith("qq_group:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                long groupId = Long.parseLong(namespace.substring(9));
+                // 【修复】：用 length() 代替写死的 9
+                long groupId = Long.parseLong(namespace.substring("qq_group:".length()));
                 historyList = GlobalNapcatAdapter.getGroupHistorySync(groupId, count);
                 chatTypeDesc = "QQ群聊";
+
             } else if (namespace.startsWith("qq_private:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                long userId = Long.parseLong(namespace.substring(5));
+                // 【罪魁祸首在此已被修复】：把 5 改成了 "qq_private:".length()
+                long userId = Long.parseLong(namespace.substring("qq_private:".length()));
                 historyList = GlobalNapcatAdapter.getFriendHistorySync(userId, count);
                 chatTypeDesc = "QQ私聊";
+
             } else if (namespace.startsWith("discord_dm:")) {
                 if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
                     return "ERROR: Discord 适配器未连线。";
                 String userId = namespace.substring("discord_dm:".length());
                 historyList = GlobalDiscordAdapter.getDmHistorySync(userId, count);
                 chatTypeDesc = "Discord私聊";
+
             } else if (namespace.startsWith("discord_guild:")) {
                 if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
                     return "ERROR: Discord 适配器未连线。";
@@ -92,6 +99,7 @@ public class ChatAdaptersManager {
                 long channelId = Long.parseLong(parts[2]);
                 historyList = GlobalDiscordAdapter.getChannelHistorySync(channelId, count);
                 chatTypeDesc = "Discord频道";
+
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
                 return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
@@ -106,7 +114,7 @@ public class ChatAdaptersManager {
 
         } catch (NumberFormatException e) {
             log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
-            return "ERROR: namespace 前缀后的 ID 必须是数字";
+            return "ERROR: namespace 前缀后的 ID 必须是纯数字";
         } catch (Exception e) {
             log.error("[ChatAdaptersManager] 获取历史记录异常", e);
             return "ERROR: 获取历史记录失败，底层异常: " + e.getMessage();

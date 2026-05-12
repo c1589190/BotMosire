@@ -1,6 +1,5 @@
 package com.cna.agent;
 
-import com.cna.agent.AgentInput.ChatMessageInput;
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.AgentInputHandlers.ChatMessageInputHandler;
 import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandler;
@@ -15,13 +14,11 @@ import com.cna.agent.AgentTool.*;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLManager;
-import com.cna.db.MemoryManager;
 import com.cna.plugin.MosireAPI;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.cna.db.MDManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.CallResult;
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +61,9 @@ public class LivingLoop implements MosireAPI {
     private final Map<Class<? extends DefaultAgentTaskUnit>, DefaultAgentTaskHandler> taskHandlerRegistry = new ConcurrentHashMap<>();
 
     private final Map<Class<? extends DefaultAgentInputUnit>, DefaultAgentInputHandler> inputHandlerRegistry = new ConcurrentHashMap<>();
+
+    DefaultAgentTaskUnit lastSolvingTask = null;
+    //状态管理方法是，当一个任务结束时，这玩意也必须成为null
 
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
@@ -255,11 +255,12 @@ public class LivingLoop implements MosireAPI {
 
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    // 【修改点 4】：使用 poll 拿取队列头部任务（因为构造器传了升序比较器，所以拿到的必定是优先级数值最小的，即最高优任务）
+                    // 使用 poll 拿取队列头部任务（因为构造器传了升序比较器，所以拿到的必定是优先级数值最小的，即最高优任务）
                     DefaultAgentTaskUnit task = TaskQueue.poll(1, TimeUnit.SECONDS);
                     if (task == null) {
                         continue;
                     }
+
 
                     log.info("\n[执行总线] 开始处理任务: {}", task.getClass().getSimpleName());
 
@@ -323,6 +324,15 @@ public class LivingLoop implements MosireAPI {
 
         CallResult result;
         if (turn == 1) {
+            List<String> t = new LinkedList<>();
+            if(lastSolvingTask != null){
+                //这说明这个任务插队了
+                t.add("上一轮执行的任务被挂起, " + taskUnit.getTaskName() + " 因判断后的执行权重更高被优先处理...");
+            } else {
+                t.add(taskUnit.getTaskName() + " 开始被处理...");
+            }
+            MemoryManager.getInstance().inputCurrentMemorys(t);
+            lastSolvingTask = taskUnit;
             result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
         } else {
             result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
@@ -331,7 +341,7 @@ public class LivingLoop implements MosireAPI {
         nowTurnAddition.append(taskUnit.getTurnsAddition());//把之前的工具调用结果压入
 
 
-        nowTurnAddition.append("在第" + turn + "轮思考中，");
+        nowTurnAddition.append("在任务 " + taskUnit.getTaskName() + " 的第" + turn + "轮思考中，");
         if(result.getContent() != null && !result.getContent().isEmpty() && !result.getContent().equals("") && !result.getContent().equals(" ")) {
             nowTurnAddition.append("你产生了以下想法:{\n");
             nowTurnAddition.append(result.getContent());
@@ -347,6 +357,7 @@ public class LivingLoop implements MosireAPI {
             taskUnit.setCurrentTurn(turn + 1); // 向前推进一步！
             if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
                 log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+                lastSolvingTask = null;
                 return null; // 超出轮数，销毁
             }
             return taskUnit; // 返回更新后的任务，准备重新入队
@@ -363,13 +374,14 @@ public class LivingLoop implements MosireAPI {
 
             if ("finish_task".equals(functionName)) {
                 log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
+                lastSolvingTask = null;
                 return null; // 直接终结任务
             }
 
             if ("switch_to_advanced_model".equals(functionName)) {
                 log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
                 //没想好怎么写
-                toolResults.append("（已成功切换至高级大模型，请继续执行任务;）\n");
+                toolResults.append("（调用了工具switch_to_advanced_model,切换到了更高级的大模型;）\n");
                 continue;
             }
 
@@ -380,7 +392,7 @@ public class LivingLoop implements MosireAPI {
                     String execResult = targetTool.execute(argsNode);
                     log.info("[EXEC-Engine] 动作反馈: {}", execResult);
 
-                    toolResults.append("调用工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
+                    toolResults.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 
                     if(targetTool.isAutoMemory()){
                         List<String> list = new LinkedList<>();
@@ -390,10 +402,10 @@ public class LivingLoop implements MosireAPI {
 
                 } catch (Exception e) {
                     log.error("[EXEC-Engine] 工具解析或执行异常", e);
-                    toolResults.append("调用工具 [").append(functionName).append("] 发生程序错误;\n");
+                    toolResults.append("调用了工具 [").append(functionName).append("] , 却发生了发生程序错误:[\n" + e.toString() + "\n];\n");
                 }
             } else {
-                toolResults.append("系统警告：工具 [").append(functionName).append("] 调用失败，该工具不存在。\n");
+                toolResults.append("调用了工具 [").append(functionName).append("] , 但是这个工具压根不存在;\n");
             }
         }
 
@@ -406,6 +418,7 @@ public class LivingLoop implements MosireAPI {
 
         if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
             log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+            lastSolvingTask = null;
             return null; // 超出轮数，销毁
         }
 

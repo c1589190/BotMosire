@@ -1,6 +1,6 @@
 package com.cna.agent.AgentInputHandlers;
 
-import com.cna.Main;
+import com.cna.ChatAdaptersManager;
 import com.cna.agent.AgentInput.ChatMessageInput;
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.AgentTask.ChatTask;
@@ -8,7 +8,7 @@ import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
-import com.cna.db.MemoryManager;
+import com.cna.agent.MemoryManager;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -91,8 +91,13 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
 
                 log.info("[Gatekeeper] 正在批量审阅 {} 条全新消息...", unknownInputs.size());
 
+
+                String namespace = ((ChatMessageInput) unknownInputs.get(0)).getSource();
+                String recentHistory = ChatAdaptersManager.getHistory(namespace, ConfigsManager.CHATHISTORY_VIEW_AMOUNT);
+
                 Map<String, Object> data = new HashMap<>();
                 data.put("currentInputs", currentInputs.toString());
+                data.put("recent_history", recentHistory); // 给小模型也塞一份上下文
                 data.put("current_interests", MDManager.read("interests.md", ""));
 
                 CallResult result = LLManager.executeScene(

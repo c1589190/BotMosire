@@ -2,7 +2,7 @@ package com.cna.agent.AgentTool;
 
 import com.cna.config.ConfigsManager;
 import com.cna.config.ToolPromptsManager;
-import com.cna.db.MemoryManager;
+import com.cna.agent.MemoryManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;

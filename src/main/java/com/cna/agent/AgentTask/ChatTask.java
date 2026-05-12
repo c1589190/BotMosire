@@ -6,6 +6,7 @@ import java.util.List;
 
 public class ChatTask extends AbstractAgentTask {
 
+    @Getter
     private String source;
     private String source_name;
     @Getter
