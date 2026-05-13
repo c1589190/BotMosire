@@ -21,13 +21,13 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.*;
 
 @Slf4j
-public class ChatMessageInputHandler implements DefaultAgentInputHandler {
+public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
 
     private static final ObjectMapper sharedMapper = new ObjectMapper();
 
-    private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
-    private Set<String> updatedRoles = new HashSet<>();
-    private final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
+    protected LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
+    protected Set<String> updatedRoles = new HashSet<>();
+    protected final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Override
     public Class<? extends DefaultAgentInputUnit> getSupportedInputClass() {
@@ -48,33 +48,33 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandler {
             // 阶段 1：本地极速分拣
             // ==========================================
             for (DefaultAgentInputUnit input : inputs) {
-                ChatTask existingChatTask;
-                String senderRole = null;
 
                 if (input instanceof ChatMessageInput) {
-                    senderRole = ((ChatMessageInput) input).getRole();
-                }
+                    ChatTask existingChatTask;
+                    String senderRole = ((ChatMessageInput) input).getRole();
 
-                if (senderRole != null && !senderRole.isBlank() && ChatTaskPreparationPool.containsKey(senderRole)) {
-                    existingChatTask = ChatTaskPreparationPool.get(senderRole);
-                    existingChatTask.addContext(((ChatMessageInput) input).getContent());
+                    if (senderRole != null && !senderRole.isBlank() && ChatTaskPreparationPool.containsKey(senderRole)) {
+                        existingChatTask = ChatTaskPreparationPool.get(senderRole);
+                        existingChatTask.addContext(((ChatMessageInput) input).getContent());
 
-                    // 若這條消息有引用，更新任務的 replyToMessageId
-                    long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
-                    if (quotedId > 0) {
-                        existingChatTask.setReplyToMessageId(quotedId);
+                        // 若這條消息有引用，更新任務的 replyToMessageId
+                        long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
+                        if (quotedId > 0) {
+                            existingChatTask.setReplyToMessageId(quotedId);
+                        }
+
+                        updatedRoles.add(senderRole);
+
+                        List<String> l = new LinkedList<>();
+                        l.add("为自己创建了任务，有关于 [ " + input.getInputText() + " ]");
+                        MemoryManager.getInstance().inputCurrentMemorys(l);
+
+                        log.debug("为已有任务 [Role:{}] 追加了新消息", senderRole);
+                    } else {
+                        unknownInputs.add(input);
                     }
-
-                    updatedRoles.add(senderRole);
-
-                    List<String> l = new LinkedList<>();
-                    l.add("为自己创建了任务，有关于 [ " + input.getInputText() + " ]");
-                    MemoryManager.getInstance().inputCurrentMemorys(l);
-
-                    log.debug("为已有任务 [Role:{}] 追加了新消息", senderRole);
-                } else {
-                    unknownInputs.add(input);
                 }
+
             }
 
             // ==========================================

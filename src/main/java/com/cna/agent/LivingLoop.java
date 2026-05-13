@@ -1,8 +1,8 @@
 package com.cna.agent;
 
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
-import com.cna.agent.AgentInputHandlers.ChatMessageInputHandler;
-import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandler;
+import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandlerUnit;
+import com.cna.agent.AgentInputHandlers.ExpectedChatMessageInputHandler;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.ScheduledTask;
@@ -56,11 +56,14 @@ public class LivingLoop implements MosireAPI {
             1145, Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
     );
 
+    //Input队列
+    private final ConcurrentLinkedQueue<DefaultAgentTaskUnit> globalPendingRequests = new ConcurrentLinkedQueue<>();
+
     private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
 
     private final Map<Class<? extends DefaultAgentTaskUnit>, DefaultAgentTaskHandler> taskHandlerRegistry = new ConcurrentHashMap<>();
 
-    private final Map<Class<? extends DefaultAgentInputUnit>, DefaultAgentInputHandler> inputHandlerRegistry = new ConcurrentHashMap<>();
+    private final Map<Class<? extends DefaultAgentInputUnit>, DefaultAgentInputHandlerUnit> inputHandlerRegistry = new ConcurrentHashMap<>();
 
     DefaultAgentTaskUnit lastSolvingTask = null;
     //状态管理方法是，当一个任务结束时，这玩意也必须成为null
@@ -97,6 +100,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new QueryDeepMemory());
         this.registerTool(new ReflectiveCompactionTool());
         this.registerTool(new SendConsoleMessage());
+        this.registerTool(new CreatePendingChatTask(this));
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -104,9 +108,9 @@ public class LivingLoop implements MosireAPI {
         this.registerTaskHandler(new ChatTaskHandler());            // 常规聊天
         this.registerTaskHandler(new ScheduledTaskHandler());       // 定时计划
         this.registerTaskHandler(new UpdateThoughtsTaskHandler());  // 潜意识反思
-
-        this.registerInputHandler(new ChatMessageInputHandler());
         this.registerTaskHandler(new ConsoleChatTaskHandler());
+
+        this.registerInputHandler(new ExpectedChatMessageInputHandler());
     }
 
     private void initLLM(){
@@ -157,7 +161,7 @@ public class LivingLoop implements MosireAPI {
     }
 
     @Override
-    public void registerInputHandler(DefaultAgentInputHandler handler) {
+    public void registerInputHandler(DefaultAgentInputHandlerUnit handler) {
         if (handler == null || handler.getSupportedInputClass() == null) return;
         inputHandlerRegistry.put(handler.getSupportedInputClass(), handler);
         log.info("[PluginSystem] 挂载感知处理器: {} 负责处理 {}",
@@ -174,6 +178,14 @@ public class LivingLoop implements MosireAPI {
         // PBQ 使用 offer 直接入队，自动触发排序
         this.TaskQueue.offer(task);
         this.trimTaskQueue();
+    }
+
+    public void submitPendingRequest(DefaultAgentTaskUnit request) {
+        globalPendingRequests.offer(request);
+    }
+
+    public DefaultAgentTaskUnit pollPendingRequest() {
+        return globalPendingRequests.poll();
     }
 
     @Override
@@ -442,7 +454,7 @@ public class LivingLoop implements MosireAPI {
             }
 
             for (Map.Entry<Class<? extends DefaultAgentInputUnit>, List<DefaultAgentInputUnit>> entry : groupedInputs.entrySet()) {
-                DefaultAgentInputHandler handler = inputHandlerRegistry.get(entry.getKey());
+                DefaultAgentInputHandlerUnit handler = inputHandlerRegistry.get(entry.getKey());
                 if (handler != null) {
                     handler.handleInputs(entry.getValue(), this);
                 } else {
@@ -451,7 +463,7 @@ public class LivingLoop implements MosireAPI {
             }
         }
 
-        for (DefaultAgentInputHandler handler : inputHandlerRegistry.values()) {
+        for (DefaultAgentInputHandlerUnit handler : inputHandlerRegistry.values()) {
             handler.tick(this);
         }
     }

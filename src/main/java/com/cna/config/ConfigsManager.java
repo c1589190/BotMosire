@@ -33,6 +33,7 @@ public class ConfigsManager {
     public static final int CONSUMER_CYCLING_TIME;
     public static final int SCHEDULE_CYCLING_TIME;
     public static final int TASK_COUNT_FOR_REFLECTION;
+    public static final int PENDING_CHAT_WAITING_TIME;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
@@ -165,6 +166,7 @@ public class ConfigsManager {
         DEPLOYER_ROLE = getString("bot.deployerRole", "");
         SEARCH_API_KEY = getEnvOrProp("BRAVE_SEARCH_API_KEY", "search.braveApiKey", "");
         JINA_API_KEY   = getEnvOrProp("JINA_API_KEY", "search.jinaApiKey", "");
+        PENDING_CHAT_WAITING_TIME = getInt("cognitive.pendingChatWaitingTime", 180000);
 
         // ==========================================
         // 3. 海马体记忆参数
