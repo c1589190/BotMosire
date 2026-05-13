@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,9 +28,13 @@ public class GetInterests implements DefaultAgentToolUnit {
         ObjectNode tool = mapper.createObjectNode();
         tool.put("type", "function");
 
+        // 实例化提示词管理器
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = tool.putObject("function");
         function.put("name", getName());
-        function.put("description", "当你需要查看当前的注意力雷达、兴趣列表或过滤规则时调用此工具。系统会自动为你展示 interests.md 文件中的最新内容。");
+        // 获取工具的主描述
+        function.put("description", p.getToolDescription());
 
         ObjectNode parameters = function.putObject("parameters");
         parameters.put("type", "object");

@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * 将 Input (感知) 转化为 Task (潜意识任务) 的发生器接口
  */
-public interface DefaultAgentInputHandler {
+public interface DefaultAgentInputHandlerUnit {
 
     /**
      * 声明本处理器负责哪种类型的 Input

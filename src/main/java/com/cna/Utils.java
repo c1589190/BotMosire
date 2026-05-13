@@ -2,6 +2,8 @@ package com.cna;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 时间处理工具类
@@ -30,5 +32,20 @@ public class Utils {
         return java.time.Instant.ofEpochSecond(timestampInSeconds)
                 .atZone(java.time.ZoneId.systemDefault())
                 .format(CHINESE_FORMATTER);
+    }
+
+    private static final int DISCORD_MAX_LEN = 1990;
+
+    public static List<String> splitForDiscord(String text) {
+        List<String> result = new ArrayList<>();
+        while (text.length() > DISCORD_MAX_LEN) {
+            int splitAt = text.lastIndexOf('\n', DISCORD_MAX_LEN);
+            if (splitAt <= 0) splitAt = text.lastIndexOf(' ', DISCORD_MAX_LEN);
+            if (splitAt <= 0) splitAt = DISCORD_MAX_LEN;
+            result.add(text.substring(0, splitAt));
+            text = text.substring(splitAt).stripLeading();
+        }
+        if (!text.isEmpty()) result.add(text);
+        return result;
     }
 }

@@ -33,10 +33,12 @@ public class ConfigsManager {
     public static final int CONSUMER_CYCLING_TIME;
     public static final int SCHEDULE_CYCLING_TIME;
     public static final int TASK_COUNT_FOR_REFLECTION;
+    public static final int PENDING_CHAT_WAITING_TIME;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
     public static final int HISTORY_VIEW_AMOUNT;
+    public static final int CHATHISTORY_VIEW_AMOUNT;
     public static final int MEMORY_DEPTH;
     public static final double RANDOM_CHAT_CHANCE;
     public static final String DB_URL;
@@ -47,6 +49,10 @@ public class ConfigsManager {
     public static final String NAPCAT_HTTP_URL;
 
     public static final int MAX_TASK_AMOUNT;
+    public static final long RATE_LIMIT_MS;
+    public static final String DEPLOYER_ROLE;
+    public static final String SEARCH_API_KEY;
+    public static final String JINA_API_KEY;
 
 
     public static void init(){
@@ -105,6 +111,7 @@ public class ConfigsManager {
                 .frequencyPenalty(getDouble("llm.brain.frequencyPenalty", 0.4))
                 .presencePenalty(getDouble("llm.brain.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.brain.enableCoT", false))
+                .max_tokens(getInt("llm.brain.maxTokens", 8192))
                 .build();
 
         ADVANCED_BRAIN_CONFIG = LLMConfig.builder()
@@ -115,6 +122,7 @@ public class ConfigsManager {
                 .frequencyPenalty(getDouble("llm.advanced_brain.frequencyPenalty", 0.4))
                 .presencePenalty(getDouble("llm.advanced_brain.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.advanced_brain.enableCoT", true))
+                .max_tokens(getInt("llm.advanced_brain.maxTokens", 16384))
                 .build();
 
         EMBEDDING_CONFIG = LLMConfig.builder()
@@ -154,6 +162,11 @@ public class ConfigsManager {
         SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 300000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
         RANDOM_CHAT_CHANCE = getDouble("cognitive.randomChatChance", 0.05);
+        RATE_LIMIT_MS = getInt("cognitive.rateLimitMs", 5000);
+        DEPLOYER_ROLE = getString("bot.deployerRole", "");
+        SEARCH_API_KEY = getEnvOrProp("BRAVE_SEARCH_API_KEY", "search.braveApiKey", "");
+        JINA_API_KEY   = getEnvOrProp("JINA_API_KEY", "search.jinaApiKey", "");
+        PENDING_CHAT_WAITING_TIME = getInt("cognitive.pendingChatWaitingTime", 180000);
 
         // ==========================================
         // 3. 海马体记忆参数
@@ -161,6 +174,7 @@ public class ConfigsManager {
         CURRENT_MEMORIES_MAXSIZE = getInt("memory.currentMemoriesMaxSize", 64);
         EMB_MEMORY_SIZE = getInt("memory.embMemorySize", 32);
         HISTORY_VIEW_AMOUNT = getInt("memory.historyViewAmount", 20);
+        CHATHISTORY_VIEW_AMOUNT = getInt("memory.chatHistoryViewAmount", 20);
         MEMORY_DEPTH = getInt("memory.memoryDepth", 3);
         DB_URL = getString("memory.dbUrl", "jdbc:sqlite:agent_memory.db");
 
@@ -208,6 +222,10 @@ public class ConfigsManager {
     }
 
     private static String getString(String key, String defaultValue) {
+        return props.getProperty(key, defaultValue);
+    }
+
+    public static String getConfig(String key, String defaultValue) {
         return props.getProperty(key, defaultValue);
     }
 

@@ -2,6 +2,7 @@ package com.cna.agent.AgentTasksHandlers;
 
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
+import com.cna.config.ScenePromptsManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 
 public interface DefaultAgentTaskHandler {
@@ -10,6 +11,7 @@ public interface DefaultAgentTaskHandler {
      * 告诉系统，这个 Handler 专门负责处理哪种 Task 类
      */
     Class<? extends DefaultAgentTaskUnit> getSupportedTaskClass();
+
 
     /**
      * 执行具体任务的逻辑
