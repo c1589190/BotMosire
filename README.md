@@ -1,10 +1,27 @@
-
 # 🤖 BotMosire
 
 > 让 AI 像人类一样处理信息：先过滤，再思考，最后行动。记忆要折叠，心境要传承。
 
 ---
 
+## 目录
+
+> **QQ 交流群：** `1103316266` — 下滑见 [交流群](#readme-qq-group)
+
+- [项目简介](#readme-intro)
+- [功能特色](#readme-features)
+- [环境需求](#readme-requirements)
+- [快速开始](#readme-quickstart)
+- [配置说明](#readme-config)
+- [架构说明](#readme-architecture)
+- [已知问题](#readme-issues)
+- [许可证](#readme-license)
+- [致谢](#readme-thanks)
+- [交流群](#readme-qq-group)
+
+---
+
+<a id="readme-intro"></a>
 ## 📖 项目简介
 
 BotMosire 是一个基于 Java 21 的 AI Agent 框架，专注于**拟人化认知架构**。
@@ -19,6 +36,7 @@ BotMosire 是一个基于 Java 21 的 AI Agent 框架，专注于**拟人化认�
 
 ---
 
+<a id="readme-features"></a>
 ## ✨ 功能特色
 
 ### 🚪 Gatekeeper（门神）
@@ -50,6 +68,7 @@ BotMosire 是一个基于 Java 21 的 AI Agent 框架，专注于**拟人化认�
 
 ---
 
+<a id="readme-requirements"></a>
 ## 🛠️ 环境需求
 
 | 依赖 | 版本 | 说明 |
@@ -58,8 +77,9 @@ BotMosire 是一个基于 Java 21 的 AI Agent 框架，专注于**拟人化认�
 | **Maven** | 3.9.x | 用于编译打包 |
 | **Napcat（仅 QQ）** | - | QQ 消息适配器，目前仅支持 QQ 平台 |
 
+---
 
-
+<a id="readme-quickstart"></a>
 ## 🚀 快速开始
 
 ### 1. 克隆项目
@@ -110,6 +130,7 @@ java -jar target/BotMosire-Alpha26.1.jar
 
 ---
 
+<a id="readme-config"></a>
 ## ⚙️ 配置说明
 
 BotMosire 采用**矩阵式 LLM 配置**，7 个角色各司其职：
@@ -147,6 +168,7 @@ llm.embedding.apiKey=ollama
 
 ---
 
+<a id="readme-architecture"></a>
 ## 🏗️ 架构说明
 
 ### LivingLoop（生命循环）
@@ -182,6 +204,7 @@ cognitive.taskCountForReflection=10 # 处理多少任务后触发潜意识记忆
 
 ---
 
+<a id="readme-issues"></a>
 ## 📝 已知问题
 
 - **适配器扩展**：当前适配器为 Napcat（QQ），如需其他平台可参考源码自行扩展
@@ -190,14 +213,23 @@ cognitive.taskCountForReflection=10 # 处理多少任务后触发潜意识记忆
 
 ---
 
+<a id="readme-license"></a>
 ## 📜 许可证
 
 本项目遵循 Apache 2.0 许可证。
 
 ---
 
+<a id="readme-thanks"></a>
 ## 🙏 致谢
 
 感谢所有为 BotMosire 贡献代码和建议的朋友。
 
 如果这个项目对你有帮助，欢迎 Star ⭐
+
+---
+
+<a id="readme-qq-group"></a>
+## 💬 交流群
+
+QQ 群：`1103316266`
