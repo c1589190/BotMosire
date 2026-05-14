@@ -40,7 +40,7 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("scheduled", scheduledContent);
         baseData.put("deep_memories", LLManager.getDeepMemories(scheduledContent, engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
-        baseData.put("workspace_cwd", WorkSpaceManager.getInstance().getCwdInfo());
+        //baseData.put("workspace_cwd", WorkSpaceManager.getInstance().getCwdInfo());
 
         DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
                 task,

@@ -7,6 +7,7 @@ import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
 import com.cna.agent.MemoryManager;
 import com.cna.plugin.PluginsManager;
+import com.cna.workspace.WorkSpaceManager;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.URISyntaxException;
@@ -25,6 +26,8 @@ public class Main {
     public static PluginsManager pluginsManager;
 
     public static ConsoleCommandSystem consoleCommandSystem;
+
+    public static WorkSpaceManager workspaceManager = new WorkSpaceManager();
 
     public static void main(String[] args){
 

@@ -11,6 +11,10 @@ import com.cna.Main;
 import com.cna.Utils;
 import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
+import com.cna.agent.AgentTool.io.CdWorkspace;
+import com.cna.agent.AgentTool.io.ReadFile;
+import com.cna.agent.AgentTool.io.SendFileToChat;
+import com.cna.agent.AgentTool.io.WriteFile;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLManager;
@@ -98,7 +102,7 @@ public class LivingLoop implements MosireAPI {
         largeLLMToolbox.put(new WriteFile().getName(), new WriteFile());
         largeLLMToolbox.put(new ReadFile().getName(), new ReadFile());
         largeLLMToolbox.put(new CdWorkspace().getName(), new CdWorkspace());
-        largeLLMToolbox.put(new SendFile().getName(), new SendFile());
+        largeLLMToolbox.put(new SendFileToChat().getName(), new SendFileToChat());
 
         this.registerTool(new GetMoreCurrentMemorys());
         this.registerTool(new QueryDeepMemory());

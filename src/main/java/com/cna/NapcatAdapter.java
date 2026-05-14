@@ -34,23 +34,23 @@ public class NapcatAdapter extends WebSocketClient {
     private final String napcatHttpApiBase;
     private final String accessToken;
 
-    // 【关键修复 1】：改用单线程异步队列。既不阻塞 WebSocket 掉线，又保证消息严格按时间线排队，防止小模型因乱序拒收消息！
+    // 单线程异步队列：防乱序、防掉线阻塞
     private final ExecutorService messageProcessorThread = Executors.newSingleThreadExecutor();
     private volatile boolean isShuttingDown = false;
 
-    // 【关键修复 2】：把视觉大模型设为单例复用，防止每次收到图片都 new 导致 OkHttp 线程池爆炸卡死
+    // 视觉大模型复用实例
     private LLMAdapter visionLLM;
 
     private final Map<Long, String> groupNameCache = new ConcurrentHashMap<>();
     private final Map<Long, String> friendNameCache = new ConcurrentHashMap<>();
     private volatile boolean isFriendListCached = false;
 
-    // 【关键优化 3】：建立图片解析的 LRU 缓存，最大存储 200 条，超限自动淘汰最旧的数据
+    // LRU 缓存：防止重复解析同一张图片（容量 200）
     private final Map<String, String> imageVisionCache = Collections.synchronizedMap(
             new LinkedHashMap<String, String>(100, 0.75f, true) {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-                    return size() > 200; // 缓存最大容量，可根据需要调整
+                    return size() > 200;
                 }
             }
     );
@@ -67,7 +67,6 @@ public class NapcatAdapter extends WebSocketClient {
                 .readTimeout(15, TimeUnit.SECONDS)
                 .build();
 
-        // 在构造函数中初始化视觉模型，全生命周期仅实例化一次
         try {
             this.visionLLM = new LLMAdapter(ConfigsManager.VISION_MODEL);
         } catch (Exception e) {
@@ -104,14 +103,10 @@ public class NapcatAdapter extends WebSocketClient {
                 JsonNode event = jsonMapper.readTree(message);
                 String postType = event.path("post_type").asText();
 
-                // --- 原有的消息处理逻辑 ---
                 if ("message".equals(postType)) {
                     handleMessageEvent(event);
-                }
-                // --- 新增：处理通知事件（如撤回） ---
-                else if ("notice".equals(postType)) {
-                    //handleNoticeEvent(event);
-                    //对撤回消息的适配未完工
+                } else if ("notice".equals(postType)) {
+                    // handleNoticeEvent(event); // 预留的通知事件
                 }
 
             } catch (Throwable t) {
@@ -120,106 +115,46 @@ public class NapcatAdapter extends WebSocketClient {
         });
     }
 
+    // ==========================================
+    // 🌟 核心重构：JDK 21 内部 Record DTO
+    // ==========================================
+    private record ParsedMessage(String content, long quotedMessageId) {}
+
     private void handleMessageEvent(JsonNode event) {
         String messageType = event.path("message_type").asText();
         long senderId = event.path("user_id").asLong();
+        long selfId = event.path("self_id").asLong();
 
-        if (event.has("self_id") && senderId == event.path("self_id").asLong()) {
-            return;
+        if (senderId == selfId) {
+            return; // 屏蔽自身消息
         }
 
-        ParsedMessage parsed = ParsedMessage.parseMessageArray(event.path("message"));
-        if (parsed.content == null || parsed.content.isBlank()) return;
+        // 🌟 视觉注意力防瘫痪阀门
+        boolean isPrivate = "private".equals(messageType);
+        boolean isAtMe = checkIsAtMe(event.path("message"), selfId);
+        boolean shouldParseVision = isPrivate || isAtMe;
+
+        // 🌟 一次遍历解析：文本、图片AI、引用ID、合并转发
+        ParsedMessage parsed = parseMessageContent(event.path("message"), shouldParseVision);
+
+        if (parsed.content() == null || parsed.content().isBlank()) return;
 
         if ("group".equals(messageType)) {
-            handleGroupMessage(event, senderId, parsed.content, parsed.quotedMessageId);
-        } else if ("private".equals(messageType)) {
-            handlePrivateMessage(event, senderId, parsed.content, parsed.quotedMessageId);
+            handleGroupMessage(event, senderId, parsed.content(), parsed.quotedMessageId());
+        } else if (isPrivate) {
+            handlePrivateMessage(event, senderId, parsed.content(), parsed.quotedMessageId());
         }
     }
 
-    private void handleNoticeEvent(JsonNode event) {
-        String noticeType = event.path("notice_type").asText();
-
-        // 兼容群撤回和好友撤回
-        if ("group_recall".equals(noticeType) || "friend_recall".equals(noticeType)) {
-            long userId = event.path("user_id").asLong();         // 消息发送者
-            long operatorId = event.path("operator_id").asLong(); // 执行撤回的人
-            long messageId = event.path("message_id").asLong();   // 被撤回的消息ID
-
-            String operatorName = getFriendNameSync(operatorId);
-            if (operatorName.isBlank()) operatorName = String.valueOf(operatorId);
-
-            String senderName = getFriendNameSync(userId);
-            if (senderName.isBlank()) senderName = String.valueOf(userId);
-
-            String noticeContent;
-            if (userId == operatorId) {
-                noticeContent = String.format("[系统提示] %s 撤回了一条自己的消息。", operatorName);
-            } else {
-                noticeContent = String.format("[系统提示] 管理员 %s 撤回了 %s 的消息。", operatorName, senderName);
-            }
-
-            // 确定 Namespace
-            String targetNamespace;
-            String sceneName;
-
-            if ("group_recall".equals(noticeType)) {
-                long groupId = event.path("group_id").asLong();
-                targetNamespace = "qq_group:" + groupId;
-                sceneName = getGroupNameSync(groupId);
-            } else {
-                targetNamespace = "qq_private";
-                sceneName = "QQ私聊";
-            }
-
-            // 生成一条特殊的系统输入压入队列
-            ChatMessageInput input = new ChatMessageInput(
-                    targetNamespace,
-                    sceneName,
-                    "qqid:"+operatorId,  // 标记为系统发送
-                    "有关系统提示",
-                    noticeContent
-            );
-
-            log.info("[感知引擎] 检测到撤回事件: {}", noticeContent);
-            Main.AgentInputTasksQueue.offer(input);
-        }
-    }
-
-    @Override
-    public void onClose(int code, String reason, boolean remote) {
-        log.warn("[WS] 物理链路被切断: Code: {}, Reason: {}, 由远端发起: {}", code, reason, remote);
-    }
-
-    public void shutdown() {
-        isShuttingDown = true;
-        try {
-            this.closeConnection(1000, "Shutting down");
-        } catch (Exception ignored) {}
-        messageProcessorThread.shutdown();
-        try {
-            if (!messageProcessorThread.awaitTermination(2, TimeUnit.SECONDS)) {
-                messageProcessorThread.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            messageProcessorThread.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
-        log.info("[NapcatAdapter] 消息处理线程已关闭。");
-    }
-
-    @Override
-    public void onError(Exception ex) {
-        log.error("[WS] 发生底层网络异常", ex);
-    }
-
-    private String parseMessageArray(JsonNode messageNode) {
-        if (messageNode == null || messageNode.isMissingNode()) return "";
-        if (messageNode.isTextual()) return messageNode.asText().trim();
-        if (!messageNode.isArray()) return "";
+    private ParsedMessage parseMessageContent(JsonNode messageNode, boolean shouldParseVision) {
+        // 修复点：直接 new 出来，干掉之前的 empty() 导致找不到符号的报错
+        if (messageNode == null || messageNode.isMissingNode()) return new ParsedMessage("", 0);
+        if (messageNode.isTextual()) return new ParsedMessage(messageNode.asText().trim(), 0);
+        if (!messageNode.isArray()) return new ParsedMessage("", 0);
 
         StringBuilder parsedContent = new StringBuilder();
+        long quotedId = 0;
+
         for (JsonNode segment : messageNode) {
             String type = segment.path("type").asText("");
             JsonNode data = segment.path("data");
@@ -228,32 +163,31 @@ public class NapcatAdapter extends WebSocketClient {
                 case "text":
                     parsedContent.append(data.path("text").asText(""));
                     break;
+
                 case "image":
+                    if (!shouldParseVision) {
+                        parsedContent.append("[图片]");
+                        break;
+                    }
+
                     String imageUrl = data.path("url").asText("");
+                    String cacheKey = data.has("md5") ? data.path("md5").asText() :
+                            (data.path("file").asText("").isBlank() ? imageUrl.split("\\?")[0] : data.path("file").asText(""));
 
-                    // 获取唯一标识作为 Cache Key
-                    String fileId = data.path("file").asText("");
-                    String cacheKey = fileId.isBlank() ? imageUrl.split("\\?")[0] : fileId;
-
-                    // 检查缓存是否命中
                     if (imageVisionCache.containsKey(cacheKey)) {
                         log.info("[感知引擎] 命中图片解析缓存，跳过 LLM 调用以节省 Token");
                         parsedContent.append("[图片(AI解析): ").append(imageVisionCache.get(cacheKey)).append("]");
                         break;
                     }
 
-                    // 未命中缓存，执行下载和模型请求
-                    log.info("[感知引擎] 捕捉到新图片，正在移交视觉中枢处理...");
+                    log.info("[感知引擎] 捕捉到与 Bot 相关的图片，移交视觉中枢深度处理...");
                     String base64 = downloadImageToBase64(imageUrl);
                     if (base64 != null && this.visionLLM != null) {
                         try {
                             String visionResult = this.visionLLM.generateVisionDescription(
                                     "请简短客观地描述这张图片，若有明显文字请提取。", base64
                             );
-
-                            // 将解析结果存入缓存
                             imageVisionCache.put(cacheKey, visionResult);
-
                             parsedContent.append("[图片(AI解析): ").append(visionResult).append("]");
                         } catch (Exception e) {
                             parsedContent.append("[图片: 解析服务异常]");
@@ -262,28 +196,46 @@ public class NapcatAdapter extends WebSocketClient {
                         parsedContent.append("[图片: 下载或模型装载失败]");
                     }
                     break;
+
                 case "at":
                     parsedContent.append("[@").append(data.path("qq").asText("")).append("]");
                     break;
+
                 case "face":
                     parsedContent.append("[表情]");
                     break;
+
                 case "forward":
                     String forwardId = data.path("id").asText("");
                     parsedContent.append("\n【合并转发记录开始】\n");
                     parsedContent.append(getForwardMsgSync(forwardId));
                     parsedContent.append("【合并转发记录结束】\n");
                     break;
+
                 case "reply":
-                    // 引用回复：记录被引用消息的 ID，供上层判断是否要引用回复
-                    String replyId = data.path("id").asText("");
-                    if (!replyId.isBlank()) {
-                        parsedContent.append("[引用回复: ").append(replyId).append("]");
+                    String replyIdStr = data.path("id").asText("");
+                    if (!replyIdStr.isBlank()) {
+                        try {
+                            quotedId = Long.parseLong(replyIdStr);
+                            parsedContent.append("[引用回覆: ").append(replyIdStr).append("]");
+                        } catch (NumberFormatException ignored) {}
                     }
                     break;
             }
         }
-        return parsedContent.toString().trim();
+        return new ParsedMessage(parsedContent.toString().trim(), quotedId);
+    }
+
+    private boolean checkIsAtMe(JsonNode messageNode, long selfId) {
+        if (messageNode == null || !messageNode.isArray()) return false;
+        for (JsonNode segment : messageNode) {
+            if ("at".equals(segment.path("type").asText())) {
+                if (segment.path("data").path("qq").asLong(0) == selfId) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void handleGroupMessage(JsonNode event, long senderId, String content, long replyToMessageId) {
@@ -296,9 +248,9 @@ public class NapcatAdapter extends WebSocketClient {
             System.out.println(String.format("[群聊|%s] %s: %s", groupName, senderName, content));
 
             ChatMessageInput input = new ChatMessageInput(
-                    "qq_group:"+String.valueOf(groupId),
+                    "qq_group:" + groupId,
                     groupName,
-                    "qqid:"+String.valueOf(senderId),
+                    "qqid:" + senderId,
                     senderName,
                     content,
                     replyToMessageId
@@ -319,7 +271,7 @@ public class NapcatAdapter extends WebSocketClient {
             ChatMessageInput input = new ChatMessageInput(
                     "qq_private:" + senderId,
                     "QQ私聊",
-                    "qqid:"+String.valueOf(senderId),
+                    "qqid:" + senderId,
                     senderName,
                     content,
                     replyToMessageId
@@ -342,13 +294,11 @@ public class NapcatAdapter extends WebSocketClient {
     }
 
     public void sendGroupMsgWithReply(long groupId, String message, long replyToMessageId) {
-        // Napcat/Oicq 的引用回覆格式：message 是一個 array，第一個元素是 reply
         ArrayNode messageArray = jsonMapper.createArrayNode();
         messageArray.addObject().put("type", "reply").putObject("data").put("id", replyToMessageId);
         messageArray.addObject().put("type", "text").putObject("data").put("text", message);
 
-        ObjectNode params = jsonMapper.createObjectNode()
-                .put("group_id", groupId);
+        ObjectNode params = jsonMapper.createObjectNode().put("group_id", groupId);
         params.set("message", messageArray);
         executeWsAction("send_group_msg", params);
     }
@@ -361,13 +311,11 @@ public class NapcatAdapter extends WebSocketClient {
     }
 
     public void sendPrivateMsgWithReply(long userId, String message, long replyToMessageId) {
-        // Napcat/Oicq 的引用回覆格式：message 是一個 array，第一個元素是 reply
         ArrayNode messageArray = jsonMapper.createArrayNode();
         messageArray.addObject().put("type", "reply").putObject("data").put("id", replyToMessageId);
         messageArray.addObject().put("type", "text").putObject("data").put("text", message);
 
-        ObjectNode params = jsonMapper.createObjectNode()
-                .put("user_id", userId);
+        ObjectNode params = jsonMapper.createObjectNode().put("user_id", userId);
         params.set("message", messageArray);
         executeWsAction("send_private_msg", params);
     }
@@ -477,7 +425,7 @@ public class NapcatAdapter extends WebSocketClient {
                     for (JsonNode msgNode : messagesArray) {
                         String senderName = msgNode.path("sender").path("nickname").asText("Unknown");
                         JsonNode contentNode = msgNode.has("content") ? msgNode.path("content") : msgNode.path("message");
-                        String innerContent = parseMessageArray(contentNode);
+                        String innerContent = parseMessageContent(contentNode, false).content();
                         sb.append("  - ").append(senderName).append(": ").append(innerContent).append("\n");
                     }
                 }
@@ -508,7 +456,7 @@ public class NapcatAdapter extends WebSocketClient {
                             senderName = !card.isEmpty() ? card : nickname;
                         }
                         if (senderName.isEmpty()) senderName = msgNode.path("user_id").asText("Unknown");
-                        String rawMessage = parseMessageArray(msgNode.path("message"));
+                        String rawMessage = parseMessageContent(msgNode.path("message"), false).content();
                         historyList.add(String.format("%s: %s", senderName, rawMessage));
                     }
                 }
@@ -536,7 +484,7 @@ public class NapcatAdapter extends WebSocketClient {
                             senderName = getFriendNameSync(msgSenderId);
                             if (senderName.isBlank()) senderName = String.valueOf(msgSenderId);
                         }
-                        String rawMessage = parseMessageArray(msgNode.path("message"));
+                        String rawMessage = parseMessageContent(msgNode.path("message"), false).content();
                         historyList.add(String.format("%s: %s", senderName, rawMessage));
                     }
                 }
@@ -547,20 +495,28 @@ public class NapcatAdapter extends WebSocketClient {
         return historyList;
     }
 
-    /**
-     * 上传文件到 QQ 群（Napcat HTTP API: upload_group_file）
-     */
+    // ==========================================
+    // 🌟 终极文件发送修复：Base64 内存直传，无视环境与路径
+    // ==========================================
+
     public String sendGroupFile(long groupId, java.nio.file.Path filePath) {
         if (!java.nio.file.Files.exists(filePath)) return "ERROR: 文件不存在: " + filePath;
         String url = napcatHttpApiBase + "/upload_group_file";
-        ObjectNode payload = jsonMapper.createObjectNode()
-                .put("group_id", groupId)
-                .put("file", filePath.toAbsolutePath().toString())
-                .put("name", filePath.getFileName().toString());
+
         try {
+            // 将文件直接读入内存并转为 Base64 字符串
+            byte[] fileBytes = java.nio.file.Files.readAllBytes(filePath);
+            String base64Data = java.util.Base64.getEncoder().encodeToString(fileBytes);
+
+            // 使用 base64:// 协议发送，彻底避开底层路径解析
+            ObjectNode payload = jsonMapper.createObjectNode()
+                    .put("group_id", groupId)
+                    .put("file", "base64://" + base64Data)
+                    .put("name", filePath.getFileName().toString());
+
             JsonNode root = executeHttpRequest(url, payload);
             if (root != null && "ok".equals(root.path("status").asText())) {
-                log.info("[Napcat] 群文件上传成功: {} → 群{}", filePath.getFileName(), groupId);
+                log.info("[Napcat] 群文件直传成功: {} → 群{}", filePath.getFileName(), groupId);
                 return "SUCCESS";
             }
             String msg = root != null ? root.path("message").asText("unknown") : "no response";
@@ -571,20 +527,23 @@ public class NapcatAdapter extends WebSocketClient {
         }
     }
 
-    /**
-     * 上传文件到 QQ 私聊（Napcat HTTP API: upload_private_file）
-     */
     public String sendPrivateFile(long userId, java.nio.file.Path filePath) {
         if (!java.nio.file.Files.exists(filePath)) return "ERROR: 文件不存在: " + filePath;
         String url = napcatHttpApiBase + "/upload_private_file";
-        ObjectNode payload = jsonMapper.createObjectNode()
-                .put("user_id", userId)
-                .put("file", filePath.toAbsolutePath().toString())
-                .put("name", filePath.getFileName().toString());
+
         try {
+            // 将文件直接读入内存并转为 Base64 字符串
+            byte[] fileBytes = java.nio.file.Files.readAllBytes(filePath);
+            String base64Data = java.util.Base64.getEncoder().encodeToString(fileBytes);
+
+            ObjectNode payload = jsonMapper.createObjectNode()
+                    .put("user_id", userId)
+                    .put("file", "base64://" + base64Data)
+                    .put("name", filePath.getFileName().toString());
+
             JsonNode root = executeHttpRequest(url, payload);
             if (root != null && "ok".equals(root.path("status").asText())) {
-                log.info("[Napcat] 私聊文件上传成功: {} → 用户{}", filePath.getFileName(), userId);
+                log.info("[Napcat] 私聊文件直传成功: {} → 用户{}", filePath.getFileName(), userId);
                 return "SUCCESS";
             }
             String msg = root != null ? root.path("message").asText("unknown") : "no response";
@@ -595,9 +554,6 @@ public class NapcatAdapter extends WebSocketClient {
         }
     }
 
-    /**
-     * 同步下载图片并转换为 Base64
-     */
     private String downloadImageToBase64(String imageUrl) {
         Request request = new Request.Builder().url(imageUrl).build();
         try (Response response = httpClient.newCall(request).execute()) {
@@ -609,5 +565,32 @@ public class NapcatAdapter extends WebSocketClient {
             log.error("[HTTP] 下载图片转码失败: {}", imageUrl, e);
         }
         return null;
+    }
+
+    @Override
+    public void onClose(int code, String reason, boolean remote) {
+        log.warn("[WS] 物理链路被切断: Code: {}, Reason: {}, 由远端发起: {}", code, reason, remote);
+    }
+
+    public void shutdown() {
+        isShuttingDown = true;
+        try {
+            this.closeConnection(1000, "Shutting down");
+        } catch (Exception ignored) {}
+        messageProcessorThread.shutdown();
+        try {
+            if (!messageProcessorThread.awaitTermination(2, TimeUnit.SECONDS)) {
+                messageProcessorThread.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            messageProcessorThread.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        log.info("[NapcatAdapter] 消息处理线程已关闭。");
+    }
+
+    @Override
+    public void onError(Exception ex) {
+        log.error("[WS] 发生底层网络异常", ex);
     }
 }

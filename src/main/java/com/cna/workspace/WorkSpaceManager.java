@@ -6,267 +6,236 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Slf4j
 public class WorkSpaceManager {
 
-    private static volatile WorkSpaceManager instance;
     private final Path workspaceRoot;
+    private final Path backupRoot; // 新增：备份历史目录
 
-    // 当前工作目录，相对于 workspaceRoot，"" 代表根目录
-    // 单线程消费者模型下静态即可，无需 per-task
-    private volatile String currentDir = "";
+    private String currentDir = "";
 
-    private WorkSpaceManager() {
+    private static final int READ_PAGE_SIZE = 150;
+    private static final int READ_OVERLAP = 30;
+
+    // 时间戳格式化，用于备份文件名
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
+
+    public WorkSpaceManager() {
         this.workspaceRoot = Paths.get(ConfigsManager.WORKSPACE_DIR).toAbsolutePath().normalize();
+
+        // 自动计算同级备份目录：如果是 ./a/b/workspace，则备份到 ./a/b/workspace_history
+        Path parent = workspaceRoot.getParent();
+        String backupDirName = workspaceRoot.getFileName().toString() + "_history";
+        this.backupRoot = (parent == null ? Paths.get(backupDirName) : parent.resolve(backupDirName)).toAbsolutePath().normalize();
+
         try {
             Files.createDirectories(workspaceRoot);
+            Files.createDirectories(backupRoot);
             log.info("[WorkSpace] 沙盒目录已就绪: {}", workspaceRoot);
+            log.info("[WorkSpace] 备份目录已就绪: {}", backupRoot);
         } catch (IOException e) {
-            log.error("[WorkSpace] 无法创建工作目录: {}", workspaceRoot, e);
+            log.error("[WorkSpace] 无法初始化工作或备份目录", e);
         }
     }
 
-    public static WorkSpaceManager getInstance() {
-        if (instance == null) {
-            synchronized (WorkSpaceManager.class) {
-                if (instance == null) instance = new WorkSpaceManager();
-            }
-        }
-        return instance;
-    }
-
-    // ── 路径解析 ────────────────────────────────────────────────────────
+    // ── 核心辅助：自动备份原稿 (时光机) ──────────────────────────────────
 
     /**
-     * 解析路径，规则：
-     * - 以 "/" 开头 → 相对于 workspace 根目录（绝对路径）
-     * - 否则 → 相对于当前工作目录 (cwd)
-     * 返回 null 表示路径非法（穿越沙盒）。
+     * 在文件被覆盖或删除前，自动将其备份到 history 目录，并保留原有目录结构。
      */
-    public Path resolve(String relativePath) {
-        if (relativePath == null || relativePath.isBlank()) return null;
+    private void backupFileBeforeModify(Path targetFile) {
+        if (targetFile == null || !Files.exists(targetFile) || Files.isDirectory(targetFile)) {
+            return; // 不存在的或是目录，不需要备份
+        }
+
+        try {
+            // 计算相对于 workspace 的路径 (例如: src/main.java)
+            Path relativePath = workspaceRoot.relativize(targetFile);
+
+            // 构造备份文件名: main.java.20231025_143022_123.bak
+            String timestamp = LocalDateTime.now().format(TIME_FORMATTER);
+            String backupFileName = targetFile.getFileName().toString() + "." + timestamp + ".bak";
+
+            // 计算在 backupRoot 中的目标路径
+            Path backupDir = backupRoot.resolve(relativePath).getParent();
+            if (backupDir == null) backupDir = backupRoot;
+
+            Files.createDirectories(backupDir); // 确保备份的父目录存在
+            Path backupPath = backupDir.resolve(backupFileName);
+
+            // 执行复制备份
+            Files.copy(targetFile, backupPath, StandardCopyOption.REPLACE_EXISTING);
+            log.info("[WorkSpace] 触发自动备份: {} -> {}", targetFile.getFileName(), backupPath);
+
+        } catch (Exception e) {
+            // 备份失败不要阻断主流程，但要记录严重警告
+            log.error("[WorkSpace] ⚠️ 文件自动备份失败，路径: {}", targetFile, e);
+        }
+    }
+
+    // ── 路径解析 ──────────────────────────────────────────────
+
+    public Path resolve(String relativeOrAbsolutePath) {
+        if (relativeOrAbsolutePath == null || relativeOrAbsolutePath.isBlank()) return null;
 
         Path base;
         String cleanPath;
-        if (relativePath.startsWith("/")) {
+        if (relativeOrAbsolutePath.startsWith("/")) {
             base = workspaceRoot;
-            cleanPath = relativePath.substring(1);
+            cleanPath = relativeOrAbsolutePath.substring(1);
         } else {
             base = currentDir.isEmpty() ? workspaceRoot : workspaceRoot.resolve(currentDir);
-            cleanPath = relativePath;
+            cleanPath = relativeOrAbsolutePath;
         }
 
         Path candidate = base.resolve(cleanPath).normalize();
         if (!candidate.startsWith(workspaceRoot)) {
-            log.warn("[WorkSpace] 路径穿越攻击已拦截: {}", relativePath);
+            log.warn("[WorkSpace] 路径越权拦截: {}", relativeOrAbsolutePath);
             return null;
         }
         return candidate;
     }
 
-    public Path getWorkspaceRoot() { return workspaceRoot; }
+    // ── 1. 切换目录 ──────────────────────────────────────────────
 
-    public String getCurrentDir() {
-        return currentDir.isEmpty() ? "/" : "/" + currentDir;
-    }
-
-    // ── 切换目录 ─────────────────────────────────────────────────────────
-
-    /**
-     * 切换当前工作目录。
-     * 支持：相对路径、".."（上级）、"/"（回根目录）
-     */
     public String cd(String path) {
         if (path == null || path.isBlank() || "/".equals(path.trim())) {
             currentDir = "";
-            log.info("[WorkSpace] cd → /");
-            return "SUCCESS: 已切换到工作区根目录 /";
+            return "SUCCESS: 已切换到工作区根目录 -> " + getCurrentDir();
         }
 
-        String trimmed = path.trim();
-
-        // 处理 ".." - 返回上级
-        if ("..".equals(trimmed)) {
-            if (currentDir.isEmpty()) return "SYSTEM_FEEDBACK: 已在根目录，无法继续向上。";
-            int lastSlash = currentDir.lastIndexOf('/');
-            currentDir = lastSlash <= 0 ? "" : currentDir.substring(0, lastSlash);
-            log.info("[WorkSpace] cd .. → /{}", currentDir);
-            return "SUCCESS: 已切换到 " + getCurrentDir();
-        }
-
-        Path target = resolve(trimmed);
-        if (target == null) return "ERROR: 非法路径。";
-        if (!Files.exists(target)) return "ERROR: 目录不存在: [" + trimmed + "]";
-        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录，无法 cd。";
+        Path target = resolve(path.trim());
+        if (target == null) return "ERROR: 非法路径或尝试越权访问沙盒外目录。";
+        if (!Files.exists(target)) return "ERROR: 目录不存在: [" + path + "]";
+        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录，无法切换。";
 
         currentDir = workspaceRoot.relativize(target).toString().replace("\\", "/");
-        log.info("[WorkSpace] cd → /{}", currentDir);
-        return "SUCCESS: 已切换到 " + getCurrentDir();
+        return "SUCCESS: 已切换到 -> " + getCurrentDir();
     }
 
-    // ── 当前目录信息（自动注入到 prompt）────────────────────────────────
+    // ── 2. 当前目录绝对路径 ────────────────────────────────────────
 
-    /**
-     * 返回当前 cwd 路径 + 该目录下的文件列表。
-     * 由 TaskHandler 每轮注入到 baseData，Bot 无需主动调用。
-     */
-    public String getCwdInfo() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("【WorkSpace 当前目录】").append(getCurrentDir()).append("\n");
+    public String getCurrentDir() {
+        Path currentPath = currentDir.isEmpty() ? workspaceRoot : workspaceRoot.resolve(currentDir);
+        return currentPath.toAbsolutePath().toString();
+    }
 
+    // ── 3. 列表 ls ──────────────────────────────────────────────
+
+    public String ls() {
         Path dir = currentDir.isEmpty() ? workspaceRoot : workspaceRoot.resolve(currentDir);
-        List<String> entries = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        sb.append("【当前目录】").append(getCurrentDir()).append("\n");
 
-        try {
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-                for (Path entry : stream) {
-                    String name = entry.getFileName().toString();
-                    if (Files.isDirectory(entry)) {
-                        entries.add("  [目录] " + name + "/");
-                    } else {
-                        entries.add("  [文件] " + name + "  (" + Files.size(entry) + " 字节)");
-                    }
+        List<String> folders = new ArrayList<>();
+        List<String> files = new ArrayList<>();
+
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path entry : stream) {
+                String name = entry.getFileName().toString();
+                if (Files.isDirectory(entry)) {
+                    folders.add("  [文件夹] " + name + "/");
+                } else {
+                    files.add(String.format("  [文件] %s  (%,d 字节)", name, Files.size(entry)));
                 }
             }
         } catch (IOException e) {
-            return sb.append("（读取目录失败）").toString();
+            return sb.append("ERROR: 读取目录内容失败 - ").append(e.getMessage()).toString();
         }
 
-        if (entries.isEmpty()) {
-            sb.append("  （目录为空）");
-        } else {
-            entries.forEach(e -> sb.append(e).append("\n"));
+        if (folders.isEmpty() && files.isEmpty()) {
+            return sb.append("  (目录为空)").toString();
         }
+
+        folders.sort(String::compareToIgnoreCase);
+        files.sort(String::compareToIgnoreCase);
+
+        folders.forEach(f -> sb.append(f).append("\n"));
+        files.forEach(f -> sb.append(f).append("\n"));
+
         return sb.toString().trim();
     }
 
-    // ── 写入文件 ─────────────────────────────────────────────────────────
+    // ── 4. 滑动窗口读取 ──────────────────────────────────────────────
 
-    /**
-     * append=false：覆盖写入，单次上限 512KB
-     * append=true ：追加到末尾，单次上限 512KB
-     */
-    public String write(String relativePath, String content, boolean append) {
-        Path target = resolve(relativePath);
-        if (target == null) return "ERROR: 非法路径，禁止写入沙盒外的目录。";
-        if (content.length() > 512 * 1024) return "ERROR: 单次写入内容超过 512KB 限制，请分段写入。";
-        try {
-            Files.createDirectories(target.getParent());
-            if (append) {
-                Files.writeString(target, content, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                log.info("[WorkSpace] 追加写入: {}", target);
-                return "SUCCESS: 内容已追加至 [" + relativePath + "]，本次 " + content.length() + " 字符。";
-            } else {
-                Files.writeString(target, content, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                log.info("[WorkSpace] 覆盖写入: {}", target);
-                return "SUCCESS: 文件已写入 [" + relativePath + "]，共 " + content.length() + " 字符。";
-            }
-        } catch (IOException e) {
-            log.error("[WorkSpace] 写入失败: {}", relativePath, e);
-            return "ERROR: 文件写入失败 - " + e.getMessage();
-        }
-    }
-
-    // ── 分段读取文件 ─────────────────────────────────────────────────────
-
-    /**
-     * 按行分段读取，每次最多 500 行，带行号。
-     * offset 从 1 起算（第 1 行），limit <= 0 时取 500。
-     */
-    public String read(String relativePath, int offset, int limit) {
+    public String read(String relativePath, long id) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
         if (!Files.exists(target)) return "ERROR: 文件不存在: [" + relativePath + "]";
-        if (Files.isDirectory(target)) return "ERROR: 目标是目录，请用 cd_workspace 进入后查看。";
-        try {
-            List<String> allLines = Files.readAllLines(target, StandardCharsets.UTF_8);
-            int totalLines = allLines.size();
+        if (Files.isDirectory(target)) return "ERROR: 目标是目录，请使用 cd 进入后执行 ls。";
 
-            int startIdx = Math.max(0, offset <= 0 ? 0 : offset - 1);
-            int effectiveLimit = (limit <= 0) ? 500 : Math.min(limit, 500);
-            int endIdx = Math.min(startIdx + effectiveLimit, totalLines);
+        long step = READ_PAGE_SIZE - READ_OVERLAP;
+        long startLine = id * step;
 
-            if (startIdx >= totalLines) {
-                return "SYSTEM_FEEDBACK: offset " + offset + " 超出文件总行数 " + totalLines + "，无内容可读。";
+        try (Stream<String> lines = Files.lines(target, StandardCharsets.UTF_8)) {
+            String content = lines.skip(startLine)
+                    .limit(READ_PAGE_SIZE)
+                    .collect(Collectors.joining("\n"));
+
+            if (content.isEmpty()) {
+                return "EOF: 无内容或已读到文件末尾。";
             }
 
-            List<String> slice = allLines.subList(startIdx, endIdx);
-            boolean hasMore = endIdx < totalLines;
+            long endLine = startLine + content.split("\n", -1).length;
+            return String.format("【文件片段 %s | Chunk ID: %d | 行号: %d - %d】\n%s",
+                    target.getFileName(), id, startLine + 1, endLine, content);
 
-            StringBuilder sb = new StringBuilder();
-            sb.append("【").append(relativePath).append("】");
-            sb.append(" 第 ").append(startIdx + 1).append("~").append(endIdx).append(" 行");
-            sb.append("（共 ").append(totalLines).append(" 行）\n");
-            for (int i = 0; i < slice.size(); i++) {
-                sb.append(String.format("%4d│%s%n", startIdx + 1 + i, slice.get(i)));
-            }
-            if (hasMore) {
-                sb.append("... 还有 ").append(totalLines - endIdx)
-                  .append(" 行未显示，可用 offset=").append(endIdx + 1).append(" 继续读取。");
-            }
-            return sb.toString();
         } catch (IOException e) {
-            log.error("[WorkSpace] 读取失败: {}", relativePath, e);
             return "ERROR: 读取文件失败 - " + e.getMessage();
         }
     }
 
-    // ── 列目录（保留为工具备用）─────────────────────────────────────────
+    // ── 修改点：注入了备份逻辑的 Write 和 Delete ──────────────────────────────
 
-    public String list(String relativePath) {
-        Path target = (relativePath == null || relativePath.isBlank())
-                ? workspaceRoot
-                : resolve(relativePath);
+    public String write(String relativePath, String content, boolean append) {
+        Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
-        if (!Files.exists(target)) return "ERROR: 目录不存在: [" + relativePath + "]";
-        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录。";
 
-        List<String> entries = new ArrayList<>();
         try {
-            Files.walkFileTree(target, new SimpleFileVisitor<>() {
-                int count = 0;
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (count++ >= 200) return FileVisitResult.TERMINATE;
-                    String rel = workspaceRoot.relativize(file).toString().replace("\\", "/");
-                    entries.add("  [文件] " + rel + "  (" + attrs.size() + " 字节)");
-                    return FileVisitResult.CONTINUE;
+            Files.createDirectories(target.getParent());
+
+            if (append) {
+                // 追加写入不会破坏原内容，通常不需要全量备份，直接追加即可
+                Files.writeString(target, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                return "SUCCESS: 内容已追加至 [" + relativePath + "]";
+            } else {
+                // 【核心修改】：覆盖写入前，如果文件已存在，先进行备份！
+                if (Files.exists(target)) {
+                    backupFileBeforeModify(target);
                 }
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    if (dir.equals(workspaceRoot)) return FileVisitResult.CONTINUE;
-                    String rel = workspaceRoot.relativize(dir).toString().replace("\\", "/");
-                    entries.add("  [目录] " + rel + "/");
-                    return FileVisitResult.CONTINUE;
-                }
-            });
+                Files.writeString(target, content, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                return "SUCCESS: 文件已覆盖写入并对原稿进行了历史备份 [" + relativePath + "]";
+            }
         } catch (IOException e) {
-            return "ERROR: 列目录失败 - " + e.getMessage();
+            return "ERROR: 写入失败 - " + e.getMessage();
         }
-
-        if (entries.isEmpty()) return "【工作区为空】根目录: " + workspaceRoot;
-        return "【工作区文件列表】根目录: " + workspaceRoot + "\n"
-                + String.join("\n", entries)
-                + (entries.size() == 200 ? "\n...(超过 200 条已截断)" : "");
     }
-
-    // ── 删除文件 ─────────────────────────────────────────────────────────
 
     public String delete(String relativePath) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
-        if (!Files.exists(target)) return "ERROR: 文件不存在: [" + relativePath + "]";
-        if (Files.isDirectory(target)) return "ERROR: 不允许删除目录，请逐个删除其中的文件。";
+        if (!Files.exists(target)) return "ERROR: 文件不存在。";
+
         try {
-            Files.delete(target);
-            log.info("[WorkSpace] 删除文件: {}", target);
-            return "SUCCESS: 文件 [" + relativePath + "] 已删除。";
+            if (Files.isDirectory(target)) {
+                // 删除目录（目前不支持直接删除非空目录，防呆设计）
+                Files.delete(target);
+                return "SUCCESS: 已删除空目录 [" + relativePath + "]";
+            } else {
+                // 【核心修改】：删除文件前，先进行备份！
+                backupFileBeforeModify(target);
+                Files.delete(target);
+                return "SUCCESS: 文件已删除，原稿已保存至历史备份 [" + relativePath + "]";
+            }
+        } catch (DirectoryNotEmptyException e) {
+            return "ERROR: 目录非空，无法直接删除。";
         } catch (IOException e) {
             return "ERROR: 删除失败 - " + e.getMessage();
         }

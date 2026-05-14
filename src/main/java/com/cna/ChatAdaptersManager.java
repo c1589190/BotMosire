@@ -73,22 +73,21 @@ public class ChatAdaptersManager {
         try {
             if (namespace.startsWith("qq_group:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                long groupId = Long.parseLong(namespace.substring(9));
+                // 🌟 修复魔法数字
+                long groupId = Long.parseLong(namespace.substring("qq_group:".length()));
                 return GlobalNapcatAdapter.sendGroupFile(groupId, filePath);
 
-            } else if (namespace.startsWith("qqid:")) {
+                // 🌟 移除了多余的 qqid: 检查，如果有历史遗留可以保留，但统一推荐使用 qq_private:
+            } else if (namespace.startsWith("qq_private:") || namespace.startsWith("qqid:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                long userId = Long.parseLong(namespace.substring(5));
-                return GlobalNapcatAdapter.sendPrivateFile(userId, filePath);
-
-            } else if (namespace.startsWith("qq_private:")) {
-                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                long userId = Long.parseLong(namespace.substring("qq_private:".length()));
+                int prefixLen = namespace.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
+                long userId = Long.parseLong(namespace.substring(prefixLen));
                 return GlobalNapcatAdapter.sendPrivateFile(userId, filePath);
 
             } else if (namespace.startsWith("discord_dm:") || namespace.startsWith("discord_guild:")) {
-                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
-                    return "ERROR: Discord adapter 未連線或未啟用。";
+                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected()) {
+                    return "ERROR: Discord adapter 未连线或未启用。";
+                }
                 return GlobalDiscordAdapter.sendFile(namespace, filePath);
 
             } else {
