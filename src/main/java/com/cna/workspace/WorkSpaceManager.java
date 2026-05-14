@@ -54,36 +54,72 @@ public class WorkSpaceManager {
         return workspaceRoot;
     }
 
-    /** 写入文件（自动创建父目录），超过 512KB 拒绝写入 */
-    public String write(String relativePath, String content) {
+    /**
+     * 写入文件（自动创建父目录）
+     * append=false：覆盖写入，单次内容限 512KB
+     * append=true：追加到末尾，单次内容限 512KB
+     */
+    public String write(String relativePath, String content, boolean append) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径，禁止写入沙盒外的目录。";
-        if (content.length() > 512 * 1024) return "ERROR: 写入内容超过 512KB 限制，请分批写入。";
+        if (content.length() > 512 * 1024) return "ERROR: 单次写入内容超过 512KB 限制，请分段写入。";
         try {
             Files.createDirectories(target.getParent());
-            Files.writeString(target, content, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            log.info("[WorkSpace] 写入文件: {}", target);
-            return "SUCCESS: 文件已写入 [" + relativePath + "]，共 " + content.length() + " 字符。";
+            if (append) {
+                Files.writeString(target, content, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                log.info("[WorkSpace] 追加写入文件: {}", target);
+                return "SUCCESS: 内容已追加至 [" + relativePath + "]，本次追加 " + content.length() + " 字符。";
+            } else {
+                Files.writeString(target, content, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                log.info("[WorkSpace] 覆盖写入文件: {}", target);
+                return "SUCCESS: 文件已写入 [" + relativePath + "]，共 " + content.length() + " 字符。";
+            }
         } catch (IOException e) {
             log.error("[WorkSpace] 写入失败: {}", relativePath, e);
             return "ERROR: 文件写入失败 - " + e.getMessage();
         }
     }
 
-    /** 读取文件，超过 50KB 截断并提示 */
-    public String read(String relativePath) {
+    /**
+     * 分段读取文件。
+     * offset=0, limit=-1 时读取全部内容（仍有 500 行安全上限）。
+     * offset 和 limit 均以「行号」为单位（从第 1 行起）。
+     */
+    public String read(String relativePath, int offset, int limit) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
         if (!Files.exists(target)) return "ERROR: 文件不存在: [" + relativePath + "]";
         if (Files.isDirectory(target)) return "ERROR: 目标是目录，请使用 list_workspace 列出内容。";
         try {
-            long size = Files.size(target);
-            String content = Files.readString(target, StandardCharsets.UTF_8);
-            if (content.length() > 50000) {
-                return "【文件内容（已截断，原始 " + size + " 字节）】\n" + content.substring(0, 50000) + "\n...(内容过长已截断)";
+            List<String> allLines = Files.readAllLines(target, StandardCharsets.UTF_8);
+            int totalLines = allLines.size();
+
+            // offset 从 1 开始（人类习惯），转为 0-based index
+            int startIdx = Math.max(0, offset <= 0 ? 0 : offset - 1);
+            int effectiveLimit = (limit <= 0) ? 500 : Math.min(limit, 500);
+            int endIdx = Math.min(startIdx + effectiveLimit, totalLines);
+
+            if (startIdx >= totalLines) {
+                return "SYSTEM_FEEDBACK: offset " + offset + " 超出文件总行数 " + totalLines + "，无内容可读。";
             }
-            return "【文件内容：" + relativePath + "】\n" + content;
+
+            List<String> slice = allLines.subList(startIdx, endIdx);
+            boolean hasMore = endIdx < totalLines;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("【").append(relativePath).append("】");
+            sb.append(" 第 ").append(startIdx + 1).append("~").append(endIdx).append(" 行");
+            sb.append("（共 ").append(totalLines).append(" 行）\n");
+            for (int i = 0; i < slice.size(); i++) {
+                sb.append(String.format("%4d│%s%n", startIdx + 1 + i, slice.get(i)));
+            }
+            if (hasMore) {
+                sb.append("... 还有 ").append(totalLines - endIdx)
+                  .append(" 行未显示，可用 offset=").append(endIdx + 1).append(" 继续读取。");
+            }
+            return sb.toString();
         } catch (IOException e) {
             log.error("[WorkSpace] 读取失败: {}", relativePath, e);
             return "ERROR: 读取文件失败 - " + e.getMessage();
