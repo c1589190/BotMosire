@@ -8,6 +8,7 @@ import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
 import com.cna.llm.LLManager;
+import com.cna.workspace.WorkSpaceManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,6 +40,7 @@ public class ScheduledTaskHandler implements DefaultAgentTaskHandler {
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("scheduled", scheduledContent);
         baseData.put("deep_memories", LLManager.getDeepMemories(scheduledContent, engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
+        baseData.put("workspace_cwd", WorkSpaceManager.getInstance().getCwdInfo());
 
         DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
                 task,
