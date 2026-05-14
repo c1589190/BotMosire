@@ -16,6 +16,10 @@ public class WorkSpaceManager {
     private static volatile WorkSpaceManager instance;
     private final Path workspaceRoot;
 
+    // 当前工作目录，相对于 workspaceRoot，"" 代表根目录
+    // 单线程消费者模型下静态即可，无需 per-task
+    private volatile String currentDir = "";
+
     private WorkSpaceManager() {
         this.workspaceRoot = Paths.get(ConfigsManager.WORKSPACE_DIR).toAbsolutePath().normalize();
         try {
@@ -35,14 +39,28 @@ public class WorkSpaceManager {
         return instance;
     }
 
+    // ── 路径解析 ────────────────────────────────────────────────────────
+
     /**
-     * 解析用户传入的相对路径，确保它在沙盒内。
-     * 返回 null 表示路径不合法（路径穿越攻击）。
+     * 解析路径，规则：
+     * - 以 "/" 开头 → 相对于 workspace 根目录（绝对路径）
+     * - 否则 → 相对于当前工作目录 (cwd)
+     * 返回 null 表示路径非法（穿越沙盒）。
      */
     public Path resolve(String relativePath) {
         if (relativePath == null || relativePath.isBlank()) return null;
-        // 拒绝绝对路径
-        Path candidate = workspaceRoot.resolve(relativePath).normalize();
+
+        Path base;
+        String cleanPath;
+        if (relativePath.startsWith("/")) {
+            base = workspaceRoot;
+            cleanPath = relativePath.substring(1);
+        } else {
+            base = currentDir.isEmpty() ? workspaceRoot : workspaceRoot.resolve(currentDir);
+            cleanPath = relativePath;
+        }
+
+        Path candidate = base.resolve(cleanPath).normalize();
         if (!candidate.startsWith(workspaceRoot)) {
             log.warn("[WorkSpace] 路径穿越攻击已拦截: {}", relativePath);
             return null;
@@ -50,14 +68,87 @@ public class WorkSpaceManager {
         return candidate;
     }
 
-    public Path getWorkspaceRoot() {
-        return workspaceRoot;
+    public Path getWorkspaceRoot() { return workspaceRoot; }
+
+    public String getCurrentDir() {
+        return currentDir.isEmpty() ? "/" : "/" + currentDir;
     }
 
+    // ── 切换目录 ─────────────────────────────────────────────────────────
+
     /**
-     * 写入文件（自动创建父目录）
-     * append=false：覆盖写入，单次内容限 512KB
-     * append=true：追加到末尾，单次内容限 512KB
+     * 切换当前工作目录。
+     * 支持：相对路径、".."（上级）、"/"（回根目录）
+     */
+    public String cd(String path) {
+        if (path == null || path.isBlank() || "/".equals(path.trim())) {
+            currentDir = "";
+            log.info("[WorkSpace] cd → /");
+            return "SUCCESS: 已切换到工作区根目录 /";
+        }
+
+        String trimmed = path.trim();
+
+        // 处理 ".." - 返回上级
+        if ("..".equals(trimmed)) {
+            if (currentDir.isEmpty()) return "SYSTEM_FEEDBACK: 已在根目录，无法继续向上。";
+            int lastSlash = currentDir.lastIndexOf('/');
+            currentDir = lastSlash <= 0 ? "" : currentDir.substring(0, lastSlash);
+            log.info("[WorkSpace] cd .. → /{}", currentDir);
+            return "SUCCESS: 已切换到 " + getCurrentDir();
+        }
+
+        Path target = resolve(trimmed);
+        if (target == null) return "ERROR: 非法路径。";
+        if (!Files.exists(target)) return "ERROR: 目录不存在: [" + trimmed + "]";
+        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录，无法 cd。";
+
+        currentDir = workspaceRoot.relativize(target).toString().replace("\\", "/");
+        log.info("[WorkSpace] cd → /{}", currentDir);
+        return "SUCCESS: 已切换到 " + getCurrentDir();
+    }
+
+    // ── 当前目录信息（自动注入到 prompt）────────────────────────────────
+
+    /**
+     * 返回当前 cwd 路径 + 该目录下的文件列表。
+     * 由 TaskHandler 每轮注入到 baseData，Bot 无需主动调用。
+     */
+    public String getCwdInfo() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("【WorkSpace 当前目录】").append(getCurrentDir()).append("\n");
+
+        Path dir = currentDir.isEmpty() ? workspaceRoot : workspaceRoot.resolve(currentDir);
+        List<String> entries = new ArrayList<>();
+
+        try {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+                for (Path entry : stream) {
+                    String name = entry.getFileName().toString();
+                    if (Files.isDirectory(entry)) {
+                        entries.add("  [目录] " + name + "/");
+                    } else {
+                        entries.add("  [文件] " + name + "  (" + Files.size(entry) + " 字节)");
+                    }
+                }
+            }
+        } catch (IOException e) {
+            return sb.append("（读取目录失败）").toString();
+        }
+
+        if (entries.isEmpty()) {
+            sb.append("  （目录为空）");
+        } else {
+            entries.forEach(e -> sb.append(e).append("\n"));
+        }
+        return sb.toString().trim();
+    }
+
+    // ── 写入文件 ─────────────────────────────────────────────────────────
+
+    /**
+     * append=false：覆盖写入，单次上限 512KB
+     * append=true ：追加到末尾，单次上限 512KB
      */
     public String write(String relativePath, String content, boolean append) {
         Path target = resolve(relativePath);
@@ -68,12 +159,12 @@ public class WorkSpaceManager {
             if (append) {
                 Files.writeString(target, content, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                log.info("[WorkSpace] 追加写入文件: {}", target);
-                return "SUCCESS: 内容已追加至 [" + relativePath + "]，本次追加 " + content.length() + " 字符。";
+                log.info("[WorkSpace] 追加写入: {}", target);
+                return "SUCCESS: 内容已追加至 [" + relativePath + "]，本次 " + content.length() + " 字符。";
             } else {
                 Files.writeString(target, content, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                log.info("[WorkSpace] 覆盖写入文件: {}", target);
+                log.info("[WorkSpace] 覆盖写入: {}", target);
                 return "SUCCESS: 文件已写入 [" + relativePath + "]，共 " + content.length() + " 字符。";
             }
         } catch (IOException e) {
@@ -82,21 +173,21 @@ public class WorkSpaceManager {
         }
     }
 
+    // ── 分段读取文件 ─────────────────────────────────────────────────────
+
     /**
-     * 分段读取文件。
-     * offset=0, limit=-1 时读取全部内容（仍有 500 行安全上限）。
-     * offset 和 limit 均以「行号」为单位（从第 1 行起）。
+     * 按行分段读取，每次最多 500 行，带行号。
+     * offset 从 1 起算（第 1 行），limit <= 0 时取 500。
      */
     public String read(String relativePath, int offset, int limit) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
         if (!Files.exists(target)) return "ERROR: 文件不存在: [" + relativePath + "]";
-        if (Files.isDirectory(target)) return "ERROR: 目标是目录，请使用 list_workspace 列出内容。";
+        if (Files.isDirectory(target)) return "ERROR: 目标是目录，请用 cd_workspace 进入后查看。";
         try {
             List<String> allLines = Files.readAllLines(target, StandardCharsets.UTF_8);
             int totalLines = allLines.size();
 
-            // offset 从 1 开始（人类习惯），转为 0-based index
             int startIdx = Math.max(0, offset <= 0 ? 0 : offset - 1);
             int effectiveLimit = (limit <= 0) ? 500 : Math.min(limit, 500);
             int endIdx = Math.min(startIdx + effectiveLimit, totalLines);
@@ -126,20 +217,20 @@ public class WorkSpaceManager {
         }
     }
 
-    /** 列出目录内容（最多 200 条），relativePath 为空时列出根目录 */
+    // ── 列目录（保留为工具备用）─────────────────────────────────────────
+
     public String list(String relativePath) {
-        Path target = relativePath == null || relativePath.isBlank()
+        Path target = (relativePath == null || relativePath.isBlank())
                 ? workspaceRoot
                 : resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";
         if (!Files.exists(target)) return "ERROR: 目录不存在: [" + relativePath + "]";
-        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录，请使用 read_workspace 读取文件。";
+        if (!Files.isDirectory(target)) return "ERROR: 目标不是目录。";
 
         List<String> entries = new ArrayList<>();
         try {
             Files.walkFileTree(target, new SimpleFileVisitor<>() {
                 int count = 0;
-
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     if (count++ >= 200) return FileVisitResult.TERMINATE;
@@ -147,7 +238,6 @@ public class WorkSpaceManager {
                     entries.add("  [文件] " + rel + "  (" + attrs.size() + " 字节)");
                     return FileVisitResult.CONTINUE;
                 }
-
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     if (dir.equals(workspaceRoot)) return FileVisitResult.CONTINUE;
@@ -160,12 +250,14 @@ public class WorkSpaceManager {
             return "ERROR: 列目录失败 - " + e.getMessage();
         }
 
-        if (entries.isEmpty()) return "【工作区为空】工作区根目录: " + workspaceRoot;
-        String header = "【工作区文件列表】根目录: " + workspaceRoot + "\n";
-        return header + String.join("\n", entries) + (entries.size() == 200 ? "\n...(超过 200 条已截断)" : "");
+        if (entries.isEmpty()) return "【工作区为空】根目录: " + workspaceRoot;
+        return "【工作区文件列表】根目录: " + workspaceRoot + "\n"
+                + String.join("\n", entries)
+                + (entries.size() == 200 ? "\n...(超过 200 条已截断)" : "");
     }
 
-    /** 删除文件（不允许删除目录） */
+    // ── 删除文件 ─────────────────────────────────────────────────────────
+
     public String delete(String relativePath) {
         Path target = resolve(relativePath);
         if (target == null) return "ERROR: 非法路径。";

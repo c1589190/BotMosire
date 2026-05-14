@@ -6,6 +6,7 @@ import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLManager;
+import com.cna.workspace.WorkSpaceManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
@@ -33,6 +34,7 @@ public class ChatTaskHandler implements DefaultAgentTaskHandler {
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", chatTask.getTaskText());
         baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
+        baseData.put("workspace_cwd", WorkSpaceManager.getInstance().getCwdInfo());
 
         // 调用 LivingLoop 的公共引擎
         engine.executeCognitiveCycle(

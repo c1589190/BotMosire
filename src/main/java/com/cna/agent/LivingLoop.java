@@ -94,7 +94,7 @@ public class LivingLoop implements MosireAPI {
         largeLLMToolbox.put(new ReadWebPage().getName(), new ReadWebPage());
         largeLLMToolbox.put(new WriteFile().getName(), new WriteFile());
         largeLLMToolbox.put(new ReadFile().getName(), new ReadFile());
-        largeLLMToolbox.put(new ListFiles().getName(), new ListFiles());
+        largeLLMToolbox.put(new CdWorkspace().getName(), new CdWorkspace());
         largeLLMToolbox.put(new SendFile().getName(), new SendFile());
 
         this.registerTool(new GetMoreCurrentMemorys());
