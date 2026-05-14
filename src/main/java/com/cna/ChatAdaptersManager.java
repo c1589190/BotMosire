@@ -2,6 +2,7 @@ package com.cna;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import static com.cna.Main.GlobalDiscordAdapter;
@@ -62,6 +63,42 @@ public class ChatAdaptersManager {
         } catch (Exception e) {
             log.error("[ChatAdaptersManager] 发送消息异常", e);
             return "ERROR: 消息发送失败，底层异常: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 发送文件到指定目标（QQ群/私聊/Discord）
+     */
+    public static String sendFile(String namespace, Path filePath) {
+        try {
+            if (namespace.startsWith("qq_group:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
+                long groupId = Long.parseLong(namespace.substring(9));
+                return GlobalNapcatAdapter.sendGroupFile(groupId, filePath);
+
+            } else if (namespace.startsWith("qqid:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
+                long userId = Long.parseLong(namespace.substring(5));
+                return GlobalNapcatAdapter.sendPrivateFile(userId, filePath);
+
+            } else if (namespace.startsWith("qq_private:")) {
+                if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
+                long userId = Long.parseLong(namespace.substring("qq_private:".length()));
+                return GlobalNapcatAdapter.sendPrivateFile(userId, filePath);
+
+            } else if (namespace.startsWith("discord_dm:") || namespace.startsWith("discord_guild:")) {
+                if (GlobalDiscordAdapter == null || !GlobalDiscordAdapter.isConnected())
+                    return "ERROR: Discord adapter 未連線或未啟用。";
+                return GlobalDiscordAdapter.sendFile(namespace, filePath);
+
+            } else {
+                return "ERROR: 无法识别的 namespace 格式: " + namespace;
+            }
+        } catch (NumberFormatException e) {
+            return "ERROR: namespace 中的 ID 必须是数字: " + namespace;
+        } catch (Exception e) {
+            log.error("[ChatAdaptersManager] sendFile 异常", e);
+            return "ERROR: 发送文件失败 - " + e.getMessage();
         }
     }
 
