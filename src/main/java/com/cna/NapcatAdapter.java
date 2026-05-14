@@ -548,6 +548,54 @@ public class NapcatAdapter extends WebSocketClient {
     }
 
     /**
+     * 上传文件到 QQ 群（Napcat HTTP API: upload_group_file）
+     */
+    public String sendGroupFile(long groupId, java.nio.file.Path filePath) {
+        if (!java.nio.file.Files.exists(filePath)) return "ERROR: 文件不存在: " + filePath;
+        String url = napcatHttpApiBase + "/upload_group_file";
+        ObjectNode payload = jsonMapper.createObjectNode()
+                .put("group_id", groupId)
+                .put("file", filePath.toAbsolutePath().toString())
+                .put("name", filePath.getFileName().toString());
+        try {
+            JsonNode root = executeHttpRequest(url, payload);
+            if (root != null && "ok".equals(root.path("status").asText())) {
+                log.info("[Napcat] 群文件上传成功: {} → 群{}", filePath.getFileName(), groupId);
+                return "SUCCESS";
+            }
+            String msg = root != null ? root.path("message").asText("unknown") : "no response";
+            return "ERROR: Napcat 返回失败: " + msg;
+        } catch (Exception e) {
+            log.error("[Napcat] 上传群文件异常", e);
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 上传文件到 QQ 私聊（Napcat HTTP API: upload_private_file）
+     */
+    public String sendPrivateFile(long userId, java.nio.file.Path filePath) {
+        if (!java.nio.file.Files.exists(filePath)) return "ERROR: 文件不存在: " + filePath;
+        String url = napcatHttpApiBase + "/upload_private_file";
+        ObjectNode payload = jsonMapper.createObjectNode()
+                .put("user_id", userId)
+                .put("file", filePath.toAbsolutePath().toString())
+                .put("name", filePath.getFileName().toString());
+        try {
+            JsonNode root = executeHttpRequest(url, payload);
+            if (root != null && "ok".equals(root.path("status").asText())) {
+                log.info("[Napcat] 私聊文件上传成功: {} → 用户{}", filePath.getFileName(), userId);
+                return "SUCCESS";
+            }
+            String msg = root != null ? root.path("message").asText("unknown") : "no response";
+            return "ERROR: Napcat 返回失败: " + msg;
+        } catch (Exception e) {
+            log.error("[Napcat] 上传私聊文件异常", e);
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /**
      * 同步下载图片并转换为 Base64
      */
     private String downloadImageToBase64(String imageUrl) {

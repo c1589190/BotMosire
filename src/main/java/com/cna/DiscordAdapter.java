@@ -406,6 +406,45 @@ public class DiscordAdapter extends ListenerAdapter {
         }
     }
 
+    /**
+     * 發送文件到 Discord 目標（DM 或 Guild 頻道）
+     * @param targetNamespace  discord_dm:{userId} 或 discord_guild:{guildId}:{channelId}
+     * @param filePath         文件的本地絕對路徑
+     * @return 成功或錯誤描述
+     */
+    public String sendFile(String targetNamespace, java.nio.file.Path filePath) {
+        if (!connected || jda == null) return "ERROR: Discord adapter not connected";
+        if (!java.nio.file.Files.exists(filePath)) return "ERROR: 文件不存在: " + filePath;
+
+        try {
+            net.dv8tion.jda.api.utils.FileUpload upload =
+                    net.dv8tion.jda.api.utils.FileUpload.fromData(filePath.toFile());
+
+            if (targetNamespace.startsWith("discord_dm:")) {
+                String userId = targetNamespace.substring("discord_dm:".length());
+                User user = jda.retrieveUserById(userId).complete();
+                if (user == null) return "ERROR: Discord 用户不存在: " + userId;
+                PrivateChannel ch = user.openPrivateChannel().complete();
+                dmChannelCache.put(userId, ch.getIdLong());
+                ch.sendFiles(upload).queue();
+            } else if (targetNamespace.startsWith("discord_guild:")) {
+                String[] parts = targetNamespace.split(":");
+                if (parts.length < 3) return "ERROR: discord_guild 格式需为 discord_guild:{guildId}:{channelId}";
+                MessageChannel ch = jda.getChannelById(MessageChannel.class, Long.parseLong(parts[2]));
+                if (ch == null) return "ERROR: Discord 频道不存在: " + parts[2];
+                ch.sendFiles(upload).queue();
+            } else {
+                return "ERROR: 无法识别的 Discord 目标格式: " + targetNamespace;
+            }
+
+            logger.info("[DiscordAdapter] 📎 发送文件 [{}] → {}", filePath.getFileName(), targetNamespace);
+            return "SUCCESS: 文件已发送至 " + targetNamespace;
+        } catch (Exception e) {
+            logger.error("[DiscordAdapter] sendFile 失败: {}", e.getMessage(), e);
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
     // ── Typing Indicator ────────────────────────────────────────────────
 
     private static final ScheduledExecutorService typingScheduler =

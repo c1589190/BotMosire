@@ -46,6 +46,8 @@ public class ConfigsManager {
     public static final int NAPCAT_WS_PORT;
     public static final String NAPCAT_HTTP_URL;
 
+    public static final String WORKSPACE_DIR;
+
     public static final int MAX_TASK_AMOUNT;
     public static final long RATE_LIMIT_MS;
     public static final String DEPLOYER_ROLE;
@@ -181,6 +183,11 @@ public class ConfigsManager {
         NAPCAT_WS_PORT = getInt("napcat.wsPort", 3001);
         NAPCAT_HTTP_URL = getString("napcat.httpUrl", "http://127.0.0.1:3000");
         NAPCAT_TOEKN = getString("napcat.token", "");
+
+        // ==========================================
+        // 5. WorkSpace 沙盒目录
+        // ==========================================
+        WORKSPACE_DIR = getString("workspace.dir", "workspace");
 
     }
 
