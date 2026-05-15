@@ -95,10 +95,19 @@ public class WebServer {
             try {
                 LlmCommand cmd = ctx.bodyAsClass(LlmCommand.class);
 
-                // 直接入队，让前端轮询拿到指令立即执行
+                // 对 HTML 修改指令先持久化到磁盘，再推入前端实时渲染队列
+                if ("update_html".equals(cmd.getAction()) || "append_html".equals(cmd.getAction())) {
+                    boolean patched = patchHtmlFile(cmd);
+                    if (!patched) {
+                        ctx.status(400).json(new ResponsePayload("ERROR",
+                            "未找到目标节点 [" + cmd.getTarget() + "]，请先调用 read_file 查看 website/index.html 的当前 DOM 结构，确认 CSS 选择器正确后重试。"));
+                        return;
+                    }
+                }
+
                 commandQueue.offer(cmd);
                 log.info("[WebServer] 收到 LLM 指令并已推送到前端: action={}, target={}", cmd.getAction(), cmd.getTarget());
-                ctx.json(new ResponsePayload("SUCCESS", "指令已推送至前端执行"));
+                ctx.json(new ResponsePayload("SUCCESS", "指令已执行，HTML 改动已持久化到磁盘并推送至前端实时渲染。"));
             } catch (Exception e) {
                 log.error("[WebServer] 解析 LLM 指令失败", e);
                 ctx.status(400).json(new ResponsePayload("ERROR", "处理异常: " + e.getMessage()));

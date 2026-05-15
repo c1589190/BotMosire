@@ -249,10 +249,49 @@ public class WorkSpaceManager {
         try {
             Files.createDirectories(websiteDir);
             if (!Files.exists(indexFile)) {
-                // 写入一个默认的支持动态接收 LLM 指令的网页模板
                 String defaultHtml = """
-                    啥都木有
-                    """;
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BotMosire 控制台</title>
+  <script id="__llm_poller__">
+    (function startPolling() {
+      function poll() {
+        fetch('/api/llm/command')
+          .then(function(r) { return r.status === 200 ? r.json() : null; })
+          .then(function(cmd) {
+            if (!cmd) return;
+            try {
+              var el;
+              if (cmd.action === 'update_html' && cmd.target) {
+                el = document.querySelector(cmd.target);
+                if (el) el.innerHTML = cmd.html || '';
+              } else if (cmd.action === 'append_html' && cmd.target) {
+                el = document.querySelector(cmd.target);
+                if (el) el.insertAdjacentHTML('beforeend', cmd.html || '');
+              } else if (cmd.action === 'eval_js' && cmd.code) {
+                eval(cmd.code);
+              }
+            } catch(e) { console.error('[LLM] 指令执行失败:', e); }
+          })
+          .catch(function(){})
+          .finally(function() { setTimeout(poll, 800); });
+      }
+      poll();
+    })();
+  </script>
+</head>
+<body>
+  <div id="app">
+    <p style="color:#888;text-align:center;padding:48px 20px;font-family:sans-serif;">
+      等待主脑初始化界面...
+    </p>
+  </div>
+</body>
+</html>
+""";
                 Files.writeString(indexFile, defaultHtml, StandardCharsets.UTF_8);
                 log.info("[WorkSpace] 默认网站模板已创建: {}", indexFile);
             }

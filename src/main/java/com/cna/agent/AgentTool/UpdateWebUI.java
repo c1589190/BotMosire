@@ -82,6 +82,15 @@ public class UpdateWebUI implements DefaultAgentToolUnit {
             return "ERROR: action 不能为空，必须是 update_html, append_html 或 eval_js。";
         }
 
+        // 阻止对页面基础结构节点整体替换，那会覆盖 <head> 中的轮询脚本造成死循环
+        if ("update_html".equals(action) || "append_html".equals(action)) {
+            String t = target.toLowerCase().trim();
+            if (t.isEmpty() || t.equals("body") || t.equals("html") || t.equals("head")) {
+                return "ERROR: 禁止对 body/html/head 整体使用 " + action + " 操作，" +
+                       "这会覆盖页面的通信轮询代码造成功能中断。请使用具体的 ID 选择器（如 #app）来操作内容容器。";
+            }
+        }
+
         this.lastAction = action;
         this.lastTarget = target;
 
