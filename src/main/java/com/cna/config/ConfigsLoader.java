@@ -30,7 +30,10 @@ public class ConfigsLoader {
                 "chat_task_thinking.md",
                 "chat_task_solving.md",
                 "ToolPrompts.properties",
-                "GetDeepMemories.md"
+                "GetDeepMemories.md",
+                "WebEventTaskSolving.md",
+                "update_web_ui.md",
+                "toolsGuide.md"
         };
 
         for (String fileName : promptFiles) {

@@ -70,6 +70,7 @@ public class LLManager {
         data.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
         data.put("now_time", Utils.getNowFormatted());
         data.put("current_thoughts", MDManager.read("thoughts.md", ""));
+        data.put("tools_guide", MDManager.read("prompts/toolsGuide.md",""));
 
         // 在内存中渲染出完美的 Prompt
         String userPrompt = render(userTemplate, dataModel);
