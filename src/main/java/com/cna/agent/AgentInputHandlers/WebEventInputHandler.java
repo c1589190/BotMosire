@@ -22,7 +22,7 @@ public class WebEventInputHandler implements DefaultAgentInputHandlerUnit {
     private final Map<String, Long> ipRateLimitPool = new ConcurrentHashMap<>();
 
     // 防抖冷却时间：1000毫秒（1秒内同一个IP的连续请求直接丢弃）
-    private static final long RATE_LIMIT_MS = 10;
+    private static final long RATE_LIMIT_MS = 1000;
 
     @Override
     public Class<? extends DefaultAgentInputUnit> getSupportedInputClass() {

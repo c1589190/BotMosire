@@ -27,6 +27,7 @@ public class ConfigsLoader {
                 "getInterest.md",
                 "scheduled_task_solving.md",
                 "update_thoughts_task_solving.md",
+                "update_thoughts_task_t.md",
                 "chat_task_thinking.md",
                 "chat_task_solving.md",
                 "ToolPrompts.properties",

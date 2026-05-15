@@ -12,6 +12,14 @@ ${current_interests}
 
 你需要根据以上标准，提交应该注意的消息之编号；
 
+<#if recent_history?has_content>
+以下是该来源最近的聊天上下文，可帮助你判断这些新消息是否值得回复：{
+
+${recent_history}
+
+}
+</#if>
+
 以下是你需要判定的最新信息，它们按编号排列：{
 
 ${currentInputs}

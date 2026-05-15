@@ -17,7 +17,7 @@ public class LLMConfig {
     @Builder.Default private double presencePenalty = 0.0;
     @Builder.Default private int max_tokens = 4096;
 
-    private String systemPrompt;
+    @Builder.Default private String systemPrompt = "";
 
     // 思维链开关
     @Builder.Default private boolean enableCoT = false;

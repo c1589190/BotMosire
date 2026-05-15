@@ -5,7 +5,6 @@ import com.cna.agent.AgentTask.WebEventTask;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
-import com.cna.db.MDManager;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
@@ -31,8 +30,6 @@ public class WebEventTaskHandler implements DefaultAgentTaskHandler {
 
         // 如果你的网页交互也需要检索长期记忆支持，可以保留这行；如果不需要可以注释掉以节省 Embedding 算力
         baseData.put("deep_memories", LLManager.getDeepMemories(webTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
-
-        baseData.put("taskRule", MDManager.read(this.getClass().getName() + ".md", ""));
 
         // 2. 调用 LivingLoop 的公共引擎执行认知循环
         DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(

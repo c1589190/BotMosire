@@ -1,5 +1,6 @@
 package com.cna.db;
 
+import com.cna.config.ConfigsManager;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.HikariConfig;
@@ -28,10 +29,9 @@ public class MemoryDB {
         if (dataSource != null) return;
 
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:agent_memory.db");
-        // 极度关键：开启 SQLite 的 WAL 模式 (Write-Ahead Logging)
-        // 这个魔法参数能让 SQLite 完美支持多线程读写不锁死！
-        config.addDataSourceProperty("journal_mode", "WAL");
+        config.setJdbcUrl(ConfigsManager.DB_URL);
+        // 开启 SQLite WAL 模式，通过 connectionInitSql 执行 PRAGMA 才是对 SQLite JDBC 正确的做法
+        config.setConnectionInitSql("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
 
         config.setMaximumPoolSize(10); // 维持 10 个物理连接
         config.setConnectionTimeout(3000); // 拿不到连接最多等 3 秒

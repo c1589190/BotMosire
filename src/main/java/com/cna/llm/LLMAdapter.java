@@ -79,6 +79,8 @@ public class LLMAdapter {
         payload.put("stream", true); // 强制开启流式输出
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
+        if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
+        if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
             payload.put("enable_thinking", true);
             //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
@@ -188,6 +190,8 @@ public class LLMAdapter {
         payload.put("stream", false); // 【物理阻断流式】：确保工具调用的 JSON 是一次性完整返回的
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
+        if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
+        if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
             payload.put("enable_thinking", true);
             //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
