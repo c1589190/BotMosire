@@ -240,4 +240,24 @@ public class WorkSpaceManager {
             return "ERROR: 删除失败 - " + e.getMessage();
         }
     }
+
+    // 在 WorkSpaceManager 中新增的初始化方法
+    public void initWebsite() {
+        Path websiteDir = workspaceRoot.resolve("website");
+        Path indexFile = websiteDir.resolve("index.html");
+
+        try {
+            Files.createDirectories(websiteDir);
+            if (!Files.exists(indexFile)) {
+                // 写入一个默认的支持动态接收 LLM 指令的网页模板
+                String defaultHtml = """
+                    啥都木有
+                    """;
+                Files.writeString(indexFile, defaultHtml, StandardCharsets.UTF_8);
+                log.info("[WorkSpace] 默认网站模板已创建: {}", indexFile);
+            }
+        } catch (IOException e) {
+            log.error("[WorkSpace] 初始化 website 目录失败", e);
+        }
+    }
 }

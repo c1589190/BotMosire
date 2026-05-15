@@ -1,31 +1,30 @@
 package com.cna.agent;
 
+import com.cna.Main;
+import com.cna.Utils;
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandlerUnit;
 import com.cna.agent.AgentInputHandlers.ExpectedChatMessageInputHandler;
-import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
+import com.cna.agent.AgentInputHandlers.WebEventInputHandler;
 import com.cna.agent.AgentTask.ChatTask;
+import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTask.ScheduledTask;
 import com.cna.agent.AgentTask.UpdateThoughtsTask;
-import com.cna.Main;
-import com.cna.Utils;
 import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
-import com.cna.agent.AgentTool.io.CdWorkspace;
-import com.cna.agent.AgentTool.io.ReadFile;
-import com.cna.agent.AgentTool.io.SendFileToChat;
-import com.cna.agent.AgentTool.io.WriteFile;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
+import com.cna.llm.CallResult;
+import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
 import com.cna.plugin.MosireAPI;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.cna.llm.LLMAdapter;
-import com.cna.llm.CallResult;
 import lombok.extern.slf4j.Slf4j;
+import com.cna.agent.AgentTool.*;
+import com.cna.agent.AgentTool.io.*;
 import org.slf4j.Logger;
 
 import java.util.*;
@@ -35,7 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class LivingLoop implements MosireAPI {
-    private static final ObjectMapper sharedMapper = new ObjectMapper();
+    //private static final ObjectMapper sharedMapper = new ObjectMapper();
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -63,7 +62,7 @@ public class LivingLoop implements MosireAPI {
     //Input队列
     private final ConcurrentLinkedQueue<DefaultAgentTaskUnit> globalPendingRequests = new ConcurrentLinkedQueue<>();
 
-    private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
+    //private LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
 
     private final Map<Class<? extends DefaultAgentTaskUnit>, DefaultAgentTaskHandler> taskHandlerRegistry = new ConcurrentHashMap<>();
 
@@ -109,6 +108,8 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new ReflectiveCompactionTool());
         this.registerTool(new SendConsoleMessage());
         this.registerTool(new CreatePendingChatTask(this));
+        this.registerTool(new UpdateWebUI());
+        this.registerTool(new ToolUsageReader());
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -119,6 +120,9 @@ public class LivingLoop implements MosireAPI {
         this.registerTaskHandler(new ConsoleChatTaskHandler());
 
         this.registerInputHandler(new ExpectedChatMessageInputHandler());
+
+        this.registerInputHandler(new WebEventInputHandler());
+        this.registerTaskHandler(new WebEventTaskHandler());
     }
 
     private void initLLM(){

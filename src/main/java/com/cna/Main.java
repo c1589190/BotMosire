@@ -7,6 +7,7 @@ import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
 import com.cna.agent.MemoryManager;
 import com.cna.plugin.PluginsManager;
+import com.cna.workspace.WebServer;
 import com.cna.workspace.WorkSpaceManager;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,12 +30,20 @@ public class Main {
 
     public static WorkSpaceManager workspaceManager = new WorkSpaceManager();
 
+    public static WebServer webServer;
+
     public static void main(String[] args){
 
         //new BotGUI();
 
         ConfigsManager.init();
         ConfigsLoader.loadAll();
+
+        workspaceManager.initWebsite(); // 确保 website 目录和初始 index.html 存在
+        // 去掉了你多敲的那个点，并保存了实例
+        webServer = new WebServer(workspaceManager.getCurrentDir());
+        webServer.start(8080);
+
 
         try {
             GlobalNapcatAdapter = new NapcatAdapter();
