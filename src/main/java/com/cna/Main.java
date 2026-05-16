@@ -6,6 +6,8 @@ import com.cna.cmd.ConsoleCommandSystem;
 import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
 import com.cna.agent.MemoryManager;
+import com.cna.db.FeelingDimensionManager;
+import com.cna.db.MemoryDB;
 import com.cna.plugin.PluginsManager;
 import com.cna.workspace.WebServer;
 import com.cna.workspace.WorkSpaceManager;
@@ -35,6 +37,8 @@ public class Main {
     public static void main(String[] args){
 
         //new BotGUI();
+
+        FeelingDimensionManager.init(new MemoryDB());
 
         ConfigsManager.init();
         ConfigsLoader.loadAll();

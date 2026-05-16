@@ -52,12 +52,18 @@ public class MemoryDB {
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "vector_json TEXT NOT NULL, " +
                 "content TEXT NOT NULL)";
+        String createFeelingSql = "CREATE TABLE IF NOT EXISTS Feeling_Dimensions (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "concept TEXT NOT NULL UNIQUE, " +
+                "vector_json TEXT NOT NULL, " +
+                "hit_weight REAL DEFAULT 1.0)";
 
         // 【核心改变】：从 dataSource 拿连接，而不是 DriverManager
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute(createCurrentSql);
             stmt.execute(createDeepSql);
+            stmt.execute(createFeelingSql);
         } catch (SQLException e) {
             log.error("初始化记忆数据库失败", e);
         }
@@ -187,6 +193,118 @@ public class MemoryDB {
             this.vector = vector;
             this.content = content;
         }
+    }
+
+    // ==========================================
+    // Feeling_Dimensions 感觉维度支持库
+    // ==========================================
+
+    // 辅助数据结构：感觉维度
+    public static class FeelingDimension {
+        public final int id;
+        public final String concept;
+        public final double[] vector;
+        public final float weight;
+
+        public FeelingDimension(int id, String concept, double[] vector, float weight) {
+            this.id = id;
+            this.concept = concept;
+            this.vector = vector;
+            this.weight = weight;
+        }
+    }
+
+    /**
+     * 插入新的感觉维度
+     */
+    public void insertFeelingDimension(String concept, double[] vector, float initialWeight) {
+        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight) VALUES (?, ?, ?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, concept);
+            pstmt.setString(2, mapper.writeValueAsString(vector));
+            pstmt.setFloat(3, initialWeight);
+            pstmt.executeUpdate();
+            log.info("[MemoryDB] 成功写入新感觉维度: {}", concept);
+        } catch (SQLException | JsonProcessingException e) {
+            log.error("插入感觉维度失败: " + concept, e);
+        }
+    }
+
+    /**
+     * 获取全量感觉维度加载到内存
+     */
+    public List<FeelingDimension> getAllFeelingDimensions() {
+        List<FeelingDimension> result = new ArrayList<>();
+        String sql = "SELECT id, concept, vector_json, hit_weight FROM Feeling_Dimensions";
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                double[] vector = mapper.readValue(rs.getString("vector_json"), double[].class);
+                result.add(new FeelingDimension(
+                        rs.getInt("id"),
+                        rs.getString("concept"),
+                        vector,
+                        rs.getFloat("hit_weight")
+                ));
+            }
+        } catch (Exception e) {
+            log.error("获取全量感觉维度失败", e);
+        }
+        return result;
+    }
+
+    /**
+     * 根据触发率/频率给特定维度增加权重
+     */
+    public void addWeightToDimension(int id, float addedWeight) {
+        String sql = "UPDATE Feeling_Dimensions SET hit_weight = hit_weight + ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setFloat(1, addedWeight);
+            pstmt.setInt(2, id);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("更新感觉维度权重失败 ID: " + id, e);
+        }
+    }
+
+    /**
+     * 记忆衰减机制 (Tick 底层支持)
+     * 全局扣除常数权重，并物理删除跌破 0 的死亡节点
+     * @return 返回被物理删除的节点数量
+     */
+    public int applyGlobalDecay(float decayAmount) {
+        int deletedCount = 0;
+        try (Connection conn = dataSource.getConnection()) {
+            // 开启事务，保证扣分和删除是一个原子操作
+            conn.setAutoCommit(false);
+            try {
+                // 1. 全局无差别扣分
+                String updateSql = "UPDATE Feeling_Dimensions SET hit_weight = hit_weight - ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                    updateStmt.setFloat(1, decayAmount);
+                    updateStmt.executeUpdate();
+                }
+
+                // 2. 清扫战场：删除所有权重 <= 0 的枯萎节点
+                String deleteSql = "DELETE FROM Feeling_Dimensions WHERE hit_weight <= 0";
+                try (PreparedStatement deleteStmt = conn.prepareStatement(deleteSql)) {
+                    deletedCount = deleteStmt.executeUpdate();
+                }
+
+                conn.commit(); // 提交事务
+            } catch (SQLException e) {
+                conn.rollback(); // 报错直接回滚，保护脑区数据
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 执行全局记忆衰减失败", e);
+        }
+        return deletedCount;
     }
 
 

@@ -4,6 +4,7 @@ import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTask.UpdateThoughtsTask;
 import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
+import com.cna.agent.MemoryManager;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
@@ -29,6 +30,7 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
         UpdateThoughtsTask thoughtsTask = (UpdateThoughtsTask) task;
 
         Map<String, Object> baseData = new HashMap<>();
+        baseData.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE + ConfigsManager.EMB_MEMORY_SIZE));
         baseData.put("taskText", thoughtsTask.getTaskText());
         baseData.put("current_interests", MDManager.read("interests.md", ""));
         baseData.put("scheduled", MDManager.read("scheduled.md", ""));

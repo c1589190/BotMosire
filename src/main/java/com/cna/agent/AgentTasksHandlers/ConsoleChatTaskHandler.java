@@ -1,53 +1,38 @@
 package com.cna.agent.AgentTasksHandlers;
 
-import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.ConsoleChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTool.ReflectiveCompactionTool;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
-import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
-import lombok.extern.slf4j.Slf4j;
 
-import java.util.HashMap;
 import java.util.Map;
 
-@Slf4j
-public class ConsoleChatTaskHandler implements DefaultAgentTaskHandler{
+public class ConsoleChatTaskHandler extends AbstractAgentTaskHandler {
+
     @Override
     public Class<? extends DefaultAgentTaskUnit> getSupportedTaskClass() {
-        return ConsoleChatTask.class; // 认领class
+        return ConsoleChatTask.class;
     }
 
     @Override
-    public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
-
+    protected void appendCustomTools(ArrayNode toolsDefinitionArray) {
+        // 子类专属工具
         toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
+    }
 
-        ConsoleChatTask Task = (ConsoleChatTask) task;
+    @Override
+    protected boolean prepareBaseData(DefaultAgentTaskUnit task, Map<String, Object> baseData, LivingLoop engine) {
+        // 自动继承了 taskText，只需要加专属的 deep_memories
+        baseData.put("deep_memories", LLManager.getDeepMemories(task.getTaskText(), new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG), ConfigsManager.MEMORY_DEPTH));
+        return true; // 允许执行
+    }
 
-        Map<String, Object> baseData = new HashMap<>();
-        baseData.put("taskText", Task.getTaskText());
-        baseData.put("deep_memories", LLManager.getDeepMemories(Task.getTaskText(), new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG), ConfigsManager.MEMORY_DEPTH));
-
-        // 调用 LivingLoop 的公共引擎
-        DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
-                Task,
-                new ScenePromptsManager(ConsoleChatTask.class.getName()),
-                baseData,
-                new LLMAdapter(ConfigsManager.BRAIN_CONFIG),
-                toolsDefinitionArray,
-                "系统聊天任务"
-        );
-
-        if (retTask == null) {
-            log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
-            return;
-        }
-
-        engine.pushTask(retTask);
+    @Override
+    protected String getTaskDescription() {
+        return "系统终端聊天任务";
     }
 }

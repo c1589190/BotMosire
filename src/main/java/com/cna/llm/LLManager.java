@@ -67,14 +67,16 @@ public class LLManager {
 
         Map<String, Object> data = dataModel;
         // 注入一些必要前置参数
-        data.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+        if(!data.containsKey("current_memories")) {
+            data.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+        }
         data.put("now_time", Utils.getNowFormatted());
         data.put("current_thoughts", MDManager.read("thoughts.md", ""));
         data.put("tools_guide", MDManager.read("prompts/toolsGuide.md",""));
 
         // 在内存中渲染出完美的 Prompt
         String userPrompt = render(userTemplate, dataModel);
-        log.info("[LLMManager] Prompt [\n{}\n] 渲染完毕，准备提交大模型.", userPrompt);
+        log.debug("[LLMManager] Prompt [\n{}\n] 渲染完毕，准备提交大模型.", userPrompt);
 
         // 呼叫大模型并直接返回结果
         if (tools == null) {

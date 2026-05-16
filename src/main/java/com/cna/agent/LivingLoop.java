@@ -14,6 +14,7 @@ import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
+import com.cna.db.FeelingDimensionManager;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -259,6 +260,8 @@ public class LivingLoop implements MosireAPI {
 
                 // 【定时计划任务】
                 if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME && ConfigsManager.SCHEDULE_CYCLING_TIME > 0) {
+                    FeelingDimensionManager.getInstance().tick();
+                    //个人认为感觉权重的衰减应当和执行了多少任务有关，因此放在这了
                     log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
                     TaskQueue.offer(new ScheduledTask()); // 变更为 offer
                     this.trimTaskQueue();

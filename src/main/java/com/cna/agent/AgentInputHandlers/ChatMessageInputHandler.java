@@ -6,16 +6,9 @@ import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
-import com.cna.config.ScenePromptsManager;
-import com.cna.db.MDManager;
 import com.cna.agent.MemoryManager;
-import com.cna.llm.CallResult;
-import com.cna.llm.LLMAdapter;
-import com.cna.llm.LLManager;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.cna.db.FeelingDimensionManager; // 引入感觉中枢
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
@@ -28,6 +21,10 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
     protected LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
     protected Set<String> updatedRoles = new HashSet<>();
     protected final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
+
+    // 触发脊髓反射的兴趣得分门槛
+    // TODO: 建议后续放到 ConfigsManager 中
+    private static final float SPINAL_REFLEX_THRESHOLD = 0.4f;
 
     @Override
     public Class<? extends DefaultAgentInputUnit> getSupportedInputClass() {
@@ -45,7 +42,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
             List<DefaultAgentInputUnit> unknownInputs = new ArrayList<>();
 
             // ==========================================
-            // 阶段 1：本地极速分拣
+            // 阶段 1：本地极速分拣 (属于已有任务的直接合并)
             // ==========================================
             for (DefaultAgentInputUnit input : inputs) {
 
@@ -57,7 +54,6 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
                         existingChatTask = ChatTaskPreparationPool.get(senderRole);
                         existingChatTask.addContext(((ChatMessageInput) input).getContent());
 
-                        // 若這條消息有引用，更新任務的 replyToMessageId
                         long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
                         if (quotedId > 0) {
                             existingChatTask.setReplyToMessageId(quotedId);
@@ -74,124 +70,87 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
                         unknownInputs.add(input);
                     }
                 }
-
             }
 
             // ==========================================
-            // 阶段 2：小模型审查新面孔
+            // 阶段 2：机械感觉中枢初筛 (脊髓反射替代小模型)
             // ==========================================
             if (!unknownInputs.isEmpty()) {
-                log.info("[Gatekeeper] 审查input……");
-                StringBuilder currentInputs = new StringBuilder();
-                for (int i = 0; i < unknownInputs.size(); i++) {
-                    currentInputs.append(i).append(": { ");
-                    currentInputs.append(unknownInputs.get(i).getInputText());
-                    currentInputs.append(" }\n");
-                }
+                log.info("[Gatekeeper-Feeling] 启动底层感觉评估引擎，开始扫描 {} 条新消息...", unknownInputs.size());
 
-                log.info("[Gatekeeper] 正在批量审阅 {} 条全新消息...", unknownInputs.size());
-
-
-                String namespace = ((ChatMessageInput) unknownInputs.get(0)).getSource();
-                String recentHistory = ChatAdaptersManager.getHistory(namespace, ConfigsManager.CHATHISTORY_VIEW_AMOUNT);
-
-                Map<String, Object> data = new HashMap<>();
-                data.put("currentInputs", currentInputs.toString());
-                data.put("recent_history", recentHistory); // 给小模型也塞一份上下文
-                data.put("current_interests", MDManager.read("interests.md", ""));
-
-                CallResult result = LLManager.executeScene(
-                        new ScenePromptsManager(ChatMessageInput.class.getName()).getSolvingPrompt(),
-                        data,
-                        new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG),
-                        buildAttentionToolDefinition()
-                );
-
-                // 【修改】：使用 Map 来存储消息单元以及对应的判断理由
                 Map<DefaultAgentInputUnit, String> interestingInputsWithReasons = new LinkedHashMap<>();
 
-                if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
-                    JsonNode firstToolCall = result.getToolCalls().get(0);
-                    if ("submit_attention_list".equals(firstToolCall.path("function").path("name").asText())) {
-                        String argumentsStr = firstToolCall.path("function").path("arguments").asText();
-                        try {
-                            ObjectMapper mapper = new ObjectMapper();
-                            JsonNode argsNode = mapper.readTree(argumentsStr);
+                // 获取感觉中枢实例
+                FeelingDimensionManager feelingManager = FeelingDimensionManager.getInstance();
 
-                            // 【修改】：解析新的 selected_items 结构
-                            JsonNode itemsArray = argsNode.path("selected_items");
+                for (DefaultAgentInputUnit input : unknownInputs) {
+                    if (!(input instanceof ChatMessageInput)) continue;
 
-                            if (itemsArray.isArray() && !itemsArray.isEmpty()) {
-                                log.info("[Gatekeeper] 命中！提取到高价值信号及理由: {}", itemsArray.toString());
-                                for (JsonNode itemNode : itemsArray) {
-                                    int index = itemNode.path("index").asInt(-1);
-                                    String reason = itemNode.path("reason").asText("");
+                    String textContent = ((ChatMessageInput) input).getContent();
 
-                                    if (index >= 0 && index < unknownInputs.size()) {
-                                        interestingInputsWithReasons.put(unknownInputs.get(index), reason);
-                                    }
-                                }
-                            } else {
-                                log.info("[Gatekeeper] 全盘否定，判定所有新消息均为噪音。");
-                            }
-                        } catch (Exception e) {
-                            log.error("[Gatekeeper] 解析 JSON 崩溃: {}", argumentsStr, e);
-                        }
+                    if (feelingManager == null) {
+                        // 防御性编程：如果没有初始化 feelingManager，默认全盘接收（退化成弱智哈基米）
+                        log.warn("[Gatekeeper-Feeling] 感觉引擎未挂载，默认放行此消息。");
+                        interestingInputsWithReasons.put(input, "系统感觉中枢离线，出于本能接收所有刺激");
+                        continue;
                     }
-                } else {
-                    log.warn("[Gatekeeper] 未触发工具，产生了非标输出: {}", result.getContent());
+
+                    // 核心调用：极速计算该条文本在潜意识库里的最高加权得分
+                    FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(textContent);
+
+                    log.debug("[Gatekeeper-Feeling] 文本: [{}] | 匹配概念: [{}] | 得分: {}",
+                            textContent.substring(0, Math.min(textContent.length(), 10)), eval.topConcept, eval.finalScore);
+
+                    // 唯物阈值判断
+                    if (eval.finalScore >= SPINAL_REFLEX_THRESHOLD) {
+                        String reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (潜意识得分: %.2f)", eval.topConcept, eval.finalScore);
+                        interestingInputsWithReasons.put(input, reason);
+                        log.info("🎯 神经突触激活！消息被拦截放行。原因：{}", reason);
+                    }
                 }
 
-                // 处理被小模型放行的消息
+                if (interestingInputsWithReasons.isEmpty()) {
+                    log.info("[Gatekeeper-Feeling] 全盘否定，判定所有新消息均为无意义噪音（未打破阈值 {}）。", SPINAL_REFLEX_THRESHOLD);
+                }
+
+                // 处理被机械感觉引擎放行的消息
                 for (Map.Entry<DefaultAgentInputUnit, String> entry : interestingInputsWithReasons.entrySet()) {
                     DefaultAgentInputUnit input = entry.getKey();
                     String reason = entry.getValue();
 
-                    String source = null;
-                    String source_name = null;
-                    String senderRole = null;
-                    String senderName = null;
-                    String text = "";
-
-                    if (input instanceof ChatMessageInput) {
-                        senderRole = ((ChatMessageInput) input).getRole();
-                        senderName = ((ChatMessageInput) input).getRole_name();
-                        source = ((ChatMessageInput) input).getSource();
-                        source_name = ((ChatMessageInput) input).getSource_name();
-                        text = ((ChatMessageInput) input).getContent();
-                    }
+                    String source = ((ChatMessageInput) input).getSource();
+                    String source_name = ((ChatMessageInput) input).getSource_name();
+                    String senderRole = ((ChatMessageInput) input).getRole();
+                    String senderName = ((ChatMessageInput) input).getRole_name();
+                    String text = ((ChatMessageInput) input).getContent();
 
                     if (senderRole != null && !senderRole.isBlank()) {
                         long quotedId = ((ChatMessageInput) input).getQuotedMessageId();
 
                         // 组装要添加到上下文中供主脑参考的理由
-                        String reasonContext = "( 注意到这条消息的理由: " + reason + " )";
+                        String reasonContext = "( 你的系统本能捕获了这条消息，理由是: " + reason + " )";
 
                         if (ChatTaskPreparationPool.containsKey(senderRole)) {
                             ChatTask existingTask = ChatTaskPreparationPool.get(senderRole);
                             existingTask.addContext(reasonContext);
                             existingTask.addContext(text);
-
-                            if (quotedId > 0) {
-                                existingTask.setReplyToMessageId(quotedId);
-                            }
+                            if (quotedId > 0) existingTask.setReplyToMessageId(quotedId);
 
                             List<String> l = new LinkedList<>();
-                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
+                            l.add("本能决定回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
                             MemoryManager.getInstance().inputCurrentMemorys(l);
 
-                            log.info("小模型判定有价值，为当前批次的新目标 [Role:{}] 合并追加了连贯消息及理由", senderRole);
                         } else {
                             ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
                             task.addContext(text);
-                            task.addContext(reasonContext); // 【修改】：追加判断理由
+                            task.addContext(reasonContext);
                             ChatTaskPreparationPool.put(senderRole, task);
 
                             List<String> l = new LinkedList<>();
-                            l.add("想要回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
+                            l.add("本能决定回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
                             MemoryManager.getInstance().inputCurrentMemorys(l);
 
-                            log.info("小模型判定有价值，为新目标 [Role:{}] 创建了预备任务及理由", senderRole);
+                            log.info("🎯 为新目标 [Role:{}] 创建了预备任务及潜意识理由", senderRole);
                         }
                         updatedRoles.add(senderRole);
                     }
@@ -202,46 +161,35 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
                 // ==========================================
                 if (updatedRoles.isEmpty()) {
                     List<DefaultAgentInputUnit> rejectedInputs = new ArrayList<>(unknownInputs);
-                    // 【修改】：从原来的 interestingInputs 改为从 Map 的 KeySet 中移除
                     rejectedInputs.removeAll(interestingInputsWithReasons.keySet());
 
                     if (!rejectedInputs.isEmpty()) {
-
                         if (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE) {
-                            log.info("[CognitiveCycle] 💤 系统闲得发慌，决定从垃圾桶里捞一条消息随便回回...");
+                            log.info("[CognitiveCycle] 💤 系统感到空虚，决定随机捕获一条路过的低价值信号...");
 
                             DefaultAgentInputUnit luckyInput = rejectedInputs.get(new java.util.Random().nextInt(rejectedInputs.size()));
 
-                            String source = null;
-                            String source_name = null;
-                            String senderRole = null;
-                            String senderName = null;
-                            String text = "";
-
-                            if (luckyInput instanceof ChatMessageInput) {
-                                senderRole = ((ChatMessageInput) luckyInput).getRole();
-                                senderName = ((ChatMessageInput) luckyInput).getRole_name();
-                                source = ((ChatMessageInput) luckyInput).getSource();
-                                source_name = ((ChatMessageInput) luckyInput).getSource_name();
-                                text = ((ChatMessageInput) luckyInput).getContent();
-                            }
+                            String source = ((ChatMessageInput) luckyInput).getSource();
+                            String source_name = ((ChatMessageInput) luckyInput).getSource_name();
+                            String senderRole = ((ChatMessageInput) luckyInput).getRole();
+                            String senderName = ((ChatMessageInput) luckyInput).getRole_name();
+                            String text = ((ChatMessageInput) luckyInput).getContent();
 
                             if (senderRole != null && !senderRole.isBlank()) {
                                 long quotedId = ((ChatMessageInput) luckyInput).getQuotedMessageId();
                                 ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
 
-                                String innerMonologue = "这条消息 [ " + text + " ] 原本不在你的兴趣雷达内，你觉得它是废话。但是因为你现在实在太无聊了，没有任何人找你，你决定勉为其难地随便回复一下它。";
+                                String innerMonologue = "这条消息 [ " + text + " ] 在你的感觉中枢里得分极低，你本能地认为它是废话。但是由于现在环境刺激匮乏，你决定勉为其难地随便回复一下它，维持活性。";
                                 task.addContext(innerMonologue);
 
                                 ChatTaskPreparationPool.put(senderRole, task);
-
                                 updatedRoles.add(senderRole);
 
                                 List<String> l = new LinkedList<>();
-                                l.add("实在太闲了，从垃圾桶里捞了一条原本不想理的消息来回复:{\n" + luckyInput.getInputText() + "\n};");
+                                l.add("由于外界刺激匮乏，从垃圾桶里捞了一条低价值消息强制产生反应:{\n" + luckyInput.getInputText() + "\n};");
                                 MemoryManager.getInstance().inputCurrentMemorys(l);
 
-                                log.info("🎲 运气爆发，被拦截的消息 [Role:{}] 成功复活进入预备池", senderRole);
+                                log.info("🎲 随机活性维持触发，低价值消息 [Role:{}] 进入预备池", senderRole);
                             }
                         }
                     }
@@ -277,48 +225,5 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
             }
         }
         updatedRoles.clear();
-    }
-
-    // 【修改】：重构 Tool 定义，让大模型返回对象数组包含 index 和 reason
-    private ArrayNode buildAttentionToolDefinition() {
-        ObjectMapper mapper = new ObjectMapper();
-        ArrayNode tools = mapper.createArrayNode();
-
-        ObjectNode tool = tools.addObject();
-        tool.put("type", "function");
-
-        ObjectNode function = tool.putObject("function");
-        function.put("name", "submit_attention_list");
-        function.put("description", "提交主脑需要关注的消息列表及选中理由");
-
-        ObjectNode parameters = function.putObject("parameters");
-        parameters.put("type", "object");
-
-        ObjectNode properties = parameters.putObject("properties");
-
-        ObjectNode selectedItems = properties.putObject("selected_items");
-        selectedItems.put("type", "array");
-        selectedItems.put("description", "被选中的消息及其理由的列表");
-
-        ObjectNode items = selectedItems.putObject("items");
-        items.put("type", "object");
-
-        ObjectNode itemProperties = items.putObject("properties");
-
-        ObjectNode indexNode = itemProperties.putObject("index");
-        indexNode.put("type", "integer");
-        indexNode.put("description", "被选中消息的数字编号（index）");
-
-        ObjectNode reasonNode = itemProperties.putObject("reason");
-        reasonNode.put("type", "string");
-        reasonNode.put("description", "判定这条消息有价值并需要回复的详细理由");
-
-        ArrayNode itemRequired = items.putArray("required");
-        itemRequired.add("index").add("reason");
-
-        ArrayNode required = parameters.putArray("required");
-        required.add("selected_items");
-
-        return tools;
     }
 }
