@@ -35,6 +35,13 @@ public class ConfigsManager {
     public static final int TASK_COUNT_FOR_REFLECTION;
     public static final int PENDING_CHAT_WAITING_TIME;
 
+    public static final double NOVELTY_THRESHOLD;
+    public static final double DECAY_CONSTANT;
+    public static final double SPINAL_REFLEX_THRESHOLD;
+    public static final int FD_HABITUATION_LIMIT;
+    public static final double FD_BLUNT_WEIGHT; // 欲望/注意力下限
+    public static final double FD_MAX_WEIGHT;
+
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
     public static final int HISTORY_VIEW_AMOUNT;
@@ -179,6 +186,14 @@ public class ConfigsManager {
         CHATHISTORY_VIEW_AMOUNT = getInt("memory.chatHistoryViewAmount", 20);
         MEMORY_DEPTH = getInt("memory.memoryDepth", 3);
         DB_URL = getString("memory.dbUrl", "jdbc:sqlite:agent_memory.db");
+
+        NOVELTY_THRESHOLD = getDouble("memory.noveltyThreshold", 0.6);
+        DECAY_CONSTANT = getDouble("memory.decayConstant", 0.01);
+        SPINAL_REFLEX_THRESHOLD = getDouble("memory.spinalReflexThreshold", 0.45);
+        FD_BLUNT_WEIGHT=getDouble("memory.fdBluntWeight", 0.25);
+        FD_MAX_WEIGHT=getDouble("memory.fdMaxWeight", 1.0);
+        FD_HABITUATION_LIMIT = getInt("memory.fdHabituationLimit", 10);
+
 
         // ==========================================
         // 4. Napcat 物理通信配置

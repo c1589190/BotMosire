@@ -23,8 +23,7 @@ public class ChatMessageInputHandler implements DefaultAgentInputHandlerUnit {
     protected final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
 
     // 触发脊髓反射的兴趣得分门槛
-    // TODO: 建议后续放到 ConfigsManager 中
-    private static final float SPINAL_REFLEX_THRESHOLD = 0.4f;
+    private static final double SPINAL_REFLEX_THRESHOLD = ConfigsManager.SPINAL_REFLEX_THRESHOLD;
 
     @Override
     public Class<? extends DefaultAgentInputUnit> getSupportedInputClass() {
