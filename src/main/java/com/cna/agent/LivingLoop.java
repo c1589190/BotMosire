@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import com.cna.agent.AgentTool.*;
 import com.cna.agent.AgentTool.io.*;
@@ -72,6 +73,10 @@ public class LivingLoop implements MosireAPI {
     DefaultAgentTaskUnit lastSolvingTask = null;
     //状态管理方法是，当一个任务结束时，这玩意也必须成为null
 
+
+    @Getter
+    AtomicInteger cognitiveHeat = new AtomicInteger(0); // 认知热度，模拟大脑疲劳度，数值越高代表越疲劳
+
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
     private LLMAdapter advancedLLM;
@@ -120,9 +125,9 @@ public class LivingLoop implements MosireAPI {
         this.registerTaskHandler(new UpdateThoughtsTaskHandler());  // 潜意识反思
         this.registerTaskHandler(new ConsoleChatTaskHandler());
 
-        this.registerInputHandler(new ExpectedChatMessageInputHandler());
+        this.registerInputHandler(new ExpectedChatMessageInputHandler(this));
 
-        this.registerInputHandler(new WebEventInputHandler());
+        this.registerInputHandler(new WebEventInputHandler(this));
         this.registerTaskHandler(new WebEventTaskHandler());
     }
 
@@ -236,6 +241,9 @@ public class LivingLoop implements MosireAPI {
                 this.tickCounter_CognitiveCycle ++;
 
                 if (this.tickCounter_CognitiveCycle >= ConfigsManager.COGNITIVE_CYCLE_TICKS) {
+
+                    this.cognitiveHeat.set(Math.max(this.cognitiveHeat.get() - 1, 0));
+
                     if (isGatekeeperThinking.compareAndSet(false, true)) {
                         gatekeeperExecutor.submit(() -> {
                             try {
@@ -471,7 +479,7 @@ public class LivingLoop implements MosireAPI {
             for (Map.Entry<Class<? extends DefaultAgentInputUnit>, List<DefaultAgentInputUnit>> entry : groupedInputs.entrySet()) {
                 DefaultAgentInputHandlerUnit handler = inputHandlerRegistry.get(entry.getKey());
                 if (handler != null) {
-                    handler.handleInputs(entry.getValue(), this);
+                    handler.handleInputs(entry.getValue());
                 } else {
                     log.warn("[CognitiveCycle] 收到未知的 Input 类型: {}，已丢弃", entry.getKey().getSimpleName());
                 }
@@ -479,7 +487,7 @@ public class LivingLoop implements MosireAPI {
         }
 
         for (DefaultAgentInputHandlerUnit handler : inputHandlerRegistry.values()) {
-            handler.tick(this);
+            handler.tick();
         }
     }
 

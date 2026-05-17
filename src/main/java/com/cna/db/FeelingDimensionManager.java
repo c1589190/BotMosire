@@ -123,9 +123,9 @@ public class FeelingDimensionManager {
                             finalLocalWeight = currentWeight + weightToAdd;
                             finalLocalCount = currentCount + 1;
 
-                            // 物理落盘：在调用边界将 double 精确转换为原方法需要的 float
-                            memoryDB.addWeightToDimension(bestMatch.id, (float) weightToAdd);
-                            log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}] (相似度:{%.4f})，处于拓展期。权重加成后: %.4f, 触发计数: {}/{}",
+                            // 物理落盘：直接使用 double
+                            memoryDB.addWeightToDimension(bestMatch.id, weightToAdd);
+                            log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}] (相似度:{})，处于拓展期。权重加成后: {}, 触发计数: {}/{}",
                                     concept, bestMatch.concept, highestSim, finalLocalWeight, finalLocalCount, HABITUATION_LIMIT);
                             feelingLog.info("BOOST    | concept={} | weight={}→{} | sim={} | count={}/{} | novelty_thr={}",
                                     bestMatch.concept,
@@ -142,7 +142,7 @@ public class FeelingDimensionManager {
                             finalLocalWeight = targetWeight;
                             finalLocalCount = currentCount + 1;
 
-                            log.warn("[Attention-Engine] ⚠️ 审美疲劳：概念 [{}] 连续轰炸老维度 [{}]。激活比例降级指数，目标新权重: %.4f, 连续频次: {}",
+                            log.warn("[Attention-Engine] ⚠️ 审美疲劳：概念 [{}] 连续轰炸老维度 [{}]。激活比例降级指数，目标新权重: {}, 连续频次: {}",
                                     concept, bestMatch.concept, finalLocalWeight, finalLocalCount);
 
                             // 【状态 C：脱敏触底，彻底重置复活】
@@ -158,8 +158,8 @@ public class FeelingDimensionManager {
                                         String.format("%.4f", currentWeight), String.format("%.4f", BLUNT_WEIGHT),
                                         currentCount, BLUNT_WEIGHT);
                             } else {
-                                // 未触底，通过负数 Delta 注入原版加过的方法，实现无损相除扣分
-                                memoryDB.addWeightToDimension(bestMatch.id, (float) weightDelta);
+                                // 未触底，注入原版加过的方法，实现无损相除扣分
+                                memoryDB.addWeightToDimension(bestMatch.id, weightDelta);
                                 feelingLog.warn("FATIGUE  | concept={} | weight={}→{} | count={} | ratio={} | habit_limit={}",
                                         bestMatch.concept,
                                         String.format("%.4f", currentWeight), String.format("%.4f", finalLocalWeight),
@@ -169,16 +169,16 @@ public class FeelingDimensionManager {
 
                         // 动态擦除老快照，防止单轮批处理后续相似词汇拿到脏数据
                         currentDimensions.remove(bestMatch);
-                        currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, (float) finalLocalWeight, finalLocalCount));
+                        currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, finalLocalWeight, finalLocalCount));
 
                     } else {
-                        // 新概念初始给 1.0 权重
-                        memoryDB.insertFeelingDimension(concept, conceptVector, 1.0f);
+                        // 新概念初始给 1.0 权重 (统一使用 double)
+                        memoryDB.insertFeelingDimension(concept, conceptVector, 1.0);
                         addedCount++;
-                        log.info("[Feeling] 概念 [{}] 属于未知刺激(最高相似度:{%.4f}), 顺利生长出新维度节点。", concept, highestSim);
+                        log.info("[Feeling] 概念 [{}] 属于未知刺激(最高相似度:{}), 顺利生长出新维度节点。", concept, highestSim);
                         feelingLog.info("NEW      | concept={} | weight=1.00 | sim_to_nearest={} | novelty_thr={}",
                                 concept, String.format("%.4f", highestSim), NOVELTY_THRESHOLD);
-                        currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, 1.0f, 1));
+                        currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, 1.0, 1));
                     }
                 }
 
@@ -191,7 +191,7 @@ public class FeelingDimensionManager {
     }
 
     // ==========================================
-    // 内部工具与原有机制维持 (完全不动)
+    // 内部工具与原有机制维持
     // ==========================================
 
     private ArrayNode buildExtractionTool() {
@@ -231,47 +231,103 @@ public class FeelingDimensionManager {
                 "【日志输入】\n" + taskLog;
     }
 
-    public FeelingEvaluation evaluateInput(String input) {
+    // ==========================================
+    // 感觉评估核心架构
+    // ==========================================
+
+    /**
+     * 感觉维度得分结构体
+     * 用于向大模型提供完整的感知图景（包含相似度、原始权重和最终得分）
+     */
+    public static class DimensionScore {
+        public final String concept;     // 感觉概念
+        public final double similarity;  // 余弦相似度 (当前输入与该概念的客观关联度)
+        public final double weight;      // 潜意识权重 (系统对该概念的重视/疲劳程度)
+        public final double finalScore;  // 最终得分 (similarity * weight)
+
+        public DimensionScore(String concept, double similarity, double weight, double finalScore) {
+            this.concept = concept;
+            this.similarity = similarity;
+            this.weight = weight;
+            this.finalScore = finalScore;
+        }
+    }
+
+    /**
+     * 【重构底座】：评估输入文本，计算并返回所有被触动的感觉维度（按最终得分降序）
+     * 它可以供长期记忆模块调用，用于生成“潜意识人设提示词”。
+     */
+    public List<DimensionScore> evaluateAllDimensions(String input) {
         double[] inputVector = getEmbeddingMock(input);
         List<FeelingDimension> dimensions = memoryDB.getAllFeelingDimensions();
-        boolean shouldLog = Math.random() < 0.1;
+        List<DimensionScore> scoredList = new ArrayList<>();
 
         if (dimensions.isEmpty()) {
+            return scoredList;
+        }
+
+        // 1. 遍历计算所有的感觉共振
+        for (FeelingDimension dim : dimensions) {
+            double sim = cosineSimilarity(inputVector, dim.vector);
+            double finalScore = sim * dim.weight;
+            scoredList.add(new DimensionScore(dim.concept, sim, dim.weight, finalScore));
+        }
+
+        // 2. 按最终得分降序排列 (最高关注度在前)
+        scoredList.sort((a, b) -> Double.compare(b.finalScore, a.finalScore));
+
+        return scoredList;
+    }
+
+    // ==========================================
+    // 兼容层：脊髓反射单点拦截 (Gatekeeper 专用)
+    // ==========================================
+
+    public static class FeelingEvaluation {
+        public final String topConcept;
+        public final double finalScore;
+        public FeelingEvaluation(String topConcept, double finalScore) {
+            this.topConcept = topConcept;
+            this.finalScore = finalScore;
+        }
+    }
+
+    /**
+     * 【套壳降维】：仅获取最强烈的那一个感知，用于极速输入拦截
+     */
+    public FeelingEvaluation evaluateInput(String input) {
+        boolean shouldLog = Math.random() < 0.1;
+
+        // 核心：直接调用全新的全息评估底座
+        List<DimensionScore> allScores = evaluateAllDimensions(input);
+
+        if (allScores.isEmpty()) {
             if (shouldLog) {
                 feelingLog.info("EVAL     | input={} | verdict=NO_DIMS", truncate(input, 30));
             }
-            return new FeelingEvaluation("none", 0.0f);
+            return new FeelingEvaluation("none", 0.0);
         }
 
-        List<double[]> scored = new ArrayList<>(dimensions.size());
-        for (int i = 0; i < dimensions.size(); i++) {
-            FeelingDimension dim = dimensions.get(i);
-            double sim = cosineSimilarity(inputVector, dim.vector);
-            double finalScore = sim * dim.weight;
-            scored.add(new double[]{i, sim, finalScore});
-        }
-        scored.sort((a, b) -> Double.compare(b[2], a[2]));
-
-        FeelingDimension bestMatch = dimensions.get((int) scored.get(0)[0]);
-        double highestFinalScore = scored.get(0)[2];
+        // 斩首行动：只取排在第一位的最高分维度
+        DimensionScore bestMatch = allScores.get(0);
 
         if (shouldLog) {
             StringBuilder top3 = new StringBuilder("[");
-            int n = Math.min(3, scored.size());
+            int n = Math.min(3, allScores.size());
             for (int i = 0; i < n; i++) {
-                FeelingDimension d = dimensions.get((int) scored.get(i)[0]);
-                double s = scored.get(i)[1];
-                double f = scored.get(i)[2];
-                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", d.concept, s, d.weight, f));
+                DimensionScore ds = allScores.get(i);
+                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", ds.concept, ds.similarity, ds.weight, ds.finalScore));
                 if (i < n - 1) top3.append(", ");
             }
             top3.append("]");
             feelingLog.info("EVAL     | input={} | top3={} | best_score={}",
-                    truncate(input, 30), top3.toString(), String.format("%.4f", highestFinalScore));
+                    truncate(input, 30), top3.toString(), String.format("%.4f", bestMatch.finalScore));
         }
 
-        log.debug("[Feeling] 最佳匹配维度: {}, 最终得分: {}", bestMatch.concept, highestFinalScore);
-        return new FeelingEvaluation(bestMatch.concept, (float) highestFinalScore);
+        log.debug("[Feeling] 最佳匹配维度: {}, 最终得分: {}", bestMatch.concept, bestMatch.finalScore);
+
+        // 组装回原本的单体结构返回，旧代码完全不用改
+        return new FeelingEvaluation(bestMatch.concept, bestMatch.finalScore);
     }
 
     private static String truncate(String s, int n) {
@@ -287,15 +343,6 @@ public class FeelingDimensionManager {
                 DECAY_CONSTANT, forgottenNodes);
         if (forgottenNodes > 0) {
             log.info("[Feeling] 衰减完成。系统物理遗忘了 {} 个枯萎的神经维度。", forgottenNodes);
-        }
-    }
-
-    public static class FeelingEvaluation {
-        public final String topConcept;
-        public final float finalScore;
-        public FeelingEvaluation(String topConcept, float finalScore) {
-            this.topConcept = topConcept;
-            this.finalScore = finalScore;
         }
     }
 

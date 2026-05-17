@@ -13,7 +13,8 @@ import java.util.List;
 
 @Slf4j
 public class MemoryDB {
-    private final ObjectMapper mapper = new ObjectMapper();
+    // ObjectMapper 是线程安全的，建议作为 static final 共用
+    private static final ObjectMapper mapper = new ObjectMapper();
     private static HikariDataSource dataSource;
 
     public MemoryDB() {
@@ -51,7 +52,6 @@ public class MemoryDB {
                 "vector_json TEXT NOT NULL, " +
                 "content TEXT NOT NULL)";
 
-        // 【优化升级】：表单加入了 trigger_count 字段，用于记录该维度的历史累积触发频次
         String createFeelingSql = "CREATE TABLE IF NOT EXISTS Feeling_Dimensions (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "concept TEXT NOT NULL UNIQUE, " +
@@ -195,8 +195,8 @@ public class MemoryDB {
         public final int id;
         public final String concept;
         public final double[] vector;
-        public final double weight;
-        public final int triggerCount; // 【新增】对外暴露触发频次
+        public final double weight; // 保持为 double
+        public final int triggerCount;
 
         public FeelingDimension(int id, String concept, double[] vector, double weight, int triggerCount) {
             this.id = id;
@@ -209,14 +209,15 @@ public class MemoryDB {
 
     /**
      * 插入新的感觉维度
+     * 修改：initialWeight 从 float 改为 double
      */
-    public void insertFeelingDimension(String concept, double[] vector, float initialWeight) {
+    public void insertFeelingDimension(String concept, double[] vector, double initialWeight) {
         String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, ?, 1)";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, concept);
             pstmt.setString(2, mapper.writeValueAsString(vector));
-            pstmt.setFloat(3, initialWeight);
+            pstmt.setDouble(3, initialWeight); // 统一使用 setDouble
             pstmt.executeUpdate();
             log.info("[MemoryDB] 成功写入新感觉维度: {}", concept);
         } catch (SQLException | JsonProcessingException e) {
@@ -239,7 +240,7 @@ public class MemoryDB {
                         rs.getInt("id"),
                         rs.getString("concept"),
                         vector,
-                        rs.getFloat("hit_weight"),
+                        rs.getDouble("hit_weight"), // 修改：从 getFloat 改为 getDouble
                         rs.getInt("trigger_count")
                 ));
             }
@@ -250,15 +251,15 @@ public class MemoryDB {
     }
 
     /**
-     * 【重构升级】：更新特定维度权重，并累加触发频次计数。
-     * @return 返回更新后该神经节点的最新累积触发次数，方便上层进行习惯化评估
+     * 更新特定维度权重，并累加触发频次计数。
+     * 修改：addedWeight 从 float 改为 double
      */
-    public int addWeightToDimension(int id, float addedWeight) {
+    public int addWeightToDimension(int id, double addedWeight) {
         String updateSql = "UPDATE Feeling_Dimensions SET hit_weight = hit_weight + ?, trigger_count = trigger_count + 1 WHERE id = ?";
         String querySql = "SELECT trigger_count FROM Feeling_Dimensions WHERE id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
-            pstmt.setFloat(1, addedWeight);
+            pstmt.setDouble(1, addedWeight); // 统一使用 setDouble
             pstmt.setInt(2, id);
             pstmt.executeUpdate();
 
@@ -277,13 +278,14 @@ public class MemoryDB {
     }
 
     /**
-     * 【核心新增】：感觉习惯化机制。当一个节点沦为背景噪音时，强行重置其权重至极低阈值。
+     * 感觉习惯化机制。
+     * 保持不变：入参本就是 double
      */
     public void bluntDimension(int id, double bluntWeight) {
         String sql = "UPDATE Feeling_Dimensions SET hit_weight = ?, trigger_count = 0 WHERE id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setDouble(1, bluntWeight);
+            pstmt.setDouble(1, bluntWeight); // 使用 setDouble
             pstmt.setInt(2, id);
             pstmt.executeUpdate();
             log.info("[MemoryDB] ⚙️ 该感觉突触极度疲劳饱和，执行生物学钝化：权重强行挂钩跌停值 {}, 计数清零。", bluntWeight);
@@ -294,21 +296,19 @@ public class MemoryDB {
 
     /**
      * 记忆衰减机制 (Tick 底层支持)
-     * 【唯物重构】：时间不仅降低权重，也同样代谢掉疲劳度（递减 trigger_count）
+     * 保持不变：入参本就是 double
      */
     public int applyGlobalDecay(double decayAmount) {
         int deletedCount = 0;
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
             try {
-                // 【核心修改】：在扣除权重（hit_weight）的同时，让 trigger_count 物理递减 1 点，最低扣到 0 为止
-                // 利用 SQLite 的 CASE WHEN 语句实现行内防跌穿逻辑
                 String updateSql = "UPDATE Feeling_Dimensions SET " +
                         "hit_weight = hit_weight - ?, " +
                         "trigger_count = CASE WHEN trigger_count > 0 THEN trigger_count - 1 ELSE 0 END";
 
                 try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
-                    updateStmt.setDouble(1, decayAmount);
+                    updateStmt.setDouble(1, decayAmount); // 使用 setDouble
                     updateStmt.executeUpdate();
                 }
 
