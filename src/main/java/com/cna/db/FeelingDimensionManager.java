@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -27,6 +28,7 @@ public class FeelingDimensionManager {
     // ==========================================================
 
     private static final ObjectMapper jsonMapper = new ObjectMapper();
+    private static final org.slf4j.Logger feelingLog = org.slf4j.LoggerFactory.getLogger("feeling-log");
 
     private final MemoryDB memoryDB;
     private static final double SIMILARITY_THRESHOLD = 0.6;
@@ -125,6 +127,11 @@ public class FeelingDimensionManager {
                             memoryDB.addWeightToDimension(bestMatch.id, (float) weightToAdd);
                             log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}] (相似度:{%.4f})，处于拓展期。权重加成后: %.4f, 触发计数: {}/{}",
                                     concept, bestMatch.concept, highestSim, finalLocalWeight, finalLocalCount, HABITUATION_LIMIT);
+                            feelingLog.info("BOOST    | concept={} | weight={}→{} | sim={} | count={}/{} | novelty_thr={}",
+                                    bestMatch.concept,
+                                    String.format("%.4f", currentWeight), String.format("%.4f", finalLocalWeight),
+                                    String.format("%.4f", highestSim),
+                                    finalLocalCount, HABITUATION_LIMIT, NOVELTY_THRESHOLD);
                         } else {
                             // 【状态 B：审美疲劳期】高频调用超过上限，开启【比例相除衰减机制】
                             // 计算衰减后的绝对目标值
@@ -146,9 +153,17 @@ public class FeelingDimensionManager {
                                 // 原版 bluntDimension 接收 double，完美高精度对接
                                 memoryDB.bluntDimension(bestMatch.id, BLUNT_WEIGHT);
                                 log.info("[Attention-Engine] 🔥 核心突触 [{}] 注意力彻底枯竭安全触底。完成全面无感脱敏，状态重置，随时准备再次复活！", bestMatch.concept);
+                                feelingLog.warn("RESET    | concept={} | weight={}→{} | count={}→0 | blunt_thr={}",
+                                        bestMatch.concept,
+                                        String.format("%.4f", currentWeight), String.format("%.4f", BLUNT_WEIGHT),
+                                        currentCount, BLUNT_WEIGHT);
                             } else {
                                 // 未触底，通过负数 Delta 注入原版加过的方法，实现无损相除扣分
                                 memoryDB.addWeightToDimension(bestMatch.id, (float) weightDelta);
+                                feelingLog.warn("FATIGUE  | concept={} | weight={}→{} | count={} | ratio={} | habit_limit={}",
+                                        bestMatch.concept,
+                                        String.format("%.4f", currentWeight), String.format("%.4f", finalLocalWeight),
+                                        finalLocalCount, SATIATION_DECAY_RATIO, HABITUATION_LIMIT);
                             }
                         }
 
@@ -161,6 +176,8 @@ public class FeelingDimensionManager {
                         memoryDB.insertFeelingDimension(concept, conceptVector, 1.0f);
                         addedCount++;
                         log.info("[Feeling] 概念 [{}] 属于未知刺激(最高相似度:{%.4f}), 顺利生长出新维度节点。", concept, highestSim);
+                        feelingLog.info("NEW      | concept={} | weight=1.00 | sim_to_nearest={} | novelty_thr={}",
+                                concept, String.format("%.4f", highestSim), NOVELTY_THRESHOLD);
                         currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, 1.0f, 1));
                     }
                 }
@@ -217,26 +234,57 @@ public class FeelingDimensionManager {
     public FeelingEvaluation evaluateInput(String input) {
         double[] inputVector = getEmbeddingMock(input);
         List<FeelingDimension> dimensions = memoryDB.getAllFeelingDimensions();
-        if (dimensions.isEmpty()) return new FeelingEvaluation("none", 0.0f);
+        boolean shouldLog = Math.random() < 0.1;
 
-        FeelingDimension bestMatch = null;
-        double highestFinalScore = -1.0;
+        if (dimensions.isEmpty()) {
+            if (shouldLog) {
+                feelingLog.info("EVAL     | input={} | verdict=NO_DIMS", truncate(input, 30));
+            }
+            return new FeelingEvaluation("none", 0.0f);
+        }
 
-        for (FeelingDimension dim : dimensions) {
+        List<double[]> scored = new ArrayList<>(dimensions.size());
+        for (int i = 0; i < dimensions.size(); i++) {
+            FeelingDimension dim = dimensions.get(i);
             double sim = cosineSimilarity(inputVector, dim.vector);
             double finalScore = sim * dim.weight;
-            if (finalScore > highestFinalScore) {
-                highestFinalScore = finalScore;
-                bestMatch = dim;
-            }
+            scored.add(new double[]{i, sim, finalScore});
         }
+        scored.sort((a, b) -> Double.compare(b[2], a[2]));
+
+        FeelingDimension bestMatch = dimensions.get((int) scored.get(0)[0]);
+        double highestFinalScore = scored.get(0)[2];
+
+        if (shouldLog) {
+            StringBuilder top3 = new StringBuilder("[");
+            int n = Math.min(3, scored.size());
+            for (int i = 0; i < n; i++) {
+                FeelingDimension d = dimensions.get((int) scored.get(i)[0]);
+                double s = scored.get(i)[1];
+                double f = scored.get(i)[2];
+                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", d.concept, s, d.weight, f));
+                if (i < n - 1) top3.append(", ");
+            }
+            top3.append("]");
+            feelingLog.info("EVAL     | input={} | top3={} | best_score={}",
+                    truncate(input, 30), top3.toString(), String.format("%.4f", highestFinalScore));
+        }
+
         log.debug("[Feeling] 最佳匹配维度: {}, 最终得分: {}", bestMatch.concept, highestFinalScore);
         return new FeelingEvaluation(bestMatch.concept, (float) highestFinalScore);
+    }
+
+    private static String truncate(String s, int n) {
+        if (s == null) return "";
+        s = s.replace("\n", "\\n");
+        return s.length() <= n ? s : s.substring(0, n) + "...";
     }
 
     public void tick() {
         log.info("[Feeling] 触发全局记忆衰减 (Tick), 扣除常数: {}", DECAY_CONSTANT);
         int forgottenNodes = memoryDB.applyGlobalDecay(DECAY_CONSTANT);
+        feelingLog.info("DECAY    | amount={} | forgotten={} | note=trigger_count_also_-1",
+                DECAY_CONSTANT, forgottenNodes);
         if (forgottenNodes > 0) {
             log.info("[Feeling] 衰减完成。系统物理遗忘了 {} 个枯萎的神经维度。", forgottenNodes);
         }
