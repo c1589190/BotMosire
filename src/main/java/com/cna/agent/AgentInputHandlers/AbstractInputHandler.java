@@ -31,7 +31,7 @@ public abstract class AbstractInputHandler<T extends DefaultAgentInputUnit> impl
     @SuppressWarnings("unchecked")
     public void handleInputs(List<DefaultAgentInputUnit> inputs) {
 
-        this.engine.getCognitiveHeat().set(Math.max(0, this.engine.getCognitiveHeat().get() + 2));
+        this.engine.getCognitiveHeat().set(Math.max(0, this.engine.getCognitiveHeat().get() + 1));
 
         if (inputs == null || inputs.isEmpty()) return;
 

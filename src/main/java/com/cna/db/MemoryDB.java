@@ -13,7 +13,6 @@ import java.util.List;
 
 @Slf4j
 public class MemoryDB {
-    // ObjectMapper 是线程安全的，建议作为 static final 共用
     private static final ObjectMapper mapper = new ObjectMapper();
     private static HikariDataSource dataSource;
 
@@ -22,19 +21,15 @@ public class MemoryDB {
         initTables();
     }
 
-    /**
-     * 初始化高并发连接池
-     */
     private synchronized void initDataSource() {
         if (dataSource != null) return;
 
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(ConfigsManager.DB_URL);
-        // 开启 SQLite WAL 模式，通过 connectionInitSql 执行 PRAGMA 才是对 SQLite JDBC 正确的做法
         config.setConnectionInitSql("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
 
-        config.setMaximumPoolSize(10); // 维持 10 个物理连接
-        config.setConnectionTimeout(3000); // 拿不到连接最多等 3 秒
+        config.setMaximumPoolSize(10);
+        config.setConnectionTimeout(3000);
         config.setPoolName("Agent-Memory-Pool");
 
         dataSource = new HikariDataSource(config);
@@ -52,6 +47,7 @@ public class MemoryDB {
                 "vector_json TEXT NOT NULL, " +
                 "content TEXT NOT NULL)";
 
+        // 【兼容保留】：不动表结构，保留 hit_weight 和 trigger_count
         String createFeelingSql = "CREATE TABLE IF NOT EXISTS Feeling_Dimensions (" +
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                 "concept TEXT NOT NULL UNIQUE, " +
@@ -68,6 +64,10 @@ public class MemoryDB {
             log.error("初始化记忆数据库失败", e);
         }
     }
+
+    // ==========================================
+    // 丢失的短期记忆与深度记忆 CRUD (帮你找回来了)
+    // ==========================================
 
     public void insertCurrentMemory(String content) {
         String sql = "INSERT INTO Current_Memorys (content) VALUES (?)";
@@ -195,38 +195,36 @@ public class MemoryDB {
         public final int id;
         public final String concept;
         public final double[] vector;
-        public final double weight; // 保持为 double
-        public final int triggerCount;
+        public final double hitWeight;   // 留作他用的额外乘区/标记
+        public final int triggerCount;   // 现在的绝对主力：充当 active_count
 
-        public FeelingDimension(int id, String concept, double[] vector, double weight, int triggerCount) {
+        public FeelingDimension(int id, String concept, double[] vector, double hitWeight, int triggerCount) {
             this.id = id;
             this.concept = concept;
             this.vector = vector;
-            this.weight = weight;
+            this.hitWeight = hitWeight;
             this.triggerCount = triggerCount;
         }
     }
 
     /**
-     * 插入新的感觉维度
-     * 修改：initialWeight 从 float 改为 double
+     * 插入新的感觉维度：hit_weight 默认为 1.0，trigger_count 初始为 1
      */
-    public void insertFeelingDimension(String concept, double[] vector, double initialWeight) {
-        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, ?, 1)";
+    public void insertFeelingDimension(String concept, double[] vector) {
+        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, 1.0, 1)";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, concept);
             pstmt.setString(2, mapper.writeValueAsString(vector));
-            pstmt.setDouble(3, initialWeight); // 统一使用 setDouble
             pstmt.executeUpdate();
-            log.info("[MemoryDB] 成功写入新感觉维度: {}", concept);
+            log.info("[MemoryDB] 成功生长出新感觉维度: {} (初始化 trigger_count = 1, hit_weight = 1.0)", concept);
         } catch (SQLException | JsonProcessingException e) {
             log.error("插入感觉维度失败: " + concept, e);
         }
     }
 
     /**
-     * 获取全量感觉维度加载到内存 (映射最新的 trigger_count)
+     * 获取全量感觉维度
      */
     public List<FeelingDimension> getAllFeelingDimensions() {
         List<FeelingDimension> result = new ArrayList<>();
@@ -240,7 +238,7 @@ public class MemoryDB {
                         rs.getInt("id"),
                         rs.getString("concept"),
                         vector,
-                        rs.getDouble("hit_weight"), // 修改：从 getFloat 改为 getDouble
+                        rs.getDouble("hit_weight"),
                         rs.getInt("trigger_count")
                 ));
             }
@@ -251,18 +249,18 @@ public class MemoryDB {
     }
 
     /**
-     * 更新特定维度权重，并累加触发频次计数。
-     * 修改：addedWeight 从 float 改为 double
+     * 【重构核心】：触发并打击某个维度 (借用 trigger_count 当 active_count)
+     * 规则：如果当前 trigger_count < 0，直接归零；否则 + 1。不对 hit_weight 做任何操作。
      */
-    public int addWeightToDimension(int id, double addedWeight) {
-        String updateSql = "UPDATE Feeling_Dimensions SET hit_weight = hit_weight + ?, trigger_count = trigger_count + 1 WHERE id = ?";
+    public int hitDimension(int id) {
+        String updateSql = "UPDATE Feeling_Dimensions SET trigger_count = CASE WHEN trigger_count < 0 THEN 0 ELSE trigger_count + 1 END WHERE id = ?";
         String querySql = "SELECT trigger_count FROM Feeling_Dimensions WHERE id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
-            pstmt.setDouble(1, addedWeight); // 统一使用 setDouble
-            pstmt.setInt(2, id);
+            pstmt.setInt(1, id);
             pstmt.executeUpdate();
 
+            // 返回最新值
             try (PreparedStatement queryPstmt = conn.prepareStatement(querySql)) {
                 queryPstmt.setInt(1, id);
                 try (ResultSet rs = queryPstmt.executeQuery()) {
@@ -272,61 +270,23 @@ public class MemoryDB {
                 }
             }
         } catch (SQLException e) {
-            log.error("更新感觉维度权重与频次失败 ID: " + id, e);
+            log.error("触发感觉维度状态机失败 ID: " + id, e);
         }
         return 0;
     }
 
     /**
-     * 感觉习惯化机制。
-     * 保持不变：入参本就是 double
+     * 【重构核心】：全局记忆衰减 (Tick)
+     * 规则：每 tick 所有维度的 trigger_count 统一 -1，允许掉入负数深水区。hit_weight 不动。
      */
-    public void bluntDimension(int id, double bluntWeight) {
-        String sql = "UPDATE Feeling_Dimensions SET hit_weight = ?, trigger_count = 0 WHERE id = ?";
+    public void applyGlobalTick() {
+        String sql = "UPDATE Feeling_Dimensions SET trigger_count = trigger_count - 1";
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setDouble(1, bluntWeight); // 使用 setDouble
-            pstmt.setInt(2, id);
-            pstmt.executeUpdate();
-            log.info("[MemoryDB] ⚙️ 该感觉突触极度疲劳饱和，执行生物学钝化：权重强行挂钩跌停值 {}, 计数清零。", bluntWeight);
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            int affected = stmt.executeUpdate();
+            log.debug("[MemoryDB] Tick 执行完毕，全局 {} 个维度的 trigger_count 统一 -1", affected);
         } catch (SQLException e) {
-            log.error("执行生物学钝化重置失败 ID: " + id, e);
+            log.error("[MemoryDB] 执行全局 trigger_count 衰减失败", e);
         }
-    }
-
-    /**
-     * 记忆衰减机制 (Tick 底层支持)
-     * 保持不变：入参本就是 double
-     */
-    public int applyGlobalDecay(double decayAmount) {
-        int deletedCount = 0;
-        try (Connection conn = dataSource.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                String updateSql = "UPDATE Feeling_Dimensions SET " +
-                        "hit_weight = hit_weight - ?, " +
-                        "trigger_count = CASE WHEN trigger_count > 0 THEN trigger_count - 1 ELSE 0 END";
-
-                try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
-                    updateStmt.setDouble(1, decayAmount); // 使用 setDouble
-                    updateStmt.executeUpdate();
-                }
-
-                String deleteSql = "DELETE FROM Feeling_Dimensions WHERE hit_weight <= 0";
-                try (PreparedStatement deleteStmt = conn.prepareStatement(deleteSql)) {
-                    deletedCount = deleteStmt.executeUpdate();
-                }
-
-                conn.commit();
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            log.error("[MemoryDB] 执行全局记忆衰减与疲劳度代谢失败", e);
-        }
-        return deletedCount;
     }
 }

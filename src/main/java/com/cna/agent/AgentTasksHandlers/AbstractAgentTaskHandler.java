@@ -5,11 +5,13 @@ import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.FeelingDimensionManager;
+import com.cna.db.FeelingDimensionManager.DimensionScore;
 import com.cna.llm.LLMAdapter;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -22,9 +24,33 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         // 1. 允许子类向工具箱里额外塞入自己专属的 Tool
         appendCustomTools(toolsDefinitionArray);
 
+        // =========================================================
+        // 【新增】：当前阶段潜意识感觉评估（脊髓反射打分）
+        // =========================================================
+        String currentContext = task.getTaskText() + "\n" + task.getTurnsAddition();
+        // 获取排名前 3 的潜意识感觉维度
+        List<DimensionScore> topFeelings = FeelingDimensionManager.getInstance().getTargetDimensions(currentContext, true, 3);
+
+        StringBuilder feelingsBuilder = new StringBuilder();
+        if (topFeelings.isEmpty()) {
+            feelingsBuilder.append("当前无明显的潜意识概念共鸣。");
+        } else {
+            for (DimensionScore score : topFeelings) {
+                // 格式化为：[概念](得分) 的形式，方便一会大模型阅读
+                //feelingsBuilder.append(String.format("【%s】(刺激度: %.2f) \n", score.concept, score.finalScore));
+                //暂时不处理权重……
+                feelingsBuilder.append(String.format("【%s】 \n", score.concept));
+            }
+        }
+        String currentFeelingsStr = feelingsBuilder.toString().trim();
+        log.info("[TaskHandler] 当前任务阶段触发潜意识: {}", currentFeelingsStr);
+        // =========================================================
+
         // 2. 初始化 BaseData
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", task.getTaskText()); // 公共属性，所有任务都有
+        baseData.put("turnsAddition", task.getTurnsAddition());
+        baseData.put("current_feelings", currentFeelingsStr); // 【新增】：注入给底层的 Prompt 模板使用
 
         // 3. 让子类注入自己专属的 BaseData (比如 Chat 任务要历史记录，Schedule 任务要日程文件)
         if (!prepareBaseData(task, baseData, engine)) {
@@ -48,7 +74,7 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         // 6. 任务结束/闭环后的统一处理
         if (retTask == null) {
             log.info("[TaskHandler] 任务 [{}] 已经圆满终结并销毁。\n", task.getTaskName());
-            // TODO: 未来你说的“每次任务结束后的唯物结算（Feeling更新）”就加在这里！所有任务都会自动继承！
+            // 每次任务结束后的唯物结算（Feeling更新），全自动继承！
             onTaskCompleted(task, engine);
             return;
         }
@@ -95,7 +121,6 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         // 拼接任务初始文本和执行过程中的想法与工具反馈
         String fullTaskLog = completedTask.getTaskText() + "\n" + completedTask.getTurnsAddition();
 
-        // 假设 FeelingDimensionManager 使用了单例模式 (或者你可以通过 engine.getFeelingManager() 获取)
         FeelingDimensionManager.getInstance().processTaskLogAsync(fullTaskLog);
     }
 }
