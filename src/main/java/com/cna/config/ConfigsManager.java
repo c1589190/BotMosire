@@ -42,6 +42,7 @@ public class ConfigsManager {
     public static final double FD_BLUNT_WEIGHT; // 欲望/注意力下限
     public static final double FD_MAX_WEIGHT;
     public static final double FD_PRESSURE_PENALTY;
+    public static final double FD_QUALITY_WEIGHT;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
@@ -195,6 +196,7 @@ public class ConfigsManager {
         FD_MAX_WEIGHT=getDouble("memory.fdMaxWeight", 1.0);
         FD_HABITUATION_LIMIT = getInt("memory.fdHabituationLimit", 10);
         FD_PRESSURE_PENALTY = getDouble("memory.fdPressurePenalty", 0.01);
+        FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
 
 
         // ==========================================

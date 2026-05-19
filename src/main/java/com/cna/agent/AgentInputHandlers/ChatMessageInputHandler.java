@@ -87,7 +87,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                 FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(textContent);
 
                 // 【核心重构】：一次性判定是否接纳
-                boolean isHighValue = eval.finalScore >= currentDynamicThreshold;
+                boolean isHighValue = eval.InterestScore >= currentDynamicThreshold;
                 // 仅当分值不够，且系统极度空虚时，才触发概率捞取
                 boolean isLuckyTrash = !isHighValue && isStarving && (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE);
 
@@ -95,11 +95,11 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                     String reason;
                     if (isHighValue) {
                         reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (潜意识得分: %.2f，打破当前动态阈值: %.2f)",
-                                eval.topConcept, eval.finalScore, currentDynamicThreshold);
+                                eval.topConcept, eval.InterestScore, currentDynamicThreshold);
                         log.info("高优消息被拦截放行。原因：{}", reason);
                     } else {
                         reason = String.format("这条消息在你的感觉中枢里得分极低(%.2f < %.2f)，你感觉它是废话。但是由于现在你也没其他事干，你决定勉为其难地随便回复一下它，维持活性。",
-                                eval.finalScore, currentDynamicThreshold);
+                                eval.InterestScore, currentDynamicThreshold);
                         log.info("系统处于空虚状态，低价值消息被破格捞起。");
 
                         // 【防抖保护】：一旦破格捞起了一条垃圾，系统立刻脱离空虚状态，防止在本轮循环中捞取多条废话
@@ -107,7 +107,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                     }
                     interestingInputsWithReasons.put(input, reason);
                 } else {
-                    log.info("消息被抛弃 (得分: {} < 门槛: {}): [{}]", eval.finalScore, currentDynamicThreshold, textContent);
+                    log.info("消息被抛弃 (得分: {} < 门槛: {}): [{}]", eval.InterestScore, currentDynamicThreshold, textContent);
                 }
             }
 

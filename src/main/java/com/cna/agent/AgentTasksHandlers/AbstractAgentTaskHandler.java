@@ -32,8 +32,8 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         } else {
             for (DimensionScore score : topFeelings) {
                 String polarityText = score.hitWeight >= 0 ? "正面、良好" : "负面、差劲";
-                feelingsBuilder.append(String.format("\"%s\",(记忆深度权重: %.2f ,语义映像权重: %.2f )  你对它的映像是 %s 的;\n",
-                        score.concept, score.finalScore, score.hitWeight, polarityText));
+                feelingsBuilder.append(String.format("\"%s\",(记忆兴趣权重: %.2f ,语义映像权重: %.2f )  你对它的映像是 %s 的;\n",
+                        score.concept, score.InterestScore, score.hitWeight, polarityText));
             }
         }
         String currentFeelingsStr = feelingsBuilder.toString().trim();

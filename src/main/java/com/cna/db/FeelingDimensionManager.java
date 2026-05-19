@@ -41,7 +41,7 @@ public class FeelingDimensionManager {
         this.memoryDB = memoryDB;
     }
 
-    private static final double ALPHA = 0.5;
+    private static final double ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
 
     public void processTaskLogAsync(String taskLog) {
         if (taskLog == null || taskLog.trim().isEmpty()) return;
@@ -185,14 +185,14 @@ public class FeelingDimensionManager {
         public final String concept;
         public final double similarity;
         public final double hitWeight; // 【新增】：保留原汁原味的极性效价
-        public final double finalScore;
+        public final double InterestScore;
 
         // 【修改】：构造器加入 hitWeight
         public DimensionScore(String concept, double similarity, double hitWeight, double finalScore) {
             this.concept = concept;
             this.similarity = similarity;
             this.hitWeight = hitWeight;
-            this.finalScore = finalScore;
+            this.InterestScore = finalScore;
         }
     }
 
@@ -208,13 +208,14 @@ public class FeelingDimensionManager {
             double baseDynamicArousal = calculateBaseWeight(dim.triggerCount);
 
             // 【核心运用】：综合得分 = 基础相似度 * 活跃程度 * 当前累积效价极性的【绝对值】
-            double finalScore = sim * baseDynamicArousal * Math.abs(dim.hitWeight);
+            //double finalScore = sim * baseDynamicArousal * Math.abs(dim.hitWeight);
+            double finalScore = sim * baseDynamicArousal; //暂时不使用好坏评判权重来判断……
 
             // 【修改】：将 dim.hitWeight 一起封装出去
             scoredList.add(new DimensionScore(dim.concept, sim, dim.hitWeight, finalScore));
         }
 
-        scoredList.sort((a, b) -> Double.compare(b.finalScore, a.finalScore));
+        scoredList.sort((a, b) -> Double.compare(b.InterestScore, a.InterestScore));
         return scoredList;
     }
     /**
@@ -275,10 +276,10 @@ public class FeelingDimensionManager {
 
     public static class FeelingEvaluation {
         public final String topConcept;
-        public final double finalScore;
+        public final double InterestScore;
         public FeelingEvaluation(String topConcept, double finalScore) {
             this.topConcept = topConcept;
-            this.finalScore = finalScore;
+            this.InterestScore = finalScore;
         }
     }
 
@@ -303,15 +304,15 @@ public class FeelingDimensionManager {
             int n = Math.min(3, allScores.size());
             for (int i = 0; i < n; i++) {
                 DimensionScore ds = allScores.get(i);
-                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", ds.concept, ds.similarity, ds.hitWeight, ds.finalScore));
+                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", ds.concept, ds.similarity, ds.hitWeight, ds.InterestScore));
                 if (i < n - 1) top3.append(", ");
             }
             top3.append("]");
             feelingLog.info("EVAL     | input={} | top3={} | best_score={}",
-                    truncate(input, 30), top3.toString(), String.format("%.4f", bestMatch.finalScore));
+                    truncate(input, 30), top3.toString(), String.format("%.4f", bestMatch.InterestScore));
         }
 
-        return new FeelingEvaluation(bestMatch.concept, bestMatch.finalScore);
+        return new FeelingEvaluation(bestMatch.concept, bestMatch.InterestScore);
     }
 
     private static String truncate(String s, int n) {
