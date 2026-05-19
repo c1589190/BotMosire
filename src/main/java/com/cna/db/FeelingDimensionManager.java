@@ -30,15 +30,17 @@ public class FeelingDimensionManager {
     private static final org.slf4j.Logger feelingLog = org.slf4j.LoggerFactory.getLogger("feeling-log");
 
     private final MemoryDB memoryDB;
-    private static final double SIMILARITY_THRESHOLD = 0.6;
+    //private static final double SIMILARITY_THRESHOLD = 0.6;
     private static final double NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
 
     // 仅依赖该阈值计算基础感觉权重
-    private static final double BLUNT_WEIGHT = ConfigsManager.FD_BLUNT_WEIGHT;
+    //private static final double BLUNT_WEIGHT = ConfigsManager.FD_BLUNT_WEIGHT;
 
     public FeelingDimensionManager(MemoryDB memoryDB) {
         this.memoryDB = memoryDB;
     }
+
+    private static final double ALPHA = 0.5;
 
     public void processTaskLogAsync(String taskLog) {
         if (taskLog == null || taskLog.trim().isEmpty()) return;
@@ -52,7 +54,7 @@ public class FeelingDimensionManager {
                 CallResult result = extractionLlm.generateResponseWithTools(prompt, "", toolsArray);
 
                 if (!result.isToolCall() || result.getToolCalls() == null || result.getToolCalls().isEmpty()) {
-                    log.info("[Feeling] 未发现有价值刺激，跳过感觉更新。");
+                    log.info("[Feeling] 未发现有价值刺激，跳过维度演进。");
                     return;
                 }
 
@@ -69,8 +71,13 @@ public class FeelingDimensionManager {
                 int updatedCount = 0;
 
                 for (JsonNode conceptItem : conceptsNode) {
-                    String concept = conceptItem.asText().trim();
+                    // 【修改】：解析工具返回的对象结构
+                    String concept = conceptItem.path("name").asText().trim();
                     if (concept.isEmpty()) continue;
+                    boolean isPositive = conceptItem.path("is_positive").asBoolean(true);
+
+                    // 【新增】：提取出绝对目标的物理极性
+                    double targetPolarity = isPositive ? 1.0 : -1.0;
 
                     double[] conceptVector = getEmbeddingMock(concept);
                     FeelingDimension bestMatch = null;
@@ -84,39 +91,35 @@ public class FeelingDimensionManager {
                         }
                     }
 
-                    // 【核心状态机：基于调用次数 (trigger_count)】
                     if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
                         updatedCount++;
-                        int oldTriggerCount = bestMatch.triggerCount;
 
-                        // 1. 物理落盘并获取新值
+                        // 1. 触发唤醒度 (trigger_count) 状态机
                         int newTriggerCount = memoryDB.hitDimension(bestMatch.id);
 
-                        // 2. 动态计算本次激活后的虚拟权重
-                        //double computedWeight = calculateBaseWeight(newTriggerCount);
+                        // 2. 【核心重构：动量守恒结算】
+                        // 公式：旧权重 * 历史惯性保留率 + 目标极性 * 新事物吸收率
+                        double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
+                        memoryDB.updateDimensionHitWeight(bestMatch.id, newHitWeight);
 
-                        log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}] (相似度:{})。TriggerCount {} -> {}",
-                                concept, bestMatch.concept, highestSim, oldTriggerCount, newTriggerCount);
+                        log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}]。Trigger: {}->{}, Weight: {}->{}",
+                                concept, bestMatch.concept, bestMatch.triggerCount, newTriggerCount,
+                                String.format("%.3f", bestMatch.hitWeight), String.format("%.3f", newHitWeight));
 
-                        feelingLog.info("HIT | concept={} | trigger={}→{} | sim={}",
-                                bestMatch.concept, oldTriggerCount, newTriggerCount, String.format("%.4f", highestSim));
-
-                        // 同步刷新本地列表缓存
                         currentDimensions.remove(bestMatch);
-                        currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, bestMatch.hitWeight, newTriggerCount));
+                        currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, newHitWeight, newTriggerCount));
 
                     } else {
-                        // 新概念创建，自动采用 hit_weight=1.0, trigger_count=1
-                        memoryDB.insertFeelingDimension(concept, conceptVector);
+                        // 【修改】：新生节点的初始权重直接采用目标极性
+                        memoryDB.insertFeelingDimension(concept, conceptVector, targetPolarity*ALPHA);
                         addedCount++;
-                        log.info("[Feeling] 发现新刺激 [{}]，生成新神经节点。初始 trigger_count = 1", concept);
-                        feelingLog.info("NEW      | concept={} | sim_to_nearest={}", concept, String.format("%.4f", highestSim));
+                        log.info("[Feeling] 发现新刺激 [{}] 生成新神经节点。初始 Trigger=1, 初始极性={}", concept, targetPolarity);
 
-                        currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, 1.0, 1));
+                        currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, targetPolarity*ALPHA, 1));
                     }
                 }
 
-                log.info("[Feeling] 本轮提取完毕：新节点 {} 个，激活旧节点 {} 个。", addedCount, updatedCount);
+                log.info("[Feeling] 本轮提取完毕：新节点 {} 个，重塑旧节点 {} 个。", addedCount, updatedCount);
 
             } catch (Exception e) {
                 log.error("[Feeling] 异步处理任务结算与维度更新失败", e);
@@ -131,7 +134,7 @@ public class FeelingDimensionManager {
         ObjectNode funcNode = toolWrapper.putObject("function");
 
         funcNode.put("name", "submit_extracted_concepts");
-        funcNode.put("description", "提交从任务日志中提取的核心底层技术概念或客观实体数组。如果没有值得提取的东西，请不要调用此工具。");
+        funcNode.put("description", "提交从任务日志中提取的核心底层技术概念或客观实体数组，并附带判断其作用极性。");
 
         ObjectNode paramsNode = funcNode.putObject("parameters");
         paramsNode.put("type", "object");
@@ -139,10 +142,24 @@ public class FeelingDimensionManager {
         ObjectNode propsNode = paramsNode.putObject("properties");
         ObjectNode conceptsArrayNode = propsNode.putObject("concepts");
         conceptsArrayNode.put("type", "array");
-        conceptsArrayNode.put("description", "提取出来的底层概念列表，限制为 1 到 3 个。");
 
+        // 【修改】：将 items 从纯 string 改造为带 boolean 的 object
         ObjectNode itemsNode = conceptsArrayNode.putObject("items");
-        itemsNode.put("type", "string");
+        itemsNode.put("type", "object");
+
+        ObjectNode itemProps = itemsNode.putObject("properties");
+
+        ObjectNode nameNode = itemProps.putObject("name");
+        nameNode.put("type", "string");
+        nameNode.put("description", "底层概念或客观实体的名称");
+
+        ObjectNode isPositiveNode = itemProps.putObject("is_positive");
+        isPositiveNode.put("type", "boolean");
+        isPositiveNode.put("description", "判断概念当前的客观极性：如果是正向建设性、被认可、带来推进的输出true；如果是负向破坏性、报错冲突、被否定的输出false。");
+
+        ArrayNode itemRequired = itemsNode.putArray("required");
+        itemRequired.add("name");
+        itemRequired.add("is_positive");
 
         ArrayNode requiredNode = paramsNode.putArray("required");
         requiredNode.add("concepts");
@@ -151,13 +168,11 @@ public class FeelingDimensionManager {
     }
 
     private String buildDistillationPrompt(String taskLog) {
-        return "现在你要从下面的任务执行日志中提取出 1 到 3 个最核心、最具体的【人类交互话题、外部技术概念、或者现实客观实体】。\n\n" +
+        return "现在你要从下面的任务执行日志中提取出 1 到 3 个最核心、最具体的【人类交互话题、外部技术概念、或者现实客观实体】，并且严格判断它们在本次事件中的唯物极性。\n\n" +
                 "⚠️【硬核禁忌边界——严禁提取任何系统底层框架噪音】:\n" +
-                "1. 绝对不要提取系统的任何 Java 类名、接口或方法标识（例如：严禁提取 ChatTask, ConsoleChatTask, DefaultAgentTaskUnit, AbstractAgentTaskHandler 等）。\n" +
-                "2. 绝对不要提取系统底层的固有工具名称和内部运行动作（例如：严禁提取 send_chat_message, add_inner_thought, executeCognitiveCycle, submit_extracted_concepts 等）。\n" +
-                "3. 核心认知纠偏：上述词汇只是系统支撑自身运转的数字化骨架，不是人类在探讨的『客观概念』！你必须穿透这些框架痕迹，提炼出用户和系统在实践中具体解决的问题、使用的外部独立工具或讨论的话题（如：WSL网络端口映射、HOI4游戏战术、黑格尔辩证唯物主义等）。\n\n" +
-                "规则：忽略废话、寒暄、纯情绪表达。只关注客观技术、工具、理论模型或具体的行为机制。\n" +
-                "动作：提取完成后，必须且仅能调用 `submit_extracted_concepts` 工具来提交结果。如果没有价值，什么都不用做。\n\n" +
+                "1. 绝对不要提取系统的任何 Java 类名、接口或方法标识。\n" +
+                "2. 绝对不要提取系统底层的固有工具名称和内部运行动作。\n" +
+                "3. 核心认知纠偏：穿透系统运行痕迹，提炼出具体的问题或话题。并针对此概念的客观发展方向，给出一个true(建设性)或false(破坏性)的布尔断言。\n\n" +
                 "【日志输入】\n" + taskLog;
     }
 
@@ -168,31 +183,18 @@ public class FeelingDimensionManager {
     public static class DimensionScore {
         public final String concept;
         public final double similarity;
-        public final double weight;
+        public final double hitWeight; // 【新增】：保留原汁原味的极性效价
         public final double finalScore;
 
-        public DimensionScore(String concept, double similarity, double weight, double finalScore) {
+        // 【修改】：构造器加入 hitWeight
+        public DimensionScore(String concept, double similarity, double hitWeight, double finalScore) {
             this.concept = concept;
             this.similarity = similarity;
-            this.weight = weight;
+            this.hitWeight = hitWeight;
             this.finalScore = finalScore;
         }
     }
 
-    /**
-     * 获取感觉权重数据
-     */
-    private double calculateBaseWeight(int triggerCount) {
-        if (triggerCount >= BLUNT_WEIGHT) {
-            return 1.0;
-        }
-        // 小于 BLUNT_WEIGHT 输出 triggerCount / BLUNT_WEIGHT
-        return triggerCount / BLUNT_WEIGHT;
-    }
-
-    /**
-     * 底座：获取和当前文本契合的所有感觉维度（默认按最高得分降序）
-     */
     public List<DimensionScore> evaluateAllDimensions(String input) {
         double[] inputVector = getEmbeddingMock(input);
         List<FeelingDimension> dimensions = memoryDB.getAllFeelingDimensions();
@@ -202,14 +204,42 @@ public class FeelingDimensionManager {
 
         for (FeelingDimension dim : dimensions) {
             double sim = cosineSimilarity(inputVector, dim.vector);
-            double baseDynamicWeight = calculateBaseWeight(dim.triggerCount);
-            double finalScore = sim * baseDynamicWeight;
+            double baseDynamicArousal = calculateBaseWeight(dim.triggerCount);
 
-            scoredList.add(new DimensionScore(dim.concept, sim, baseDynamicWeight, finalScore));
+            // 【核心运用】：综合得分 = 基础相似度 * 活跃程度 * 当前累积效价极性的【绝对值】
+            double finalScore = sim * baseDynamicArousal * Math.abs(dim.hitWeight);
+
+            // 【修改】：将 dim.hitWeight 一起封装出去
+            scoredList.add(new DimensionScore(dim.concept, sim, dim.hitWeight, finalScore));
         }
 
         scoredList.sort((a, b) -> Double.compare(b.finalScore, a.finalScore));
         return scoredList;
+    }
+    /**
+     * 【重构：线性脱敏衰减曲线】
+     * 规则：
+     * 1. 第一次遇到 (triggerCount <= 1)，觉得最新鲜，返回最高权重 1.0
+     * 2. 调用次数超过阈值 (triggerCount >= BLUNT_WEIGHT)，彻底听烦了，返回最低权重 0.1
+     * 3. 在 1 到 BLUNT_WEIGHT 之间，权重呈完美的线性匀速下降。
+     */
+    private double calculateBaseWeight(int triggerCount) {
+
+        // 状态 1：最新鲜，刚长出来的概念，或者从水底刚刚浮出水面
+        if (triggerCount <= 1) {
+            return 1.0;
+        }
+
+        // 状态 2：彻底脱敏，听腻了
+        if (triggerCount >= ConfigsManager.FD_BLUNT_WEIGHT) {
+            return 1.0 / ConfigsManager.FD_BLUNT_WEIGHT;
+        }
+
+        // 状态 3：线性衰减期
+        // 计算当前的疲劳进度百分比 (0.0 到 1.0 之间)
+        double progress = (double) (triggerCount - 1) / (ConfigsManager.FD_BLUNT_WEIGHT);
+
+        return 1.0 - progress;
     }
 
     /**
@@ -272,7 +302,7 @@ public class FeelingDimensionManager {
             int n = Math.min(3, allScores.size());
             for (int i = 0; i < n; i++) {
                 DimensionScore ds = allScores.get(i);
-                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", ds.concept, ds.similarity, ds.weight, ds.finalScore));
+                top3.append(String.format("%s:sim=%.3f×w=%.2f=%.3f", ds.concept, ds.similarity, ds.hitWeight, ds.finalScore));
                 if (i < n - 1) top3.append(", ");
             }
             top3.append("]");

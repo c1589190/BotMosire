@@ -21,14 +21,9 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
     public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         log.info("[TaskHandler] 正在准备抽象执行流水线: {}", task.getTaskName());
 
-        // 1. 允许子类向工具箱里额外塞入自己专属的 Tool
         appendCustomTools(toolsDefinitionArray);
 
-        // =========================================================
-        // 【新增】：当前阶段潜意识感觉评估（脊髓反射打分）
-        // =========================================================
         String currentContext = task.getTaskText() + "\n" + task.getTurnsAddition();
-        // 获取排名前 3 的潜意识感觉维度
         List<DimensionScore> topFeelings = FeelingDimensionManager.getInstance().getTargetDimensions(currentContext, true, 3);
 
         StringBuilder feelingsBuilder = new StringBuilder();
@@ -36,50 +31,42 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
             feelingsBuilder.append("当前无明显的潜意识概念共鸣。");
         } else {
             for (DimensionScore score : topFeelings) {
-                // 格式化为：[概念](得分) 的形式，方便一会大模型阅读
-                //feelingsBuilder.append(String.format("【%s】(刺激度: %.2f) \n", score.concept, score.finalScore));
-                //暂时不处理权重……
-                feelingsBuilder.append(String.format("【%s】 \n", score.concept));
+                String polarityText = score.hitWeight >= 0 ? "正面、良好" : "负面、差劲";
+                feelingsBuilder.append(String.format("\"%s\",(记忆深度权重: %.2f ,语义映像权重: %.2f )  你对它的映像是 %s 的;\n",
+                        score.concept, score.finalScore, score.hitWeight, polarityText));
             }
         }
         String currentFeelingsStr = feelingsBuilder.toString().trim();
-        log.info("[TaskHandler] 当前任务阶段触发潜意识: {}", currentFeelingsStr);
-        // =========================================================
+        log.info("[TaskHandler] 当前任务阶段触发潜意识数据快照: \n{}", currentFeelingsStr);
 
-        // 2. 初始化 BaseData
         Map<String, Object> baseData = new HashMap<>();
-        baseData.put("taskText", task.getTaskText()); // 公共属性，所有任务都有
+        baseData.put("taskText", task.getTaskText());
         baseData.put("turnsAddition", task.getTurnsAddition());
-        baseData.put("current_feelings", currentFeelingsStr); // 【新增】：注入给底层的 Prompt 模板使用
+        baseData.put("current_feelings", currentFeelingsStr);
 
-        // 3. 让子类注入自己专属的 BaseData (比如 Chat 任务要历史记录，Schedule 任务要日程文件)
         if (!prepareBaseData(task, baseData, engine)) {
             log.info("[TaskHandler] 子类放弃了本次任务的执行: {}", task.getTaskName());
-            return; // 如果子类返回 false (比如 Schedule 读出来是空的)，直接放弃执行
+            return;
         }
 
-        // 4. 获取子类希望使用的大模型 (默认用 Brain，子类可以覆盖)
         LLMAdapter targetLLM = getTargetLLM(engine);
 
-        // 5. 调用公共引擎，进入执行循环
         DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
                 task,
                 new ScenePromptsManager(task.getClass().getName()),
                 baseData,
                 targetLLM,
                 toolsDefinitionArray,
-                getTaskDescription() // 获取子类定义的任务描述
+                getTaskDescription()
         );
 
-        // 6. 任务结束/闭环后的统一处理
         if (retTask == null) {
             log.info("[TaskHandler] 任务 [{}] 已经圆满终结并销毁。\n", task.getTaskName());
-            // 每次任务结束后的唯物结算（Feeling更新），全自动继承！
+            // 每次任务结束后的唯物结算，开始更新动量模型
             onTaskCompleted(task, engine);
             return;
         }
 
-        // 7. 如果没执行完，塞回队列等下一轮
         engine.pushTask(retTask);
     }
 

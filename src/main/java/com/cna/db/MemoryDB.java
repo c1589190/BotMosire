@@ -210,16 +210,35 @@ public class MemoryDB {
     /**
      * 插入新的感觉维度：hit_weight 默认为 1.0，trigger_count 初始为 1
      */
-    public void insertFeelingDimension(String concept, double[] vector) {
-        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, 1.0, 1)";
+    /**
+     * 【修改】：插入新的感觉维度：hit_weight 不再硬编码为1.0，而是由初次评估的客观极性注入
+     */
+    public void insertFeelingDimension(String concept, double[] vector, double initialHitWeight) {
+        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, ?, 1)";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, concept);
             pstmt.setString(2, mapper.writeValueAsString(vector));
+            pstmt.setDouble(3, initialHitWeight);
             pstmt.executeUpdate();
-            log.info("[MemoryDB] 成功生长出新感觉维度: {} (初始化 trigger_count = 1, hit_weight = 1.0)", concept);
+            log.info("[MemoryDB] 成功生长出新感觉维度: {} (初始化 trigger_count = 1, hit_weight = {})", concept, initialHitWeight);
         } catch (SQLException | JsonProcessingException e) {
             log.error("插入感觉维度失败: " + concept, e);
+        }
+    }
+
+    /**
+     * 【新增】：暴露一个绝对客观的物理接口，用于直接覆写指定维度的效价权重 (hit_weight)
+     */
+    public void updateDimensionHitWeight(int id, double newHitWeight) {
+        String sql = "UPDATE Feeling_Dimensions SET hit_weight = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setDouble(1, newHitWeight);
+            pstmt.setInt(2, id);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("更新感觉维度极性权重失败 ID: " + id, e);
         }
     }
 

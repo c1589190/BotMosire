@@ -258,6 +258,10 @@ public class LivingLoop implements MosireAPI {
 
                 // 【定时反思任务】
                 if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION && ConfigsManager.TASK_COUNT_FOR_REFLECTION > 1 ) {
+
+                    FeelingDimensionManager.getInstance().tick();
+                    //个人认为感觉权重的衰减应当和执行了多少任务有关，因此放在这了
+
                     processedTaskCount.set(0);
                     log.info("[System] 达到任务处理阈值，正在向潜意识抛入强制反思任务...");
                     TaskQueue.offer(new UpdateThoughtsTask()); // 变更为 offer
@@ -268,8 +272,6 @@ public class LivingLoop implements MosireAPI {
 
                 // 【定时计划任务】
                 if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME && ConfigsManager.SCHEDULE_CYCLING_TIME > 0) {
-                    FeelingDimensionManager.getInstance().tick();
-                    //个人认为感觉权重的衰减应当和执行了多少任务有关，因此放在这了
                     log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
                     TaskQueue.offer(new ScheduledTask()); // 变更为 offer
                     this.trimTaskQueue();
