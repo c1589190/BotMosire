@@ -32,6 +32,7 @@ public class FeelingDimensionManager {
     private final MemoryDB memoryDB;
     //private static final double SIMILARITY_THRESHOLD = 0.6;
     private static final double NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
+    private static final int HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
 
     // 仅依赖该阈值计算基础感觉权重
     //private static final double BLUNT_WEIGHT = ConfigsManager.FD_BLUNT_WEIGHT;
@@ -231,13 +232,13 @@ public class FeelingDimensionManager {
         }
 
         // 状态 2：彻底脱敏，听腻了
-        if (triggerCount >= ConfigsManager.FD_BLUNT_WEIGHT) {
-            return 1.0 / ConfigsManager.FD_BLUNT_WEIGHT;
+        if (triggerCount >= HABITUATION_LIMIT) {
+            return 1.0 / HABITUATION_LIMIT;
         }
 
         // 状态 3：线性衰减期
         // 计算当前的疲劳进度百分比 (0.0 到 1.0 之间)
-        double progress = (double) (triggerCount - 1) / (ConfigsManager.FD_BLUNT_WEIGHT);
+        double progress = (double) (triggerCount - 1) / (HABITUATION_LIMIT);
 
         return 1.0 - progress;
     }
