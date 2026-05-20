@@ -49,9 +49,12 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                 updatedRoles.add(senderRole);
 
+                /*
                 List<String> l = new LinkedList<>();
                 l.add("为自己创建了任务，有关于 [ " + input.getInputText() + " ]");
                 MemoryManager.getInstance().inputCurrentMemorys(l);
+
+                 */
 
                 log.debug("为已有任务 [Role:{}] 追加了新消息", senderRole);
             } else {
@@ -106,6 +109,10 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         isStarving = false;
                     }
                     interestingInputsWithReasons.put(input, reason);
+                    int newHeat = this.engine.getCognitiveHeat().incrementAndGet();
+                    log.debug("认知热度上升至: {}", newHeat);
+
+
                 } else {
                     log.info("消息被抛弃 (得分: {} < 门槛: {}): [{}]", eval.InterestScore, currentDynamicThreshold, textContent);
                 }

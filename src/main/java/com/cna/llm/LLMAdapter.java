@@ -245,7 +245,7 @@ public class LLMAdapter {
             String responseBody = response.body().string();
 
             // 【极其重要】：先打印原始字符串，以后再报错你一眼就能看出服务端发了什么疯
-            log.info("【Tool Calling 原始响应】: {}", responseBody);
+            log.debug("【Tool Calling 原始响应】: {}", responseBody);
 
             // 【核心修复】：强行清洗不规范的 SSE 前缀
             responseBody = responseBody.trim();

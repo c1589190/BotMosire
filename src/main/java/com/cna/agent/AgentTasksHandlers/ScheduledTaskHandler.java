@@ -38,7 +38,7 @@ public class ScheduledTaskHandler extends AbstractAgentTaskHandler {
     @Override
     protected LLMAdapter getTargetLLM(LivingLoop engine) {
         // 覆盖默认模型，指定使用 Scheduler 模型
-        return engine.getSchedulerLLM();
+        return new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
     }
 
     @Override

@@ -63,7 +63,7 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         if (retTask == null) {
             log.info("[TaskHandler] 任务 [{}] 已经圆满终结并销毁。\n", task.getTaskName());
             // 每次任务结束后的唯物结算，开始更新动量模型
-            onTaskCompleted(task, engine);
+            //onTaskCompleted(task, engine);
             return;
         }
 
@@ -101,6 +101,7 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
 
     /**
      * 【重写了默认实现】：任务彻底终结后的回调钩子，全自动更新感觉维度
+     * 弃用！
      */
     protected void onTaskCompleted(DefaultAgentTaskUnit completedTask, LivingLoop engine) {
         log.info("[TaskHandler] 正在将完结任务抛入感觉中枢进行潜意识结算...");

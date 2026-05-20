@@ -79,9 +79,9 @@ public class LivingLoop implements MosireAPI {
 
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
-    private LLMAdapter advancedLLM;
-    private LLMAdapter plannerLLM;
-    private LLMAdapter SchedulerLLM;
+    //private LLMAdapter advancedLLM;
+    //private LLMAdapter plannerLLM;
+    //private LLMAdapter SchedulerLLM;
     private LLMAdapter embLLM;
 
     private final Map<String, DefaultAgentToolUnit> largeLLMToolbox = new ConcurrentHashMap<>();
@@ -116,6 +116,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new CreatePendingChatTask(this));
         this.registerTool(new UpdateWebUI());
         this.registerTool(new ToolUsageReader());
+        this.registerTool(new FinishTask());
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -134,16 +135,16 @@ public class LivingLoop implements MosireAPI {
     private void initLLM(){
         this.littleLLM    = new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG);
         this.largeLLM     = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
-        this.advancedLLM  = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
-        this.plannerLLM   = new LLMAdapter(ConfigsManager.PLANNER_CONFIG);
-        this.SchedulerLLM = new LLMAdapter(ConfigsManager.SCHEDULER_CONFIG);
+        //this.advancedLLM  = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
+        //this.plannerLLM   = new LLMAdapter(ConfigsManager.PLANNER_CONFIG);
+        //this.SchedulerLLM = new LLMAdapter(ConfigsManager.SCHEDULER_CONFIG);
         this.embLLM       = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
     }
 
-    public LLMAdapter getLittleLLM()    { return littleLLM; }
-    public LLMAdapter getLargeLLM()     { return largeLLM; }
-    public LLMAdapter getAdvancedLLM()  { return advancedLLM; }
-    public LLMAdapter getSchedulerLLM() { return SchedulerLLM; }
+    //public LLMAdapter getLittleLLM()    { return littleLLM; }
+    //public LLMAdapter getLargeLLM()     { return largeLLM; }
+    //public LLMAdapter getAdvancedLLM()  { return advancedLLM; }
+    //public LLMAdapter getSchedulerLLM() { return SchedulerLLM; }
     public LLMAdapter getEmbLLM()       { return embLLM; }
 
     // ==========================================
@@ -242,6 +243,7 @@ public class LivingLoop implements MosireAPI {
 
                 if (this.tickCounter_CognitiveCycle >= ConfigsManager.COGNITIVE_CYCLE_TICKS) {
 
+                    this.cognitiveHeat.set(Math.min(ConfigsManager.MAX_COGNITIVE_HEAT, this.cognitiveHeat.get()));
                     this.cognitiveHeat.set(Math.max(this.cognitiveHeat.get() - 1, 0));
 
                     if (isGatekeeperThinking.compareAndSet(false, true)) {
@@ -256,12 +258,8 @@ public class LivingLoop implements MosireAPI {
                     this.tickCounter_CognitiveCycle = 0;
                 }
 
-                // 【定时反思任务】
+                // 【定量反思任务】
                 if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION && ConfigsManager.TASK_COUNT_FOR_REFLECTION > 1 ) {
-
-                    FeelingDimensionManager.getInstance().tick();
-                    //个人认为感觉权重的衰减应当和执行了多少任务有关，因此放在这了
-
                     processedTaskCount.set(0);
                     log.info("[System] 达到任务处理阈值，正在向潜意识抛入强制反思任务...");
                     TaskQueue.offer(new UpdateThoughtsTask()); // 变更为 offer
@@ -309,14 +307,6 @@ public class LivingLoop implements MosireAPI {
                         }
                     }
 
-                    ObjectNode finishTool = mapper.createObjectNode();
-                    finishTool.put("type", "function");
-                    ObjectNode finishFunction = finishTool.putObject("function");
-                    finishFunction.put("name", "finish_task");
-                    finishFunction.put("description", "当你认为当前任务已经完成所有需要干的事，下一轮不需要进行任何其他行动时，调用此工具以立刻结束思考循环。");
-                    finishFunction.putObject("parameters").put("type", "object");
-                    toolsDefinitionArray.add(finishTool);
-
                     //Map<String, Object> baseData = new HashMap<>();
 
                     DefaultAgentTaskHandler handler = taskHandlerRegistry.get(task.getClass());
@@ -360,15 +350,19 @@ public class LivingLoop implements MosireAPI {
         turnData.put("turnsAddition", taskUnit.getTurnsAddition());
 
         CallResult result;
+
+        StringBuilder currentMemory = new StringBuilder();
+        currentMemory.append(Utils.getNowFormatted() + "时,\n");
+        //储存本轮任务处理中所有需要被短期记忆记录的东西
+
         if (turn == 1) {
-            List<String> t = new LinkedList<>();
             if(lastSolvingTask != null){
                 //这说明这个任务插队了
-                t.add("上一轮执行的任务被挂起, " + taskUnit.getTaskName() + " 因判断后的执行权重更高被优先处理...");
+                currentMemory.append("上一轮执行的任务被挂起, " + taskUnit.getTaskName() + " 因判断后的执行权重更高被优先处理...\n");
             } else {
-                t.add(taskUnit.getTaskName() + " 开始被处理...");
+                currentMemory.append(taskUnit.getTaskName() + " 开始被处理...\n");
             }
-            MemoryManager.getInstance().inputCurrentMemorys(t);
+            //MemoryManager.getInstance().inputCurrentMemorys(t);
             lastSolvingTask = taskUnit;
             if(scenePrompts.getThinkingPrompt() != null && !scenePrompts.getThinkingPrompt().isEmpty() && !scenePrompts.getThinkingPrompt().equals("")) {
                 result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
@@ -377,30 +371,37 @@ public class LivingLoop implements MosireAPI {
             }
         } else {
             result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+            currentMemory.append("之前的 " + taskUnit.getTaskName() + " 正在进行第" + turn + "轮处理...\n");
         }
         StringBuilder nowTurnAddition = new StringBuilder();
         nowTurnAddition.append(taskUnit.getTurnsAddition());//把之前的工具调用结果压入
-
 
         nowTurnAddition.append("在任务 " + taskUnit.getTaskName() + " 的第" + turn + "轮思考中，");
         if(result.getContent() != null && !result.getContent().isEmpty() && !result.getContent().equals("") && !result.getContent().equals(" ")) {
             nowTurnAddition.append("你产生了以下想法:{\n");
             nowTurnAddition.append(result.getContent());
             nowTurnAddition.append("\n};\n");
+            currentMemory.append("你的想法是: \"" + result.getContent() + "\";\n");
         }
 
         // 如果没有调用任何工具，直接判定闭环
         if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
             log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
+            currentMemory.append("你在本轮处理中没有调用任何工具。");
             nowTurnAddition.append("你没有调用任何工具;\n");
             nowTurnAddition.append("（也许你该结束这次任务了？或是自己一时抽抽，忘记把工具调用JSON错误地放到了文本栏一起输出了？自行判断吧）\n");
             taskUnit.setTurnsAddition(nowTurnAddition.toString());
             taskUnit.setCurrentTurn(turn + 1); // 向前推进一步！
             if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
                 log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+                currentMemory.append("……由于任务处理循环到上限了，这个任务被强制结束了……");
                 lastSolvingTask = null;
+
+                MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
                 return null; // 超出轮数，销毁
             }
+
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
             return taskUnit; // 返回更新后的任务，准备重新入队
         }
 
@@ -412,12 +413,6 @@ public class LivingLoop implements MosireAPI {
             String argumentsStr = toolCall.path("function").path("arguments").asText();
 
             log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
-
-            if ("finish_task".equals(functionName)) {
-                log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
-                lastSolvingTask = null;
-                return null; // 直接终结任务
-            }
 
             if ("switch_to_advanced_model".equals(functionName)) {
                 log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
@@ -436,9 +431,8 @@ public class LivingLoop implements MosireAPI {
                     toolResults.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 
                     if(targetTool.isAutoMemory()){
-                        List<String> list = new LinkedList<>();
-                        list.add(Utils.getNowFormatted() + "," + targetTool.getTextRecord());
-                        MemoryManager.getInstance().inputCurrentMemorys(list);
+                        currentMemory.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
+                        //MemoryManager.getInstance().inputCurrentMemorys(list);
                     }
 
                 } catch (Exception e) {
@@ -448,6 +442,15 @@ public class LivingLoop implements MosireAPI {
             } else {
                 toolResults.append("调用了工具 [").append(functionName).append("] , 但是这个工具压根不存在;\n");
             }
+
+            if ("finish_task".equals(functionName)) {
+                log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
+                lastSolvingTask = null;
+
+                MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+                return null; // 直接终结任务
+            }
+
         }
 
         // 【修复点 3】：推进轮数，并检查最大循环限制
@@ -459,8 +462,18 @@ public class LivingLoop implements MosireAPI {
 
         if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
             log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
+            currentMemory.append("……由于任务处理循环到上限了，这个任务被强制结束了……");
             lastSolvingTask = null;
+
+            List<String> a = new LinkedList<>();
+            a.add(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemorys(a);
             return null; // 超出轮数，销毁
+        }
+        if(!currentMemory.isEmpty()) {
+            List<String> a = new LinkedList<>();
+            a.add(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemorys(a);
         }
 
         return taskUnit; // 返回更新后的任务，准备重新入队

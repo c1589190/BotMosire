@@ -21,11 +21,11 @@ public class ConfigsManager {
     // 声明为 public static final
     // ==========================================
     public static final LLMConfig GATEKEEPER_CONFIG;
-    public static final LLMConfig PLANNER_CONFIG; // 【新增】：战略规划/第0轮预思考专用模型
+    //public static final LLMConfig PLANNER_CONFIG; // 【新增】：战略规划/第0轮预思考专用模型
     public static final LLMConfig BRAIN_CONFIG;
-    public static final LLMConfig ADVANCED_BRAIN_CONFIG;
+    //public static final LLMConfig ADVANCED_BRAIN_CONFIG;
     public static final LLMConfig EMBEDDING_CONFIG;
-    public static final LLMConfig SCHEDULER_CONFIG;
+    //public static final LLMConfig SCHEDULER_CONFIG;
     public static final LLMConfig VISION_MODEL;
 
     public static final int COGNITIVE_CYCLE_TICKS;
@@ -36,13 +36,14 @@ public class ConfigsManager {
     public static final int PENDING_CHAT_WAITING_TIME;
 
     public static final double NOVELTY_THRESHOLD;
-    public static final double DECAY_CONSTANT;
+    //public static final double DECAY_CONSTANT;
     public static final double SPINAL_REFLEX_THRESHOLD;
     public static final int FD_HABITUATION_LIMIT;
-    public static final double FD_BLUNT_WEIGHT; // 欲望/注意力下限
-    public static final double FD_MAX_WEIGHT;
+    //public static final double FD_BLUNT_WEIGHT; // 欲望/注意力下限
+    //public static final double FD_MAX_WEIGHT;
     public static final double FD_PRESSURE_PENALTY;
     public static final double FD_QUALITY_WEIGHT;
+    public static final int MAX_COGNITIVE_HEAT;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
@@ -104,6 +105,7 @@ public class ConfigsManager {
                 .build();
 
         // 【新增】：战略规划者配置 (第0轮专用)
+        /*
         PLANNER_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.planner.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.planner.apiKey", ""))
@@ -114,6 +116,8 @@ public class ConfigsManager {
                 .enableCoT(getBoolean("llm.planner.enableCoT", true))
                 .build();
 
+         */
+
         BRAIN_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.brain.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.brain.apiKey", ""))
@@ -122,9 +126,10 @@ public class ConfigsManager {
                 .frequencyPenalty(getDouble("llm.brain.frequencyPenalty", 0.4))
                 .presencePenalty(getDouble("llm.brain.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.brain.enableCoT", false))
-                .max_tokens(getInt("llm.brain.maxTokens", 8192))
+                .max_tokens(getInt("llm.brain.maxTokens", 65535))
                 .build();
 
+        /*
         ADVANCED_BRAIN_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.advanced_brain.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.advanced_brain.apiKey", ""))
@@ -136,6 +141,8 @@ public class ConfigsManager {
                 .max_tokens(getInt("llm.advanced_brain.maxTokens", 16384))
                 .build();
 
+         */
+
         EMBEDDING_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.embedding.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.embedding.apiKey", ""))
@@ -143,6 +150,7 @@ public class ConfigsManager {
                 .temperature(getDouble("llm.embedding.temperature", 0.0))
                 .build();
 
+        /*
         SCHEDULER_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.scheduler.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.scheduler.apiKey", ""))
@@ -152,6 +160,8 @@ public class ConfigsManager {
                 .presencePenalty(getDouble("llm.scheduler.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.scheduler.enableCoT", true))
                 .build();
+
+         */
 
         VISION_MODEL = LLMConfig.builder()
                 .apiBase(getString("llm.vision.apiBase", "https://api.siliconflow.cn/v1"))
@@ -190,14 +200,15 @@ public class ConfigsManager {
         DB_URL = getString("memory.dbUrl", "jdbc:sqlite:agent_memory.db");
 
         NOVELTY_THRESHOLD = getDouble("memory.noveltyThreshold", 0.6);
-        DECAY_CONSTANT = getDouble("memory.decayConstant", 0.01);
+        //DECAY_CONSTANT = getDouble("memory.decayConstant", 0.01);
         SPINAL_REFLEX_THRESHOLD = getDouble("memory.spinalReflexThreshold", 0.4);
-        FD_BLUNT_WEIGHT=getDouble("memory.fdBluntWeight", 0.25);
-        FD_MAX_WEIGHT=getDouble("memory.fdMaxWeight", 1.0);
+        //FD_BLUNT_WEIGHT=getDouble("memory.fdBluntWeight", 0.25);
+        //FD_MAX_WEIGHT=getDouble("memory.fdMaxWeight", 1.0);
         FD_HABITUATION_LIMIT = getInt("memory.fdHabituationLimit", 10);
         FD_PRESSURE_PENALTY = getDouble("memory.fdPressurePenalty", 0.01);
         FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
 
+        MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
 
         // ==========================================
         // 4. Napcat 物理通信配置

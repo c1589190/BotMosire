@@ -25,7 +25,7 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
 
     @Override
     public String getTaskName(){
-        return this.getClass().getName();
+        return this.getClass().getSimpleName();
     }
 
     @Override

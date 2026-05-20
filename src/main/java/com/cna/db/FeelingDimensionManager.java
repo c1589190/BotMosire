@@ -122,8 +122,83 @@ public class FeelingDimensionManager {
 
                 log.info("[Feeling] 本轮提取完毕：新节点 {} 个，重塑旧节点 {} 个。", addedCount, updatedCount);
 
+                this.tick();
+
             } catch (Exception e) {
                 log.error("[Feeling] 异步处理任务结算与维度更新失败", e);
+            }
+        });
+    }
+
+    // ==========================================
+    // 显式概念直接处理 (FinishTask 专用，无LLM二次提取)
+    // ==========================================
+
+    public static class ConceptInput {
+        public final String name;
+        public final boolean isPositive;
+
+        public ConceptInput(String name, boolean isPositive) {
+            this.name = name;
+            this.isPositive = isPositive;
+        }
+    }
+
+    /**
+     * 直接处理 LLM 在 finish_task 时提交的显式概念，异步更新维度。
+     * 不调用 LLM，直接进行向量匹配与权重结算。
+     */
+    public void processExplicitConceptsAsync(List<ConceptInput> concepts) {
+        if (concepts == null || concepts.isEmpty()) return;
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensions();
+                int addedCount = 0;
+                int updatedCount = 0;
+
+                for (ConceptInput ci : concepts) {
+                    String concept = ci.name.trim();
+                    if (concept.isEmpty()) continue;
+                    double targetPolarity = ci.isPositive ? 1.0 : -1.0;
+
+                    double[] conceptVector = getEmbeddingMock(concept);
+                    FeelingDimension bestMatch = null;
+                    double highestSim = -1.0;
+
+                    for (FeelingDimension dim : currentDimensions) {
+                        double sim = cosineSimilarity(conceptVector, dim.vector);
+                        if (sim > highestSim) {
+                            highestSim = sim;
+                            bestMatch = dim;
+                        }
+                    }
+
+                    if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
+                        updatedCount++;
+                        int newTriggerCount = memoryDB.hitDimension(bestMatch.id);
+                        double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
+                        memoryDB.updateDimensionHitWeight(bestMatch.id, newHitWeight);
+
+                        log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}]。Trigger: {}->{}, Weight: {}->{}",
+                                concept, bestMatch.concept, bestMatch.triggerCount, newTriggerCount,
+                                String.format("%.3f", bestMatch.hitWeight), String.format("%.3f", newHitWeight));
+
+                        currentDimensions.remove(bestMatch);
+                        currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, newHitWeight, newTriggerCount));
+                    } else {
+                        memoryDB.insertFeelingDimension(concept, conceptVector, targetPolarity * ALPHA);
+                        addedCount++;
+                        log.info("[Feeling] 发现新刺激 [{}] 生成新神经节点。初始 Trigger=1, 初始极性={}", concept, targetPolarity);
+                        currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, targetPolarity * ALPHA, 1));
+                    }
+                }
+
+                log.info("[Feeling] 显式概念处理完毕：新节点 {} 个，重塑旧节点 {} 个。", addedCount, updatedCount);
+                this.tick();  // 成功处理后触发全局衰减
+
+            } catch (Exception e) {
+                log.error("[Feeling] 显式概念处理失败", e);
             }
         });
     }
@@ -169,7 +244,7 @@ public class FeelingDimensionManager {
     }
 
     private String buildDistillationPrompt(String taskLog) {
-        return "现在你要从下面的任务执行日志中提取出 1 到 3 个最核心、最具体的【人类交互话题、外部技术概念、或者现实客观实体】，并且严格判断它们在本次事件中的唯物极性。\n\n" +
+        return "现在你要从下面的任务执行日志中提取出若干个最核心、最具体的【人类交互话题、外部技术概念、或者现实客观实体】，并且严格判断它们在本次事件中的唯物极性。\n\n" +
                 "⚠️【硬核禁忌边界——严禁提取任何系统底层框架噪音】:\n" +
                 "1. 绝对不要提取系统的任何 Java 类名、接口或方法标识。\n" +
                 "2. 绝对不要提取系统底层的固有工具名称和内部运行动作。\n" +

@@ -92,6 +92,12 @@ public class MemoryManager {
         }
     }
 
+    public void inputCurrentMemory(String memory){
+        List<String> a = new LinkedList<>();
+        a.add(memory);
+        this.inputCurrentMemorys(a);
+    }
+
     private void consolidateMemory() {
         List<String> oldMemories = db.popOldestCurrentMemories(EMB_MEMORY_SIZE);
         if (oldMemories.isEmpty()) return;
