@@ -79,6 +79,8 @@ public class LLMAdapter {
         payload.put("stream", true); // 强制开启流式输出
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
+        if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
+        if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
             payload.put("enable_thinking", true);
             //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
@@ -188,6 +190,8 @@ public class LLMAdapter {
         payload.put("stream", false); // 【物理阻断流式】：确保工具调用的 JSON 是一次性完整返回的
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
+        if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
+        if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
             payload.put("enable_thinking", true);
             //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
@@ -237,11 +241,57 @@ public class LLMAdapter {
                 return result;
             }
 
-            // 读取完整的一整块 JSON
+            // 读取完整的一整块原始数据
             String responseBody = response.body().string();
+
+            // 【极其重要】：先打印原始字符串，以后再报错你一眼就能看出服务端发了什么疯
+            log.debug("【Tool Calling 原始响应】: {}", responseBody);
+
+            // 【核心修复】：强行清洗不规范的 SSE 前缀
+            responseBody = responseBody.trim();
+            if (responseBody.startsWith("data:")) {
+                log.warn("拦截到服务端强行返回的流式数据，正在实施物理剥离...");
+                // 找到真正的 JSON 起点
+                int jsonStartIndex = responseBody.indexOf('{');
+                if (jsonStartIndex != -1) {
+                    responseBody = responseBody.substring(jsonStartIndex);
+                }
+
+                // 如果末尾带有 [DONE] 也一并剔除
+                if (responseBody.endsWith("data: [DONE]")) {
+                    responseBody = responseBody.replace("data: [DONE]", "").trim();
+                }
+            }
+
+            // 3. 现在才是真正的安全解析
             JsonNode rootNode = jsonMapper.readTree(responseBody);
-            JsonNode choiceNode = rootNode.path("choices").get(0);
+
+            // 下面是你已经写好的安全校验逻辑，保持原样即可
+            if (rootNode.has("error")) {
+                String errorMsg = rootNode.path("error").path("message").asText("未知 API 错误");
+                log.error("API 拒绝了请求: {}", errorMsg);
+                result.setContent("API 调用失败: " + errorMsg);
+                return result;
+            }
+
+            // 【新增】：安全提取 choices 数组
+            JsonNode choicesNode = rootNode.path("choices");
+            if (choicesNode.isMissingNode() || !choicesNode.isArray() || choicesNode.isEmpty()) {
+                log.error("API 返回了非预期的 JSON 结构 (缺少 choices 节点)，完整返回内容: {}", responseBody);
+                result.setContent("服务端返回格式异常");
+                return result;
+            }
+
+            // 安全获取第一个 choice
+            JsonNode choiceNode = choicesNode.get(0);
             JsonNode messageNode = choiceNode.path("message");
+
+            // 如果连 message 都没有，可能是流式 delta 格式错乱，做最后一道防线
+            if (messageNode.isMissingNode() || messageNode.isNull()) {
+                log.error("API 返回了 choices 但缺少 message 节点: {}", choiceNode.toString());
+                result.setContent("服务端返回格式异常: 缺少 message");
+                return result;
+            }
 
             // 提取推理内容（兼容非标字段）
             result.setReasoningContent(messageNode.path("reasoning_content").asText(null));

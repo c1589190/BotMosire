@@ -15,9 +15,9 @@ public class LLMConfig {
     @Builder.Default private double temperature = 0.7;
     @Builder.Default private double frequencyPenalty = 0.0;
     @Builder.Default private double presencePenalty = 0.0;
-    @Builder.Default private int max_tokens = 4096;
+    @Builder.Default private int max_tokens = 65535;
 
-    private String systemPrompt;
+    @Builder.Default private String systemPrompt = "";
 
     // 思维链开关
     @Builder.Default private boolean enableCoT = false;

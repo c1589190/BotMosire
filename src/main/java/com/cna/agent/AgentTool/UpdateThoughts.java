@@ -16,6 +16,7 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private static final String TARGET_FILE = "thoughts.md";
+    String thoughtItem;
 
     @Override
     public String getName() {
@@ -52,17 +53,17 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
     @Override
     public String execute(JsonNode arguments) {
         try {
-            String thoughtItem = arguments.path("thought_item").asText();
+            this.thoughtItem = arguments.path("thought_item").asText();
 
-            if (thoughtItem == null || thoughtItem.trim().isEmpty()) {
+            if (this.thoughtItem == null || this.thoughtItem.trim().isEmpty()) {
                 return "ERROR: thought_item 不能为空。";
             }
 
             // 1. 格式化内容：添加时间戳和换行，使其更像日志/笔记
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            String contentToAppend = String.format("\n\n### [%s]\n%s", timestamp, thoughtItem);
+            String contentToAppend = String.format("\n\n### [%s]\n%s", timestamp, this.thoughtItem);
 
-            log.info("[Tool][AddInnerThought] 记录新认知: {}", thoughtItem);
+            //log.info("[Tool][AddInnerThought] 记录新认知: {}", this.thoughtItem);
 
             // 2. 调用追加方法
             // 注意：这里假设你的 MDManager 有 append 方法；
@@ -83,6 +84,6 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
 
     @Override
     public String getTextRecord(){
-        return "在内心想法中新增了一条记录;";
+        return "在内心想法中新增了一条记录: \"" + this.thoughtItem + "\";";
     }
 }

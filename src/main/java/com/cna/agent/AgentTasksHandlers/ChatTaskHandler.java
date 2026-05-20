@@ -5,16 +5,14 @@ import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
-import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @Slf4j
-public class ChatTaskHandler implements DefaultAgentTaskHandler {
+public class ChatTaskHandler extends AbstractAgentTaskHandler {
 
     public static final ThreadLocal<Long> CURRENT_REPLY_TO_ID = ThreadLocal.withInitial(() -> 0L);
 
@@ -23,46 +21,44 @@ public class ChatTaskHandler implements DefaultAgentTaskHandler {
         return ChatTask.class;
     }
 
+    /**
+     * 【战术重写】：为了保住 ThreadLocal 的清理机制，我们包装一下父类的执行流
+     */
     @Override
     public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         ChatTask chatTask = (ChatTask) task;
-
         CURRENT_REPLY_TO_ID.set(chatTask.getReplyToMessageId());
 
         try {
-            // 1. 获取消息来源的 namespace (注意：这里的 getNamespace() 需要根据你 ChatTask 实际的 getter 方法名调整，比如 getSource() 等)
-            String namespace = chatTask.getSource();
-            log.info(namespace);
-
-            // 2. 提前拉取该区域的近期聊天记录
-            String recentHistory = ChatAdaptersManager.getHistory(namespace, ConfigsManager.CHATHISTORY_VIEW_AMOUNT);
-            log.info("[ChatTaskHandler] 已为当前任务自动预载入目标 [{}] 的近期聊天上下文", namespace);
-
-            // 3. 装配提示词所需的数据模型
-            Map<String, Object> baseData = new HashMap<>();
-            baseData.put("taskText", chatTask.getTaskText());
-            baseData.put("recent_history", recentHistory); // 【新增】：将刚刚获取的历史记录塞入 data
-            baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
-
-            DefaultAgentTaskUnit retTask = engine.executeCognitiveCycle(
-                    task,
-                    new ScenePromptsManager(ChatTask.class.getName()),
-                    baseData,
-                    engine.getLargeLLM(),
-                    toolsDefinitionArray,
-                    "常规聊天任务"
-            );
-
-            if (retTask == null) {
-                log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
-                return;
-            }
-
-            engine.pushTask(retTask);
-
+            // 调用父类的核心流水线
+            super.handleTask(task, engine, toolsDefinitionArray);
         } finally {
-            // 【关键修复】：无论成功还是异常，绝对保证清理 ThreadLocal
+            // 绝对保证清理 ThreadLocal
             CURRENT_REPLY_TO_ID.remove();
         }
+    }
+
+    @Override
+    protected boolean prepareBaseData(DefaultAgentTaskUnit task, Map<String, Object> baseData, LivingLoop engine) {
+        ChatTask chatTask = (ChatTask) task;
+
+        // 1. 获取消息来源的 namespace
+        String namespace = chatTask.getSource();
+        log.info(namespace);
+
+        // 2. 拉取近期聊天记录
+        String recentHistory = ChatAdaptersManager.getHistory(namespace, ConfigsManager.CHATHISTORY_VIEW_AMOUNT);
+        log.info("[ChatTaskHandler] 已为当前任务自动预载入目标 [{}] 的近期聊天上下文", namespace);
+
+        // 3. 压入数据 (taskText 已经在父类装载过了)
+        baseData.put("recent_history", recentHistory);
+        baseData.put("deep_memories", LLManager.getDeepMemories(chatTask.getTaskText(), engine.getEmbLLM(), ConfigsManager.MEMORY_DEPTH));
+
+        return true; // 数据准备就绪，放行
+    }
+
+    @Override
+    protected String getTaskDescription() {
+        return "常规聊天任务";
     }
 }

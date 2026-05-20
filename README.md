@@ -1,235 +1,56 @@
-# 🤖 BotMosire
+# BotMosire
 
-> 让 AI 像人类一样处理信息：先过滤，再思考，最后行动。记忆要折叠，心境要传承。
+基于 Java 21 的 AI Agent 框架（本分支含 QQ / Napcat 与 Discord 等适配器）。
 
----
+## 环境
 
-## 目录
+- **Java** 21+
+- **Maven** 3.9+（仅在你需要从源码打 JAR 时需要）
 
-> **QQ 交流群：** `1103316266` — 下滑见 [交流群](#readme-qq-group)
+## 快速开始
 
-- [项目简介](#readme-intro)
-- [功能特色](#readme-features)
-- [环境需求](#readme-requirements)
-- [快速开始](#readme-quickstart)
-- [配置说明](#readme-config)
-- [架构说明](#readme-architecture)
-- [已知问题](#readme-issues)
-- [许可证](#readme-license)
-- [致谢](#readme-thanks)
-- [交流群](#readme-qq-group)
+核心就一件事：**在「你希望生成配置文件的目录」里执行 `java -jar …`**。  
+`application.properties` 会写在**当前工作目录**（你终端所在的文件夹），**不会**自动跟 JAR 文件放在同一路径——除非你先把终端 `cd` 到 JAR 旁边。
 
----
+### 方式一：直接使用 JAR（推荐给使用者）
 
-<a id="readme-intro"></a>
-## 📖 项目简介
+1. 从 Release 下载 `BotMosire-Alpha26.1.1.jar`（或他人提供的同名制品），放进一个空文件夹，例如 `D:\BotMosire\`。
+2. 在该文件夹打开终端并进入该目录：
 
-BotMosire 是一个基于 Java 21 的 AI Agent 框架，专注于**拟人化认知架构**。
+   ```bash
+   cd /d D:\BotMosire
+   ```
 
-不同于传统的单轮请求-响应模式，BotMosire 引入了**持续认知循环**（LivingLoop），让 AI 能够：
-- 像人一样选择性关注消息（而不是每条都回）
-- 在后台整理记忆（潜意识折叠）
-- 先思考再行动（第0轮规划）
-- 主动结束对话（finish_task）
+3. 运行（首次若不存在配置，会从模板生成 `application.properties` 并启动程序）：
 
-**核心理念：** 这不是「优化」，这是「拟人」。
+   ```bash
+   java -jar BotMosire-Alpha26.1.1.jar
+   ```
 
----
+4. 若需先改配置：用 `Ctrl+C` 结束进程，用编辑器打开**同目录下**的 `application.properties`，填入 Napcat / Discord / LLM 等项后，再执行第 3 步。
 
-<a id="readme-features"></a>
-## ✨ 功能特色
-
-### 🚪 Gatekeeper（门神）
-小模型快速判断「这批消息值得注意吗？」，省 token，符合人类注意力选择逻辑。
-- 专有线程池 + AtomicBoolean 锁，防止连发时判断冲突
-- 一次处理积压消息，只发 1 次小模型请求
-
-### 🧠 潜意识折叠
-处理 N 个任务后，后台异步调用 LLM 总结旧记忆，折叠后向量化存入深层记忆库。
-- 模拟「睡眠时记忆整合」
-- 折叠时注入当前心境，让过去的记忆被现在的她重新诠释
-
-### 🎯 第0轮规划
-传入空工具数组，剥夺模型调用能力，强制纯思考，输出战略路线图。
-- 规划烙印在后续轮次的 turnsAddition
-- 模拟「三思而后行」
-
-### ✅ finish_task 工具
-虚拟工具（在 `LivingLoop.java` 中动态注入），让模型主动结束思考循环，避免无限循环。
-
-### ⏳ 催熟机制
-静止计数超过阈值才触发回复，等待连发消息聚齐，避免碎片化回复。
-- 模拟「等人把话说完」
-
-### 🎲 10% 捞回
-当所有消息都被 Gatekeeper 拦截时，10% 概率从垃圾桶捞一条。
-- 避免「完全不理的冷漠感」
-- 回复时心境是「勉为其难」
-
----
-
-<a id="readme-requirements"></a>
-## 🛠️ 环境需求
-
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| **Java** | 21+ (LTS) | 推荐 Microsoft Build of OpenJDK |
-| **Maven** | 3.9.x | 用于编译打包 |
-| **Napcat（仅 QQ）** | - | QQ 消息适配器，目前仅支持 QQ 平台 |
-
----
-
-<a id="readme-quickstart"></a>
-## 🚀 快速开始
-
-### 1. 克隆项目
-
-```bash
-git clone https://github.com/c1589190/BotMosire.git
-cd BotMosire
-```
-
-> 分支说明：
-> - `master` — 基础框架（仅有 QQ/Napcat 适配器）
-> - `test_CNA` — 社区测试分支，包含额外的功能实验
-
-### 2. 编译打包
-
-```bash
-mvn clean package
-```
-
-首次运行会下载依赖，约需 1-2 分钟。
-
-### 3. 配置
-
-首次运行会自动生成 `application.properties` 模板：
-
-```bash
-java -jar target/BotMosire-Alpha26.1.jar
-```
-
-编辑 `application.properties`，至少填入：
-- Napcat WebSocket 地址（如需 QQ 平台）
-- LLM API Key（SiliconFlow / 其他 OpenAI 格式 API）
-
-### 4. 运行
-
-**Windows：**
+**Windows 控制台中文乱码时**（可选）：
 
 ```powershell
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-java "-Dfile.encoding=UTF-8" -jar target\BotMosire-Alpha26.1.jar
+java "-Dfile.encoding=UTF-8" -jar BotMosire-Alpha26.1.1.jar
 ```
 
-**Linux/macOS：**
+### 方式二：从源码构建 JAR（推荐给开发者）
 
 ```bash
-java -jar target/BotMosire-Alpha26.1.jar
+cd BotMosire-test_CNA-new   # 或你的本地克隆目录
+mvn clean package -q
 ```
 
----
+可执行包路径：
 
-<a id="readme-config"></a>
-## ⚙️ 配置说明
-
-BotMosire 采用**矩阵式 LLM 配置**，7 个角色各司其职：
-
-| 角色 | 用途 | 默认模型（SiliconFlow） |
-|------|------|---------|
-| **gatekeeper** | 消息预过滤 | `Pro/deepseek-ai/DeepSeek-V3.2` |
-| **planner** | 任务规划 | `Pro/deepseek-ai/DeepSeek-V3.2` |
-| **brain** | 主力对话 | `Pro/deepseek-ai/DeepSeek-V3.2` |
-| **advanced_brain** | 重型任务 | `Pro/deepseek-ai/DeepSeek-R1` |
-| **embedding** | 向量化记忆 | `Qwen/Qwen3-Embedding-4B`（本地推荐用 `nomic-embed-text`） |
-| **scheduler** | 定时任务 | `Pro/deepseek-ai/DeepSeek-V3.2` |
-| **vision** | 图像理解 | `Qwen/Qwen3.6-35B-A3B` |
-
-**配置示例：**
-
-```properties
-# Gatekeeper
-llm.gatekeeper.chatModel=Pro/deepseek-ai/DeepSeek-V3.2
-llm.gatekeeper.apiBase=https://api.siliconflow.cn/v1
-llm.gatekeeper.apiKey=your-siliconflow-api-key
-
-# Brain
-llm.brain.chatModel=Pro/deepseek-ai/DeepSeek-V3.2
-llm.brain.apiBase=https://api.siliconflow.cn/v1
-llm.brain.apiKey=your-siliconflow-api-key
-
-# Embedding（本地 Ollama 或 SiliconFlow 不支持 embedding 时）
-llm.embedding.embeddingModel=nomic-embed-text
-llm.embedding.apiBase=http://localhost:11434/v1
-llm.embedding.apiKey=ollama
+```text
+target/BotMosire-Alpha26.1.1.jar
 ```
 
-**架构哲学：** 轻量任务用小模型（省 token），重量任务用大模型（高质量）。
+之后与**方式一**相同：先 `cd` 到你希望存放配置的目录，再 `java -jar …\target\BotMosire-Alpha26.1.1.jar`（或把 JAR 复制过去再运行）。
 
 ---
 
-<a id="readme-architecture"></a>
-## 🏗️ 架构说明
-
-### LivingLoop（生命循环）
-
-BotMosire 采用**双线程生产者-消费者**架构：
-
-```
-[Adapter] → AgentInputTasksQueue (BlockingQueue) → [LivingLoop]
-                                                     ↓
-                                              [Consumer Thread]
-                                                     ↓
-                                              Gatekeeper → Brain → Tools
-                                                     ↓
-                                              finish_task?
-                                                     ↓
-                                              [Output] → Adapter
-```
-
-**关键组件：**
-
-- **AgentInputTasksQueue**：阻塞队列，生产者（Adapter）推入消息，消费者（LivingLoop）取出处理
-- **Consumer Thread**：持续运行的认知循环，负责思考、工具调用、回复生成
-- **PluginManager**：插件加载器，支持 ChatTaskHandler、ScheduledTaskHandler 等
-
-### 认知参数
-
-```properties
-cognitive.cycleTicks=8000        # 心跳间隔（ms），达到此时间触发 Gatekeeper 感知循环
-cognitive.messageWaitingTime=5   # 静默秒数，超过则催熟触发（等人把话说完）
-cognitive.consumerCyclingTime=10 # 单次消费循环的最大思考轮次
-cognitive.taskCountForReflection=10 # 处理多少任务后触发潜意识记忆折叠
-```
-
----
-
-<a id="readme-issues"></a>
-## 📝 已知问题
-
-- **适配器扩展**：当前适配器为 Napcat（QQ），如需其他平台可参考源码自行扩展
-- **Embedding 404**：确保 `llm.embedding.apiBase` 指向 Ollama（`http://localhost:11434/v1`），DeepSeek API 不支持 embedding 端点
-- **中文日志乱码**：Windows PowerShell 需设置 UTF-8 编码（见「快速开始 - 运行」）
-
----
-
-<a id="readme-license"></a>
-## 📜 许可证
-
-本项目遵循 Apache 2.0 许可证。
-
----
-
-<a id="readme-thanks"></a>
-## 🙏 致谢
-
-感谢所有为 BotMosire 贡献代码和建议的朋友。
-
-如果这个项目对你有帮助，欢迎 Star ⭐
-
----
-
-<a id="readme-qq-group"></a>
-## 💬 交流群
-
-QQ 群：`1103316266`
+说明：首次运行不会「只生成配置就退出」，而是正常启动；若未配置 Napcat / Discord，日志里可能出现连接失败提示，程序仍会继续按配置尝试运行。
