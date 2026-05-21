@@ -14,11 +14,15 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.*;
 
 @Slf4j
 public class LLManager {
 
     private static final Configuration cfg;
+
+    // LLM 调用专用线程池，完全与 Jetty / LivingLoop 线程隔离
+    private static final ExecutorService LLM_EXECUTOR = Executors.newFixedThreadPool(4);
 
     // 静态代码块：系统启动时自动初始化 FreeMarker
     static {
@@ -59,6 +63,8 @@ public class LLManager {
      * @param llm          使用的模型适配器
      * @param tools        大模型可用的工具箱
      */
+
+    /*
     public static CallResult executeScene(
             String userTemplate,
             Map<String, Object> dataModel,
@@ -90,8 +96,76 @@ public class LLManager {
         return llm.generateResponseWithTools(userPrompt, MDManager.read("prompts/CORE.md"), tools);
     }
 
-    private static double[] getTextVector(String s, LLMAdapter emb) {
-        return emb.getEmbedding(s);
+     */
+
+    // ---------- 新增：异步执行，返回 Future ----------
+    public static CompletableFuture<CallResult> executeSceneAsync(
+            String userTemplate,
+            Map<String, Object> dataModel,
+            LLMAdapter llm,
+            ArrayNode tools) {
+
+        // 补全数据（渲染前的轻量操作在主调线程完成没问题）
+        if (!dataModel.containsKey("current_memories")) {
+            dataModel.put("current_memories",
+                    MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+        }
+        dataModel.put("now_time", Utils.getNowFormatted());
+        dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
+        dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
+
+        String userPrompt = render(userTemplate, dataModel);
+        log.debug("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
+
+        return CompletableFuture.supplyAsync(() -> {
+            if (tools == null) {
+                CallResult result = new CallResult();
+                result.setToolCall(false);
+                result.setContent(llm.generateStreamResponse(
+                        userPrompt,
+                        MDManager.read("prompts/CORE.md"),
+                        chunk -> {}));
+                result.setToolCalls(null);
+                return result;
+            }
+            return llm.generateResponseWithTools(userPrompt, MDManager.read("prompts/CORE.md"), tools);
+        }, LLM_EXECUTOR);
+    }
+
+    // ========== 异步嵌入调用 ==========
+
+    /**
+     * 异步获取文本的嵌入向量，不阻塞调用线程
+     * @param text 要向量化的文本
+     * @param emb  嵌入模型适配器
+     * @return 包含 double[] 的 CompletableFuture，可以 get(timeout) 等待结果
+     */
+    public static CompletableFuture<double[]> getEmbeddingAsync(String text, LLMAdapter emb) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return emb.getEmbedding(text);
+            } catch (Exception e) {
+                log.error("[LLManager Async] 嵌入调用失败", e);
+                return new double[0];
+            }
+        }, LLM_EXECUTOR);
+    }
+
+    /**
+     * 同步封装：带超时的异步嵌入调用，方便旧代码快速替换
+     * @param text   文本
+     * @param emb    嵌入模型
+     * @return 向量数组，超时或异常返回空数组
+     */
+    public static double[] getTextVector(String text, LLMAdapter emb) {
+        try {
+            return getEmbeddingAsync(text, emb).get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            log.error("[LLManager] 嵌入调用超时 ({} {})", ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("[LLManager] 嵌入调用异常", e);
+        }
+        return new double[0];
     }
 
     public static List<String> getDeepMemories(String text, LLMAdapter emb, int depth) {

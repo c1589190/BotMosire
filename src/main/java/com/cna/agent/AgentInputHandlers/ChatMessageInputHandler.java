@@ -56,7 +56,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                  */
 
-                log.debug("为已有任务 [Role:{}] 追加了新消息", senderRole);
+                log.info("为已有任务 [Role:{}] 追加了新消息", senderRole);
             } else {
                 unknownInputs.add(input);
             }

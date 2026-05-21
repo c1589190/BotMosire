@@ -109,6 +109,6 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         // 拼接任务初始文本和执行过程中的想法与工具反馈
         String fullTaskLog = completedTask.getTaskText() + "\n" + completedTask.getTurnsAddition();
 
-        FeelingDimensionManager.getInstance().processTaskLogAsync(fullTaskLog);
+        //FeelingDimensionManager.getInstance().processTaskLogAsync(fullTaskLog);
     }
 }

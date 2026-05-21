@@ -180,6 +180,10 @@ public class LLMAdapter {
     /**
      * 对接文本模型 (非流式 Tool Calling 专用)
      * 传入工具定义的 JSON 数组，返回工具调用结果或普通文本
+     * - 强制清洗 SSE 前缀与非法尾缀；
+     * - 同时识别 tool_calls (数组) 和 function_call (旧格式)，并统一成 tool_calls 数组；
+     * - 对所有 NullNode / MissingNode / 空数组 做防御，确保不会因格式差异导致工具调用信息丢失；
+     * - 工具调用结果的闭合性由此方法完全保证，上层不再需要做额外清洗。
      */
     public CallResult generateResponseWithTools(String userMessage,
                                                 String contextMemories,
@@ -187,25 +191,23 @@ public class LLMAdapter {
 
         ObjectNode payload = jsonMapper.createObjectNode();
         payload.put("model", config.getChatModel());
-        payload.put("stream", false); // 【物理阻断流式】：确保工具调用的 JSON 是一次性完整返回的
+        payload.put("stream", false);
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
+        payload.put("thinking_budget", config.getMax_tokens());
         if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
         if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
             payload.put("enable_thinking", true);
-            //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
         }
 
-        // 挂载工具说明书
         if (tools != null && !tools.isEmpty()) {
             payload.set("tools", tools);
-            payload.put("tool_choice", "auto"); // 让模型自己决定用不用工具
+            payload.put("tool_choice", "auto");
         }
 
         ArrayNode messages = payload.putArray("messages");
 
-        // 1. 组装系统底层约束与记忆
         String finalSysPrompt = config.getSystemPrompt();
         if (contextMemories != null && !contextMemories.isEmpty()) {
             finalSysPrompt += contextMemories;
@@ -216,107 +218,165 @@ public class LLMAdapter {
         sysMsg.put("content", finalSysPrompt);
         messages.add(sysMsg);
 
-        // 2. 压入用户输入
         ObjectNode userMsg = jsonMapper.createObjectNode();
         userMsg.put("role", "user");
         userMsg.put("content", userMessage);
         messages.add(userMsg);
 
-        String url = config.getApiBase().endsWith("/") ? config.getApiBase() + "chat/completions" : config.getApiBase() + "/chat/completions";
+        String url = config.getApiBase().endsWith("/") ?
+                config.getApiBase() + "chat/completions" :
+                config.getApiBase() + "/chat/completions";
+
+        String payloadStr = payload.toString();
+        log.debug("请求体大小: {} bytes", payloadStr.length());
 
         Request request = new Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer " + config.getApiKey())
                 .header("Content-Type", "application/json")
-                .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
+                .post(RequestBody.create(payloadStr, MediaType.get("application/json")))
                 .build();
 
         CallResult result = new CallResult();
 
-        log.info("发起 Tool Calling 计算请求...");
-        try (Response response = client.newCall(request).execute()) {
+        // ---------- 关键：创建带强制总超时的临时客户端 ----------
+        OkHttpClient timeoutClient = client.newBuilder()
+                .callTimeout(90, TimeUnit.SECONDS)   // 整个请求最多等 90 秒
+                .build();
+
+        long startTime = System.currentTimeMillis();
+        try (Response response = timeoutClient.newCall(request).execute()) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
+
             if (!response.isSuccessful() || response.body() == null) {
                 log.error("计算资源请求失败，状态码: {}", response.code());
                 result.setContent("计算资源请求失败: " + response.code());
                 return result;
             }
 
-            // 读取完整的一整块原始数据
             String responseBody = response.body().string();
-
-            // 【极其重要】：先打印原始字符串，以后再报错你一眼就能看出服务端发了什么疯
             log.debug("【Tool Calling 原始响应】: {}", responseBody);
 
-            // 【核心修复】：强行清洗不规范的 SSE 前缀
-            responseBody = responseBody.trim();
-            if (responseBody.startsWith("data:")) {
-                log.warn("拦截到服务端强行返回的流式数据，正在实施物理剥离...");
-                // 找到真正的 JSON 起点
-                int jsonStartIndex = responseBody.indexOf('{');
-                if (jsonStartIndex != -1) {
-                    responseBody = responseBody.substring(jsonStartIndex);
-                }
-
-                // 如果末尾带有 [DONE] 也一并剔除
-                if (responseBody.endsWith("data: [DONE]")) {
-                    responseBody = responseBody.replace("data: [DONE]", "").trim();
+            // ---------- 清洗非 JSON 污染 ----------
+            String cleanedBody = responseBody.trim();
+            if (cleanedBody.startsWith("data:")) {
+                int jsonStart = cleanedBody.indexOf('{');
+                if (jsonStart != -1) {
+                    cleanedBody = cleanedBody.substring(jsonStart);
                 }
             }
+            if (cleanedBody.endsWith("data: [DONE]")) {
+                cleanedBody = cleanedBody.substring(0, cleanedBody.lastIndexOf("data: [DONE]")).trim();
+            }
 
-            // 3. 现在才是真正的安全解析
-            JsonNode rootNode = jsonMapper.readTree(responseBody);
-
-            // 下面是你已经写好的安全校验逻辑，保持原样即可
-            if (rootNode.has("error")) {
-                String errorMsg = rootNode.path("error").path("message").asText("未知 API 错误");
-                log.error("API 拒绝了请求: {}", errorMsg);
-                result.setContent("API 调用失败: " + errorMsg);
+            JsonNode rootNode;
+            try {
+                rootNode = jsonMapper.readTree(cleanedBody);
+            } catch (Exception e) {
+                log.error("无法解析 JSON: {}", cleanedBody);
+                result.setContent("响应格式异常");
                 return result;
             }
 
-            // 【新增】：安全提取 choices 数组
+            if (rootNode.has("error")) {
+                String err = rootNode.path("error").path("message").asText("未知错误");
+                log.error("API 返回错误: {}", err);
+                result.setContent("API 错误: " + err);
+                return result;
+            }
+
             JsonNode choicesNode = rootNode.path("choices");
             if (choicesNode.isMissingNode() || !choicesNode.isArray() || choicesNode.isEmpty()) {
-                log.error("API 返回了非预期的 JSON 结构 (缺少 choices 节点)，完整返回内容: {}", responseBody);
-                result.setContent("服务端返回格式异常");
+                log.error("缺少 choices 字段");
+                result.setContent("响应缺少 choices");
                 return result;
             }
 
-            // 安全获取第一个 choice
             JsonNode choiceNode = choicesNode.get(0);
             JsonNode messageNode = choiceNode.path("message");
-
-            // 如果连 message 都没有，可能是流式 delta 格式错乱，做最后一道防线
             if (messageNode.isMissingNode() || messageNode.isNull()) {
-                log.error("API 返回了 choices 但缺少 message 节点: {}", choiceNode.toString());
-                result.setContent("服务端返回格式异常: 缺少 message");
-                return result;
+                JsonNode deltaNode = choiceNode.path("delta");
+                if (!deltaNode.isMissingNode() && !deltaNode.isNull()) {
+                    messageNode = deltaNode;
+                } else {
+                    log.error("无 message 和 delta");
+                    result.setContent("响应结构异常");
+                    return result;
+                }
             }
 
-            // 提取推理内容（兼容非标字段）
             result.setReasoningContent(messageNode.path("reasoning_content").asText(null));
 
-            // 提取常规文本
             JsonNode contentNode = messageNode.path("content");
-            if (!contentNode.isNull() && !contentNode.isMissingNode()) {
+            if (!contentNode.isMissingNode() && !contentNode.isNull()) {
                 result.setContent(contentNode.asText());
+            } else {
+                result.setContent(null);
             }
 
-            // 【核心拦截】：检查是否命中了工具调用
+            // --- 统一提取工具调用 ---
+            ArrayNode toolCallsArray = null;
+
+            if (messageNode.has("tool_calls") && !messageNode.get("tool_calls").isNull()) {
+                JsonNode tcNode = messageNode.get("tool_calls");
+                if (tcNode.isArray() && tcNode.size() > 0) {
+                    toolCallsArray = jsonMapper.createArrayNode();
+                    for (JsonNode call : tcNode) {
+                        ObjectNode normalized = normalizeToolCall(call);
+                        toolCallsArray.add(normalized);
+                    }
+                } else if (tcNode.isObject()) {
+                    toolCallsArray = jsonMapper.createArrayNode().add(normalizeToolCall(tcNode));
+                } else if (tcNode.isArray() && tcNode.size() == 0) {
+                    log.warn("tool_calls 为空数组，忽略");
+                }
+            } else if (messageNode.has("function_call") && !messageNode.get("function_call").isNull()) {
+                JsonNode fcNode = messageNode.get("function_call");
+                if (fcNode.isObject()) {
+                    ObjectNode converted = jsonMapper.createObjectNode();
+                    converted.put("id", "call_" + System.currentTimeMillis());
+                    converted.put("type", "function");
+                    converted.set("function", fcNode);
+                    toolCallsArray = jsonMapper.createArrayNode().add(converted);
+                }
+            }
+
             String finishReason = choiceNode.path("finish_reason").asText();
-            if ("tool_calls".equals(finishReason) || messageNode.has("tool_calls")) {
+            if (toolCallsArray == null && "tool_calls".equals(finishReason)) {
+                log.warn("finish_reason=tool_calls 但无 tool_calls 内容");
+            }
+
+            if (toolCallsArray != null && toolCallsArray.size() > 0) {
                 result.setToolCall(true);
-                result.setToolCalls(messageNode.path("tool_calls"));
+                result.setToolCalls(toolCallsArray);
             } else {
                 result.setToolCall(false);
+                result.setToolCalls(null);
             }
 
-        } catch (Exception e) {
+        } catch (java.net.SocketTimeoutException e) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            log.error("Tool Calling 请求超时 ({}ms)，可能是 prompt 过长或模型响应太慢", elapsed);
+            result.setContent("请求超时，请稍后重试或缩短上下文");
+        } catch (IOException e) {
             log.error("Tool Calling 网络 I/O 异常", e);
-            result.setContent("网络异常");
+            result.setContent("网络异常: " + e.getMessage());
         }
 
         return result;
+    }
+
+    private ObjectNode normalizeToolCall(JsonNode call) {
+        ObjectNode normalized = call.deepCopy();
+        ObjectNode func = (ObjectNode) normalized.get("function");
+        if (func != null && func.has("arguments")) {
+            JsonNode args = func.get("arguments");
+            if (args.isObject() || args.isArray()) {
+                func.put("arguments", args.toString());
+            }
+        }
+        return normalized;
     }
 
     /**

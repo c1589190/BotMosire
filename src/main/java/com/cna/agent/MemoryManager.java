@@ -13,8 +13,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -116,12 +115,13 @@ public class MemoryManager {
         log.info("[MemoryManager] 正在呼叫 LLM 提炼并压缩 {} 条记忆...", oldMemories.size());
 
         // 2. 发起请求，传入 Tool
-        CallResult result = LLManager.executeScene(
-                new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(),
-                data,
-                summaryLLM,
-                buildMemoryExtractorTool()
-        );
+        CallResult result;
+        try {
+            result = LLManager.executeSceneAsync(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
+                    .get(90, TimeUnit.SECONDS);
+        } catch (ExecutionException | InterruptedException | TimeoutException e) {
+            throw new RuntimeException(e);
+        }
 
         // 3. 直接拦截 Tool Call
         if (result.isToolCall() && result.getToolCalls() != null && !result.getToolCalls().isEmpty()) {
@@ -145,7 +145,7 @@ public class MemoryManager {
                         if (point.isBlank()) continue;
 
                         // 向量化并入库
-                        double[] vector = embLLM.getEmbedding(point);
+                        double[] vector = LLManager.getTextVector(point, embLLM);
                         if (vector != null && vector.length > 0) {
                             db.insertDeepMemory(vector, point);
                             log.debug("[MemoryManager] 深度记忆存入：{}", point);
@@ -214,7 +214,7 @@ public class MemoryManager {
     public List<String> searchDeepMemoryByText(String queryText, int n) {
         log.info("[MemoryManager] 正在将查询词向量化: {}", queryText);
         // 调用 Embedding 模型将搜索词转化为向量
-        double[] queryVector = embLLM.getEmbedding(queryText);
+        double[] queryVector = LLManager.getTextVector(queryText, embLLM);
 
         if (queryVector == null || queryVector.length == 0) {
             log.error("[MemoryManager] 查询词向量化失败！");

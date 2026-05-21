@@ -4,6 +4,7 @@ import com.cna.config.ConfigsManager;
 import com.cna.db.MemoryDB.FeelingDimension;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
+import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -43,6 +44,7 @@ public class FeelingDimensionManager {
 
     private static final double ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
 
+    /*
     public void processTaskLogAsync(String taskLog) {
         if (taskLog == null || taskLog.trim().isEmpty()) return;
 
@@ -129,6 +131,7 @@ public class FeelingDimensionManager {
             }
         });
     }
+     */
 
     // ==========================================
     // 显式概念直接处理 (FinishTask 专用，无LLM二次提取)
@@ -203,6 +206,7 @@ public class FeelingDimensionManager {
         });
     }
 
+    /*
     private ArrayNode buildExtractionTool() {
         ArrayNode tools = jsonMapper.createArrayNode();
         ObjectNode toolWrapper = tools.addObject();
@@ -242,6 +246,8 @@ public class FeelingDimensionManager {
 
         return tools;
     }
+
+     */
 
     private String buildDistillationPrompt(String taskLog) {
         return "现在你要从下面的任务执行日志中提取出若干个最核心、最具体的【人类交互话题、外部技术概念、或者现实客观实体】，并且严格判断它们在本次事件中的唯物极性。\n\n" +
@@ -413,6 +419,6 @@ public class FeelingDimensionManager {
     }
 
     private double[] getEmbeddingMock(String text) {
-        return new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG).getEmbedding(text);
+        return LLManager.getTextVector(text, new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG));
     }
 }

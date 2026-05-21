@@ -365,12 +365,37 @@ public class LivingLoop implements MosireAPI {
             //MemoryManager.getInstance().inputCurrentMemorys(t);
             lastSolvingTask = taskUnit;
             if(scenePrompts.getThinkingPrompt() != null && !scenePrompts.getThinkingPrompt().isEmpty() && !scenePrompts.getThinkingPrompt().equals("")) {
-                result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
+                try {
+                    result = LLManager.executeSceneAsync(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray)
+                            .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    log.error("LLM 调用超时 (90s)");
+                    result = new CallResult();
+                    result.setContent("请求超时，请稍后重试");
+                    // 强制结束本轮，可以把 currentMemory 记录一下然后返回 null 或继续循环
+                } catch (ExecutionException | InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             } else {
-                result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+                try {
+                    result = LLManager.executeSceneAsync(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray)
+                            .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    log.error("LLM 调用超时 (90s)");
+                    result = new CallResult();
+                    result.setContent("请求超时，请稍后重试");
+                    // 强制结束本轮，可以把 currentMemory 记录一下然后返回 null 或继续循环
+                } catch (ExecutionException | InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             }
         } else {
-            result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+            try {
+                result = LLManager.executeSceneAsync(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray)
+                        .get(90, TimeUnit.SECONDS);
+            } catch (ExecutionException | InterruptedException | TimeoutException e) {
+                throw new RuntimeException(e);
+            }
             currentMemory.append("之前的 " + taskUnit.getTaskName() + " 正在进行第" + turn + "轮处理...\n");
         }
         StringBuilder nowTurnAddition = new StringBuilder();

@@ -28,6 +28,8 @@ public class ConfigsManager {
     //public static final LLMConfig SCHEDULER_CONFIG;
     public static final LLMConfig VISION_MODEL;
 
+    public static final int LLM_TIMEOUT_TIME;
+
     public static final int COGNITIVE_CYCLE_TICKS;
     public static final int MESSAGE_WAITING_TIME;
     public static final int CONSUMER_CYCLING_TIME;
@@ -172,6 +174,8 @@ public class ConfigsManager {
                 //.presencePenalty(getDouble("llm.vision.presencePenalty", 0.5))
                 //.enableCoT(getBoolean("llm.vision.enableCoT", true))
                 .build();
+
+        LLM_TIMEOUT_TIME = getInt("llm.timeoutTime", 180000);
 
         // ==========================================
         // 2. 认知引擎心跳参数
