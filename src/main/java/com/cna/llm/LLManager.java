@@ -132,6 +132,44 @@ public class LLManager {
         }, LLM_EXECUTOR);
     }
 
+    /**
+     * 同步封装：带超时的异步场景执行，方便快速替换原有的 executeScene 调用。
+     * 超时或异常时返回一个内容为错误信息的 CallResult（toolCall=false）。
+     *
+     * @param userTemplate  用户提示词模板
+     * @param dataModel     数据模型
+     * @param llm           模型适配器
+     * @param tools         工具定义
+
+     * @return CallResult，保证非 null
+     */
+    public static CallResult executeScene(
+            String userTemplate,
+            Map<String, Object> dataModel,
+            LLMAdapter llm,
+            ArrayNode tools) {
+
+        try {
+            return executeSceneAsync(userTemplate, dataModel, llm, tools)
+                    .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            log.error("[LLManager] 场景执行超时 ({} {})", ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            return errorResult("请求超时，请稍后重试或缩短上下文");
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("[LLManager] 场景执行异常", e);
+            return errorResult("系统错误: " + e.getMessage());
+        }
+    }
+
+    // 快速构造一个错误 CallResult 的辅助方法
+    private static CallResult errorResult(String message) {
+        CallResult r = new CallResult();
+        r.setContent(message);
+        r.setToolCall(false);
+        r.setToolCalls(null);
+        return r;
+    }
+
     // ========== 异步嵌入调用 ==========
 
     /**
