@@ -98,6 +98,10 @@ public class LLManager {
 
      */
 
+    public static ExecutorService getExecutor() {
+        return LLM_EXECUTOR;
+    }
+
     // ---------- 新增：异步执行，返回 Future ----------
     public static CompletableFuture<CallResult> executeSceneAsync(
             String userTemplate,
@@ -115,7 +119,8 @@ public class LLManager {
         dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
 
         String userPrompt = render(userTemplate, dataModel);
-        log.debug("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
+        log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt);
+        log.debug("prompt:" + userPrompt);
 
         return CompletableFuture.supplyAsync(() -> {
             if (tools == null) {

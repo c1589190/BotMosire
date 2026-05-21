@@ -243,8 +243,116 @@ public class MemoryDB {
     }
 
     /**
-     * 获取全量感觉维度
+     * 【保险修复版】获取全量感觉维度。
+     * 遍历每条记录时，实时检测 vector_json 的合法性，
+     * 若出现 null、空串、解析失败或维度长度与有效记录不一致，
+     * 则立刻根据 concept 重新计算向量并 UPDATE 回数据库；
+     * 若重计算也失败（如 embedder 异常），则写入全零向量。
+     *
+     * @param embedder  文本 → 向量的函数，如 concept -> embeddingService.embed(concept)
+     * @return 修复后的感觉维度列表（所有记录的向量均保证非 null 且维度一致）
      */
+    public List<FeelingDimension> getAllFeelingDimensionsSafe(java.util.function.Function<String, double[]> embedder) {
+        List<FeelingDimension> result = new ArrayList<>();
+        String selectSql = "SELECT id, concept, vector_json, hit_weight, trigger_count FROM Feeling_Dimensions";
+        int expectedDim = -1;
+
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(selectSql)) {
+
+            while (rs.next()) {
+                int id = rs.getInt("id");
+                String concept = rs.getString("concept");
+                String vectorJson = rs.getString("vector_json");
+                double hitWeight = rs.getDouble("hit_weight");
+                int triggerCount = rs.getInt("trigger_count");
+                double[] vector = null;
+
+                // 1. 尝试解析已有向量
+                boolean needRepair = false;
+                if (vectorJson != null && !vectorJson.isEmpty()) {
+                    try {
+                        vector = mapper.readValue(vectorJson, double[].class);
+                        if (vector == null || vector.length == 0) {
+                            needRepair = true;
+                        } else {
+                            if (expectedDim == -1) {
+                                expectedDim = vector.length;   // 第一条有效记录确定标准维度
+                            } else if (vector.length != expectedDim) {
+                                needRepair = true;
+                            }
+                        }
+                    } catch (JsonProcessingException e) {
+                        needRepair = true;
+                    }
+                } else {
+                    needRepair = true;
+                }
+
+                // 2. 需要修复：重新生成向量并写回数据库
+                if (needRepair) {
+                    log.warn("[MemoryDB] 感觉维度 id={} concept='{}' 向量异常，尝试重计算...", id, concept);
+                    try {
+                        vector = embedder.apply(concept);
+                        if (vector == null || vector.length == 0) {
+                            throw new RuntimeException("embedder 返回空向量");
+                        }
+                        // 更新标准维度（如果之前全是坏数据，现在第一次得到有效向量）
+                        if (expectedDim == -1) {
+                            expectedDim = vector.length;
+                        } else if (vector.length != expectedDim) {
+                            // 嵌入模型返回的维度不一致，强制截断/对齐？这里仍视为失败，用零向量保底
+                            throw new RuntimeException("嵌入维度不一致: " + vector.length + " vs " + expectedDim);
+                        }
+                        // 写回数据库
+                        updateVectorOnly(conn, id, vector);
+                        log.info("[MemoryDB] 感觉维度 id={} 向量已修复", id);
+                    } catch (Exception ex) {
+                        log.error("[MemoryDB] 感觉维度 id={} 重计算失败，将使用全零向量。错误: {}", id, ex.getMessage());
+                        // 生成全零向量
+                        if (expectedDim > 0) {
+                            vector = new double[expectedDim];
+                        } else {
+                            // 还不知道维度，给一个默认长度（如 128，根据你的模型调整）
+                            vector = new double[128];   // 可根据实际情况调整
+                            expectedDim = vector.length;
+                        }
+                        // 将全零向量写回数据库
+                        try {
+                            updateVectorOnly(conn, id, vector);
+                        } catch (Exception updateEx) {
+                            log.error("[MemoryDB] 更新全零向量也失败 id={}", id, updateEx);
+                        }
+                    }
+                }
+
+                // 3. 现在 vector 一定非 null，加入结果集
+                result.add(new FeelingDimension(id, concept, vector, hitWeight, triggerCount));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 获取感觉维度时发生数据库错误", e);
+        }
+        return result;
+    }
+
+    /**
+     * 仅更新某行的 vector_json 字段（不修改 hit_weight 和 trigger_count）
+     */
+    private void updateVectorOnly(Connection conn, int id, double[] vector) throws SQLException, JsonProcessingException {
+        String updateSql = "UPDATE Feeling_Dimensions SET vector_json = ? WHERE id = ?";
+        try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+            pstmt.setString(1, mapper.writeValueAsString(vector));
+            pstmt.setInt(2, id);
+            pstmt.executeUpdate();
+        }
+    }
+
+    /**
+     * 保留原有的无参方法（不修复，直接返回，可能含有坏数据）
+     * 建议逐步替换为 Safe 版本
+     */
+    @Deprecated
     public List<FeelingDimension> getAllFeelingDimensions() {
         List<FeelingDimension> result = new ArrayList<>();
         String sql = "SELECT id, concept, vector_json, hit_weight, trigger_count FROM Feeling_Dimensions";

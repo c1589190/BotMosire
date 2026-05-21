@@ -20,15 +20,19 @@ import java.util.concurrent.CompletableFuture;
 public class FeelingDimensionManager {
 
     private static FeelingDimensionManager instance;
+
     public static void init(MemoryDB memoryDB) {
         instance = new FeelingDimensionManager(memoryDB);
     }
+
     public static FeelingDimensionManager getInstance() {
         return instance;
     }
 
     private static final ObjectMapper jsonMapper = new ObjectMapper();
     private static final org.slf4j.Logger feelingLog = org.slf4j.LoggerFactory.getLogger("feeling-log");
+
+    private static final LLMAdapter embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
 
     private final MemoryDB memoryDB;
     //private static final double SIMILARITY_THRESHOLD = 0.6;
@@ -156,7 +160,7 @@ public class FeelingDimensionManager {
 
         CompletableFuture.runAsync(() -> {
             try {
-                List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensions();
+                List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
                 int addedCount = 0;
                 int updatedCount = 0;
 
@@ -203,7 +207,7 @@ public class FeelingDimensionManager {
             } catch (Exception e) {
                 log.error("[Feeling] 显式概念处理失败", e);
             }
-        });
+        }, LLManager.getExecutor());
     }
 
     /*
@@ -279,7 +283,7 @@ public class FeelingDimensionManager {
 
     public List<DimensionScore> evaluateAllDimensions(String input) {
         double[] inputVector = getEmbeddingMock(input);
-        List<FeelingDimension> dimensions = memoryDB.getAllFeelingDimensions();
+        List<FeelingDimension> dimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
         List<DimensionScore> scoredList = new ArrayList<>();
 
         if (dimensions.isEmpty()) return scoredList;
@@ -299,6 +303,7 @@ public class FeelingDimensionManager {
         scoredList.sort((a, b) -> Double.compare(b.InterestScore, a.InterestScore));
         return scoredList;
     }
+
     /**
      * 【重构：线性脱敏衰减曲线】
      * 规则：
@@ -358,6 +363,7 @@ public class FeelingDimensionManager {
     public static class FeelingEvaluation {
         public final String topConcept;
         public final double InterestScore;
+
         public FeelingEvaluation(String topConcept, double finalScore) {
             this.topConcept = topConcept;
             this.InterestScore = finalScore;
@@ -419,6 +425,6 @@ public class FeelingDimensionManager {
     }
 
     private double[] getEmbeddingMock(String text) {
-        return LLManager.getTextVector(text, new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG));
+        return LLManager.getTextVector(text, embLLM);
     }
 }

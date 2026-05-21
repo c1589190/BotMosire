@@ -14,7 +14,10 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 public class WebServer {
@@ -22,6 +25,8 @@ public class WebServer {
     private final Javalin app;
     private final ConcurrentLinkedQueue<LlmCommand> commandQueue = new ConcurrentLinkedQueue<>();
     private final String indexHtmlAbsolutePath; // 记录 index.html 的绝对路径
+
+    private static final ExecutorService IO_EXECUTOR = Executors.newFixedThreadPool(2);
 
     public WebServer(String workspaceAbsolutePath) {
         String websitePath = workspaceAbsolutePath + "/website";
@@ -91,23 +96,31 @@ public class WebServer {
         // =========================================================
         // 【接收 Agent 指令】持久化修改文件并推送到队列
         // =========================================================
+        // 修改 POST /api/llm/command
         app.post("/api/llm/command", ctx -> {
             try {
                 LlmCommand cmd = ctx.bodyAsClass(LlmCommand.class);
 
-                // 对 HTML 修改指令先持久化到磁盘，再推入前端实时渲染队列
+                // 前端渲染队列的推送（轻量操作，可以留在当前线程）
+                commandQueue.offer(cmd);
+                log.info("[WebServer] 收到 LLM 指令，已推送到前端队列");
+
+                // 如果是修改 HTML 的指令，异步持久化到磁盘（不阻塞网络线程）
                 if ("update_html".equals(cmd.getAction()) || "append_html".equals(cmd.getAction())) {
-                    boolean patched = patchHtmlFile(cmd);
-                    if (!patched) {
-                        ctx.status(400).json(new ResponsePayload("ERROR",
-                            "未找到目标节点 [" + cmd.getTarget() + "]，请先调用 read_file 查看 website/index.html 的当前 DOM 结构，确认 CSS 选择器正确后重试。"));
-                        return;
-                    }
+                    CompletableFuture.runAsync(() -> {
+                        boolean patched = patchHtmlFile(cmd);
+                        if (!patched) {
+                            // 由于已经返回了，这里的错误只能通过日志记录
+                            log.error("[WebServer] 异步持久化失败，未找到目标节点: {}", cmd.getTarget());
+                        }
+                    }, IO_EXECUTOR).exceptionally(ex -> {
+                        log.error("[WebServer] 异步持久化异常", ex);
+                        return null;
+                    });
                 }
 
-                commandQueue.offer(cmd);
-                log.info("[WebServer] 收到 LLM 指令并已推送到前端: action={}, target={}", cmd.getAction(), cmd.getTarget());
-                ctx.json(new ResponsePayload("SUCCESS", "指令已执行，HTML 改动已持久化到磁盘并推送至前端实时渲染。"));
+                // 无论是否持久化完成，都先返回成功
+                ctx.json(new ResponsePayload("SUCCESS", "指令已接收"));
             } catch (Exception e) {
                 log.error("[WebServer] 解析 LLM 指令失败", e);
                 ctx.status(400).json(new ResponsePayload("ERROR", "处理异常: " + e.getMessage()));

@@ -56,6 +56,9 @@ public class LLMAdapter {
                 log.error("Embedding 网络阻断，状态码: {}", response.code());
                 return new double[0];
             }
+
+            log.debug("emb模型响应: " + response.body());
+
             // 根据 SiliconFlow 的输出格式，物理定位到 data[0].embedding 节点
             JsonNode rootNode = jsonMapper.readTree(response.body().string());
             JsonNode vectorNode = rootNode.path("data").get(0).path("embedding");
