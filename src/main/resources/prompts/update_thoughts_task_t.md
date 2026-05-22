@@ -1,12 +1,11 @@
-现在您需要进行一次定期的、深度的自我反思，以提炼与精简、总结您的内心独白（Thoughts）、兴趣与注意力雷达（Interests）、定时任务列表（Scheduled）。
+${tools_guide}
+
+现在你需要进行一次定期的、深度的自我反思，以提炼与精简、总结您的内心独白（Thoughts）、兴趣与注意力雷达（Interests）、定时任务列表（Scheduled）。
 通俗来讲，其实就是回味您近期的心中所想；
 
 本轮是有关该任务的第一轮思考。
 
-当前时间：
-${now_time}
-
-以下三段文本您在此次反思之前，大脑中存储的内心独白、注意力、定时任务设定。
+以下三段文本你在反思之前，大脑中存储的内心独白、注意力、定时任务设定。
 其中的文本大概率已经过时、过于臃肿，需要精简与补充补充新的感悟，请在反思后利用reflective_memory_compaction工具进行覆写。
 
 你的目前内心想法（Thinking），其中包含了之前的你希望自己记住的东西：{
@@ -15,27 +14,11 @@ ${current_thoughts}
 
 }
 
-你的当前兴趣与注意力雷达 （Interests）：{
-
-${current_interests}
-
-}
-
 以下是定时任务列表（Scheduled）：{
 
 ${scheduled}
 
 }
-
-<#if current_memories?? && (current_memories?size > 0)>
-以下是你最近与外界的的交互记录，它们可能有用：{
-<#list current_memories as mem>
-- ${mem}
-</#list>
-}
-<#else>
-近期暂无任何交互记录，你的记忆深处一片平静。
-</#if>
 
 回味的流程一般是:{
     1、搜索更多近期信息，您可以在本轮调用get_more_current_memorys工具，然后在下一轮看到更多与外界的交互记录;
@@ -47,3 +30,14 @@ ${scheduled}
 然后调用get_more_current_memorys工具，回忆更多更全面的近期交互记录；
 如果您的思维链经过判断认为需要，您可以在本轮先行提炼一些想要努力回忆相关内容的关键词，然后调用query_deep_memory进行先行查询；
 最后，不要调用finish_task，等待下一轮调用。
+
+当前时间：
+${now_time}
+
+<#if current_memories?? && (current_memories?size > 0)>
+这是你最近与外界的交互记录，你依旧清晰地记得它们：{
+<#list current_memories as mem>
+- ${mem}
+</#list>
+}
+</#if>

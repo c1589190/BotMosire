@@ -46,7 +46,7 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     @Override
     public String getInputText() {
         StringBuilder ret = new StringBuilder();
-        ret.append(Utils.getNowFormatted()).append(",");
+        ret.append(Utils.getNowPrecise()).append(",");
         ret.append("来源于 " + this.source_name + " (" + this.source + ") ");
         ret.append("的 " + this.role_name + " (" + this.role + ") ");
         if (quotedMessageId > 0) {

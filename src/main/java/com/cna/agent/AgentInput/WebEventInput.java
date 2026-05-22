@@ -27,7 +27,7 @@ public class WebEventInput implements DefaultAgentInputUnit {
     @Override
     public String getInputText() {
         StringBuilder ret = new StringBuilder();
-        ret.append(Utils.getNowFormatted()).append(",");
+        ret.append(Utils.getNowPrecise()).append(",");
         ret.append("来源于 Web前端面板 (IP: ").append(ipAddress).append(") ");
         ret.append("触发了自定义事件: {\n").append(this.rawJson).append("\n};");
         return ret.toString();

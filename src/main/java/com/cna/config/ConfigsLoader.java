@@ -24,7 +24,6 @@ public class ConfigsLoader {
                 "CORE.md",
                 "console_chat_task_solving.md",
                 "console_chat_task_thinking.md",
-                "getInterest.md",
                 "scheduled_task_solving.md",
                 "update_thoughts_task_solving.md",
                 "update_thoughts_task_t.md",
