@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import java.util.concurrent.TimeUnit;
@@ -75,30 +77,49 @@ public class ReadWebPage implements DefaultAgentToolUnit {
 
         log.info("[ReadWebPage] 读取页面: {} (最大{}字符)", url, maxChars);
 
-        // 通过 Jina AI Reader 将网页转为干净的 Markdown
+        String jinaKey = ConfigsManager.JINA_API_KEY;
+        if (jinaKey != null && !jinaKey.isBlank()) {
+            String result = readWithJina(url, maxChars, jinaKey);
+            if (!result.startsWith("ERROR")) return result;
+            log.warn("[ReadWebPage] Jina 读取失败，尝试 MetaSo 备用");
+        }
+
+        String metasoKey = ConfigsManager.METASO_API_KEY;
+        if (metasoKey != null && !metasoKey.isBlank()) {
+            String result = readWithMetaso(url, maxChars, metasoKey);
+            if (!result.startsWith("ERROR")) return result;
+            log.warn("[ReadWebPage] MetaSo 读取也失败");
+        }
+
+        // 最后尝试不用 API Key 的 Jina（免费额度有限）
+        String result = readWithJina(url, maxChars, null);
+        if (!result.startsWith("ERROR")) return result;
+
+        return "ERROR: 所有读取方式均失败，请稍后重试。";
+    }
+
+    // ── Jina AI Reader ──────────────────────────────────────────────────
+
+    private String readWithJina(String url, int maxChars, String apiKey) {
         String jinaUrl = "https://r.jina.ai/" + url;
 
         Request.Builder reqBuilder = new Request.Builder()
                 .url(jinaUrl)
                 .header("Accept", "text/plain,text/markdown")
                 .header("X-Return-Format", "markdown")
-                // 指示 Jina 不要包含图片（节省 token）
                 .header("X-Remove-Selector", "img,script,style,nav,footer,header");
 
-        String jinaKey = ConfigsManager.JINA_API_KEY;
-        if (jinaKey != null && !jinaKey.isBlank()) {
-            reqBuilder.header("Authorization", "Bearer " + jinaKey);
+        if (apiKey != null && !apiKey.isBlank()) {
+            reqBuilder.header("Authorization", "Bearer " + apiKey);
         }
 
         try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
             if (!response.isSuccessful() || response.body() == null) {
-                return "ERROR: 读取页面失败，HTTP " + response.code() +
-                        "。请检查 URL 是否有效或该网站是否允许访问。";
+                return "ERROR: Jina HTTP " + response.code();
             }
 
             String content = response.body().string();
 
-            // 清理 Jina 返回的元数据头部（Title: ... URL: ... Markdown Content: 之类的行）
             int mdStart = content.indexOf("Markdown Content:");
             if (mdStart > 0) {
                 content = content.substring(mdStart + "Markdown Content:".length()).stripLeading();
@@ -113,8 +134,51 @@ public class ReadWebPage implements DefaultAgentToolUnit {
             return "【页面内容】" + url + "\n\n" + content;
 
         } catch (Exception e) {
-            log.error("[ReadWebPage] 读取页面异常: {}", url, e);
-            return "ERROR: 读取页面时发生异常: " + e.getMessage();
+            log.error("[ReadWebPage] Jina 异常: {}", url, e);
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    // ── MetaSo Reader API (备用) ───────────────────────────────────────
+
+    private String readWithMetaso(String url, int maxChars, String apiKey) {
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("url", url);
+
+            MediaType mediaType = MediaType.parse("text/plain");
+            RequestBody requestBody = RequestBody.create(mediaType, body.toString());
+
+            Request request = new Request.Builder()
+                    .url("https://metaso.cn/api/v1/reader")
+                    .method("POST", requestBody)
+                    .addHeader("Authorization", "Bearer " + apiKey)
+                    .addHeader("Accept", "text/plain")
+                    .addHeader("Content-Type", "application/json")
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    log.warn("[ReadWebPage] MetaSo HTTP {}", response.code());
+                    return "ERROR: MetaSo HTTP " + response.code();
+                }
+
+                String content = response.body().string();
+                if (content.isBlank()) {
+                    return "ERROR: MetaSo 返回空内容";
+                }
+
+                if (content.length() > maxChars) {
+                    content = content.substring(0, maxChars)
+                            + "\n\n[... 内容已截断，原始共 " + content.length() + " 字符。"
+                            + "如需更多内容，可增大 max_chars 参数重新调用。]";
+                }
+
+                return "【页面内容】" + url + "\n\n" + content;
+            }
+        } catch (Exception e) {
+            log.error("[ReadWebPage] MetaSo 异常: {}", url, e);
+            return "ERROR: " + e.getMessage();
         }
     }
 

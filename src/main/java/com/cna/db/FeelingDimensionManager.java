@@ -19,10 +19,12 @@ import java.util.concurrent.CompletableFuture;
 @Slf4j
 public class FeelingDimensionManager {
 
-    private static FeelingDimensionManager instance;
+    private static volatile FeelingDimensionManager instance;
 
-    public static void init(MemoryDB memoryDB) {
-        instance = new FeelingDimensionManager(memoryDB);
+    public static synchronized void init(MemoryDB memoryDB) {
+        if (instance == null) {
+            instance = new FeelingDimensionManager(memoryDB);
+        }
     }
 
     public static FeelingDimensionManager getInstance() {
@@ -73,8 +75,6 @@ public class FeelingDimensionManager {
 
         CompletableFuture.runAsync(() -> {
             try {
-                // 读取快照时不需要锁，但写入数据库时需要串行化防止互相覆盖
-                List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
                 int addedCount = 0;
                 int updatedCount = 0;
 
@@ -84,21 +84,23 @@ public class FeelingDimensionManager {
                     double targetPolarity = ci.isPositive ? 1.0 : -1.0;
 
                     double[] conceptVector = getEmbeddingMock(concept);
-                    FeelingDimension bestMatch = null;
-                    double highestSim = -1.0;
 
-                    for (FeelingDimension dim : currentDimensions) {
-                        double sim = cosineSimilarity(conceptVector, dim.vector);
-                        if (sim > highestSim) {
-                            highestSim = sim;
-                            bestMatch = dim;
+                    // 整个"读 → 匹配 → 写"链条原子化，防止 Lost Update
+                    synchronized (dimensionLock) {
+                        List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
+                        FeelingDimension bestMatch = null;
+                        double highestSim = -1.0;
+
+                        for (FeelingDimension dim : currentDimensions) {
+                            double sim = cosineSimilarity(conceptVector, dim.vector);
+                            if (sim > highestSim) {
+                                highestSim = sim;
+                                bestMatch = dim;
+                            }
                         }
-                    }
 
-                    if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
-                        updatedCount++;
-                        // 串行化数据库更新，防止多线程互相覆盖写入
-                        synchronized (dimensionLock) {
+                        if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
+                            updatedCount++;
                             int newTriggerCount = memoryDB.hitDimension(bestMatch.id);
                             double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
                             memoryDB.updateDimensionHitWeight(bestMatch.id, newHitWeight);
@@ -106,18 +108,10 @@ public class FeelingDimensionManager {
                             log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}]。Trigger: {}->{}, Weight: {}->{}",
                                     concept, bestMatch.concept, bestMatch.triggerCount, newTriggerCount,
                                     String.format("%.3f", bestMatch.hitWeight), String.format("%.3f", newHitWeight));
-
-                            // 更新本地缓存镜像以反映最新状态
-                            currentDimensions.remove(bestMatch);
-                            currentDimensions.add(new FeelingDimension(bestMatch.id, bestMatch.concept, bestMatch.vector, newHitWeight, newTriggerCount));
-                        }
-                    } else {
-                        // 新增维度也需要串行化，避免重复插入相同的 concept
-                        synchronized (dimensionLock) {
+                        } else {
                             memoryDB.insertFeelingDimension(concept, conceptVector, targetPolarity * ALPHA);
                             addedCount++;
                             log.info("[Feeling] 发现新刺激 [{}] 生成新神经节点。初始 Trigger=1, 初始极性={}", concept, targetPolarity);
-                            currentDimensions.add(new FeelingDimension(-1, concept, conceptVector, targetPolarity * ALPHA, 1));
                         }
                     }
                 }

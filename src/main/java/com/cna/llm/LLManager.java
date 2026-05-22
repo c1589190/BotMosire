@@ -119,8 +119,8 @@ public class LLManager {
         dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
 
         String userPrompt = render(userTemplate, dataModel);
-        log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt);
-        log.debug("prompt:" + userPrompt);
+        log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
+        log.trace("[LLManager Async] Prompt 全文: {}", userPrompt);
 
         return CompletableFuture.supplyAsync(() -> {
             if (tools == null) {

@@ -67,6 +67,7 @@ public class ConfigsManager {
     public static final String DEPLOYER_ROLE;
     public static final String SEARCH_API_KEY;
     public static final String JINA_API_KEY;
+    public static final String METASO_API_KEY;
 
 
     public static void init(){
@@ -191,6 +192,7 @@ public class ConfigsManager {
         DEPLOYER_ROLE = getString("bot.deployerRole", "");
         SEARCH_API_KEY = getEnvOrProp("BRAVE_SEARCH_API_KEY", "search.braveApiKey", "");
         JINA_API_KEY   = getEnvOrProp("JINA_API_KEY", "search.jinaApiKey", "");
+        METASO_API_KEY = getEnvOrProp("METASO_API_KEY", "search.metasoApiKey", "");
         PENDING_CHAT_WAITING_TIME = getInt("cognitive.pendingChatWaitingTime", 180000);
 
         // ==========================================

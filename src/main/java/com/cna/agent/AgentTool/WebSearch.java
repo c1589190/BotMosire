@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -79,8 +81,16 @@ public class WebSearch implements DefaultAgentToolUnit {
         if (apiKey != null && !apiKey.isBlank()) {
             String result = searchWithBrave(query, count, apiKey);
             if (!result.startsWith("ERROR")) return result;
-            log.warn("[WebSearch] Brave 搜索失败，降级至 DuckDuckGo");
+            log.warn("[WebSearch] Brave 搜索失败，尝试 MetaSo 备用");
         }
+
+        String metasoKey = ConfigsManager.METASO_API_KEY;
+        if (metasoKey != null && !metasoKey.isBlank()) {
+            String result = searchWithMetaso(query, count, metasoKey);
+            if (!result.startsWith("ERROR")) return result;
+            log.warn("[WebSearch] MetaSo 搜索失败，降级至 DuckDuckGo");
+        }
+
         return searchWithDuckDuckGo(query, count);
     }
 
@@ -124,6 +134,59 @@ public class WebSearch implements DefaultAgentToolUnit {
             }
         } catch (Exception e) {
             log.error("[WebSearch] Brave 异常", e);
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    // ── MetaSo Search API (备用) ───────────────────────────────────────
+
+    private String searchWithMetaso(String query, int count, String apiKey) {
+        try {
+            String url = "https://metaso.cn/api/v1/search";
+
+            ObjectNode body = mapper.createObjectNode();
+            body.put("q", query);
+            body.put("scope", "webpage");
+            body.put("includeSummary", false);
+            body.put("size", String.valueOf(count));
+            body.put("includeRawContent", false);
+            body.put("conciseSnippet", false);
+
+            MediaType mediaType = MediaType.parse("application/json");
+            RequestBody requestBody = RequestBody.create(mediaType, body.toString());
+
+            Request request = new Request.Builder()
+                    .url(url)
+                    .method("POST", requestBody)
+                    .addHeader("Authorization", "Bearer " + apiKey)
+                    .addHeader("Accept", "application/json")
+                    .addHeader("Content-Type", "application/json")
+                    .build();
+
+            try (Response response = searchClient.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    log.warn("[WebSearch] MetaSo HTTP {}", response.code());
+                    return "ERROR: MetaSo HTTP " + response.code();
+                }
+                JsonNode root = mapper.readTree(response.body().string());
+                JsonNode webpages = root.path("webpages");
+                if (!webpages.isArray() || webpages.isEmpty()) {
+                    return "SYSTEM_FEEDBACK: MetaSo 搜索未返回结果，换个关键词试试。";
+                }
+
+                List<SearchResult> list = new ArrayList<>();
+                for (JsonNode r : webpages) {
+                    if (list.size() >= count) break;
+                    SearchResult sr = new SearchResult();
+                    sr.title   = r.path("title").asText("");
+                    sr.url     = r.path("link").asText("");
+                    sr.snippet = r.path("snippet").asText("");
+                    if (!sr.url.isBlank()) list.add(sr);
+                }
+                return format(query, list, "MetaSo Search");
+            }
+        } catch (Exception e) {
+            log.error("[WebSearch] MetaSo 异常", e);
             return "ERROR: " + e.getMessage();
         }
     }

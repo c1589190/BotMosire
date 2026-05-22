@@ -4,19 +4,20 @@
     <property name="LOG_HOME" value="logs" />
     <property name="APP_NAME" value="LivingLoop" />
 
+    <!-- ==================== 控制台输出 ==================== -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger{36}) - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{24}) - %msg%n</pattern>
             <charset>UTF-8</charset>
         </encoder>
     </appender>
 
+    <!-- ==================== 业务日志文件（仅 com.cna 包） ==================== -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_HOME}/${APP_NAME}.log</file>
 
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_HOME}/archive/${APP_NAME}-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-
             <maxFileSize>50MB</maxFileSize>
             <maxHistory>30</maxHistory>
             <totalSizeCap>2GB</totalSizeCap>
@@ -28,6 +29,7 @@
         </encoder>
     </appender>
 
+    <!-- ==================== 感觉维度专用日志 ==================== -->
     <appender name="FEELING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_HOME}/feeling.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
@@ -42,16 +44,41 @@
         </encoder>
     </appender>
 
+    <!-- ==================== 第三方包压制 ==================== -->
+    <!-- HikariCP 连接池 -->
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <!-- Jetty 服务器 -->
+    <logger name="org.eclipse.jetty" level="WARN"/>
+    <!-- OkHttp 网络 -->
+    <logger name="okhttp3" level="WARN"/>
+    <logger name="okhttp3.internal" level="WARN"/>
+    <!-- Javalin Web 框架 -->
+    <logger name="io.javalin" level="WARN"/>
+    <!-- JDA Discord -->
+    <logger name="net.dv8tion.jda" level="WARN"/>
+    <!-- Java WebSocket -->
+    <logger name="org.java_websocket" level="WARN"/>
+    <!-- FreeMarker -->
+    <logger name="freemarker" level="WARN"/>
+    <!-- SQLite JDBC -->
+    <logger name="org.sqlite" level="WARN"/>
+
+    <!-- ==================== 业务包日志 ==================== -->
+    <!-- com.cna 到文件：DEBUG 级别，捕获所有业务细节 -->
+    <logger name="com.cna" level="DEBUG" additivity="false">
+        <appender-ref ref="FILE"/>
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <!-- 感觉维度专用 logger，独立文件 -->
     <logger name="feeling-log" level="INFO" additivity="false">
         <appender-ref ref="FEELING_FILE"/>
     </logger>
 
+    <!-- ==================== 根配置 ==================== -->
+    <!-- 根只设 INFO → 控制台，不写文件（文件由 com.cna logger 独占） -->
     <root level="INFO">
         <appender-ref ref="CONSOLE" />
-    </root>
-
-    <root level="DEBUG">
-        <appender-ref ref="FILE" />
     </root>
 
 </configuration>
