@@ -18,7 +18,7 @@ import java.util.Map;
 public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandler {
 
     @Override
-    public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
+    public DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         log.info("[TaskHandler] 正在准备抽象执行流水线: {}", task.getTaskName());
 
         appendCustomTools(toolsDefinitionArray);
@@ -46,7 +46,7 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
 
         if (!prepareBaseData(task, baseData, engine)) {
             log.info("[TaskHandler] 子类放弃了本次任务的执行: {}", task.getTaskName());
-            return;
+            return null; // 任务终止
         }
 
         LLMAdapter targetLLM = getTargetLLM(engine);
@@ -64,10 +64,11 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
             log.info("[TaskHandler] 任务 [{}] 已经圆满终结并销毁。\n", task.getTaskName());
             // 每次任务结束后的唯物结算，开始更新动量模型
             //onTaskCompleted(task, engine);
-            return;
+            return null; // 任务完成
         }
 
-        engine.pushTask(retTask);
+        // 返回更新后的任务，由消费者循环决定是继续粘性执行还是重新入队
+        return retTask;
     }
 
     // =================================================================

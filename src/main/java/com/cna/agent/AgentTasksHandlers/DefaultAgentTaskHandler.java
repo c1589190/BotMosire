@@ -19,5 +19,6 @@ public interface DefaultAgentTaskHandler {
      * @param engine LivingLoop 引擎实例 (提供执行认知循环、获取模型等核心能力)
      * @param toolsDefinitionArray 当前系统已装配好的所有工具说明书
      */
-    void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray);
+    // 返回 null 表示任务完成，返回非 null 表示任务需要继续执行下一回合
+    DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray);
 }

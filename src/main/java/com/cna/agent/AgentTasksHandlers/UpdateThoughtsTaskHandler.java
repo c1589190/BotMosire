@@ -27,7 +27,7 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
     }
 
     @Override
-    public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
+    public DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
 
         UpdateThoughtsTask thoughtsTask = (UpdateThoughtsTask) task;
@@ -97,9 +97,10 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
 
         if (retTask == null) {
             log.info("任务" + this.getClass().getName() + "已终结并销毁\n");
-            return;
+            return null; // 任务完成
         }
 
-        engine.pushTask(retTask);
+        // 返回更新后的任务，由消费者循环决定粘性执行还是重新入队
+        return retTask;
     }
 }

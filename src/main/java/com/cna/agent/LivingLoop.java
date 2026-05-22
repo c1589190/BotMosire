@@ -57,8 +57,10 @@ public class LivingLoop implements MosireAPI {
     private final AtomicInteger processedTaskCount = new AtomicInteger(0);
 
     // 将双端队列替换为优先级阻塞队列，根据 priority 升序排列（数值越小，越先出队）
+    // 同优先级时，正在执行中（inProgress）的任务优先，防止不断被同权重新任务抢占导致饥饿
     private PriorityBlockingQueue<DefaultAgentTaskUnit> TaskQueue = new PriorityBlockingQueue<>(
             1145, Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
+                            .thenComparing(t -> t.isInProgress() ? 0 : 1)
     );
 
     //Input队列
@@ -214,20 +216,38 @@ public class LivingLoop implements MosireAPI {
     }
 
     private synchronized void trimTaskQueue() {
-        while (TaskQueue.size() > ConfigsManager.MAX_TASK_AMOUNT) {
-            // 队列积压时，遍历找到优先级数值最大（即优先级最低）的任务进行移除
-            DefaultAgentTaskUnit lowestPriorityTask = null;
+        // 队列上限仅作用于未开始执行的任务，已开始的任务不受上限约束，不会被清理
+        while (true) {
+            // 重新统计 pending 任务数量
+            int pendingCount = 0;
             for (DefaultAgentTaskUnit t : TaskQueue) {
-                if (lowestPriorityTask == null || t.getPriority() > lowestPriorityTask.getPriority()) {
-                    lowestPriorityTask = t;
+                if (!t.isInProgress()) {
+                    pendingCount++;
                 }
             }
-            if (lowestPriorityTask != null) {
-                TaskQueue.remove(lowestPriorityTask);
-                log.info("[TaskQueue] 队列积压，已抛弃最低优先级的任务: {} (Priority: {})",
-                        lowestPriorityTask.getClass().getSimpleName(), lowestPriorityTask.getPriority());
+
+            if (pendingCount <= ConfigsManager.MAX_TASK_AMOUNT) {
+                break; // pending 任务数未超限，无需清理
+            }
+
+            // 只在未开始执行的任务中，找到优先级数值最大（即优先级最低）的任务进行移除
+            DefaultAgentTaskUnit victim = null;
+            for (DefaultAgentTaskUnit t : TaskQueue) {
+                if (t.isInProgress()) {
+                    continue; // 跳过已开始的任务，不清除
+                }
+                if (victim == null || t.getPriority() > victim.getPriority()) {
+                    victim = t;
+                }
+            }
+
+            if (victim != null) {
+                TaskQueue.remove(victim);
+                log.info("[TaskQueue] 队列积压，已抛弃最低优先级的等待任务: {} (Priority: {})",
+                        victim.getClass().getSimpleName(),
+                        victim.getPriority());
             } else {
-                break;
+                break; // 没有可清理的 pending 任务（理论上不应发生）
             }
         }
     }
@@ -297,27 +317,57 @@ public class LivingLoop implements MosireAPI {
                         continue;
                     }
 
-
-                    log.info("\n[执行总线] 开始处理任务: {}", task.getClass().getSimpleName());
-
-
-                    ArrayNode toolsDefinitionArray = mapper.createArrayNode();
-                    // 对工具箱做快照，避免迭代期间被插件系统并发修改
-                    for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
-                        if(tool.isAutoLoad()){
-                            toolsDefinitionArray.add(tool.getToolDefinition());
+                    // 粘性执行：持有当前任务反复执行直到完成，不被同优先级任务打断
+                    DefaultAgentTaskUnit stickyTask = task;
+                    while (stickyTask != null) {
+                        // 每次迭代前检查是否有更高优先级的任务插队
+                        DefaultAgentTaskUnit preemptor = null;
+                        double currentPriority = stickyTask.getPriority();
+                        for (DefaultAgentTaskUnit t : TaskQueue) {
+                            if (t.getPriority() < currentPriority) {
+                                preemptor = t;
+                                break;
+                            }
                         }
-                    }
+                        if (preemptor != null) {
+                            // 更高优先级任务插队，当前任务重新入队（保持 inProgress 标记）
+                            log.info("\n[执行总线] 更高优先级的任务插队，挂起当前任务: {} (Priority: {}) -> 优先执行: {} (Priority: {})",
+                                    stickyTask.getClass().getSimpleName(), stickyTask.getPriority(),
+                                    preemptor.getClass().getSimpleName(), preemptor.getPriority());
+                            // 从队列中移除抢占者，防止重复处理
+                            TaskQueue.remove(preemptor);
+                            TaskQueue.offer(stickyTask);
+                            stickyTask = preemptor;
+                            continue; // 切换到高优先级任务，继续粘性循环
+                        }
 
-                    //Map<String, Object> baseData = new HashMap<>();
+                        log.info("\n[执行总线] 开始处理任务: {}", stickyTask.getClass().getSimpleName());
 
-                    DefaultAgentTaskHandler handler = taskHandlerRegistry.get(task.getClass());
+                        ArrayNode toolsDefinitionArray = mapper.createArrayNode();
+                        // 对工具箱做快照，避免迭代期间被插件系统并发修改
+                        for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
+                            if (tool.isAutoLoad()) {
+                                toolsDefinitionArray.add(tool.getToolDefinition());
+                            }
+                        }
 
-                    if (handler != null) {
-                        handler.handleTask(task, LivingLoop.this, toolsDefinitionArray);
-                        processedTaskCount.incrementAndGet();
-                    } else {
-                        log.warn("[执行总线] 遇到未知的任务类型 [{}], 且没有挂载对应的 Handler，已跳过处理。", task.getClass().getSimpleName());
+                        DefaultAgentTaskHandler handler = taskHandlerRegistry.get(stickyTask.getClass());
+                        if (handler != null) {
+                            // 执行一回合，返回 null 表示任务完成，非 null 表示任务需要继续
+                            stickyTask = handler.handleTask(stickyTask, LivingLoop.this, toolsDefinitionArray);
+                            if (stickyTask != null) {
+                                // 任务未完成，继续粘性循环（不重新入队，不 poll 新任务）
+                                processedTaskCount.incrementAndGet();
+                                continue;
+                            }
+                            // stickyTask == null，任务完成
+                            processedTaskCount.incrementAndGet();
+                            break;
+                        } else {
+                            log.warn("[执行总线] 遇到未知的任务类型 [{}], 且没有挂载对应的 Handler，已跳过处理。",
+                                    stickyTask.getClass().getSimpleName());
+                            break;
+                        }
                     }
 
                 } catch (InterruptedException e) {
@@ -366,6 +416,7 @@ public class LivingLoop implements MosireAPI {
             }
             //MemoryManager.getInstance().inputCurrentMemorys(t);
             lastSolvingTask = taskUnit;
+            taskUnit.markInProgress(); // 标记任务已开始执行，防止同权重饥饿
             if(scenePrompts.getThinkingPrompt() != null && !scenePrompts.getThinkingPrompt().isEmpty() && !scenePrompts.getThinkingPrompt().equals("")) {
                 result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
             } else {

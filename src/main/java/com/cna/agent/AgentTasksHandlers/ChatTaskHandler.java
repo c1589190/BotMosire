@@ -25,13 +25,13 @@ public class ChatTaskHandler extends AbstractAgentTaskHandler {
      * 【战术重写】：为了保住 ThreadLocal 的清理机制，我们包装一下父类的执行流
      */
     @Override
-    public void handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
+    public DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
         ChatTask chatTask = (ChatTask) task;
         CURRENT_REPLY_TO_ID.set(chatTask.getReplyToMessageId());
 
         try {
-            // 调用父类的核心流水线
-            super.handleTask(task, engine, toolsDefinitionArray);
+            // 调用父类的核心流水线，并将返回值透传出去
+            return super.handleTask(task, engine, toolsDefinitionArray);
         } finally {
             // 绝对保证清理 ThreadLocal
             CURRENT_REPLY_TO_ID.remove();

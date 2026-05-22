@@ -42,9 +42,22 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
 
     double priority = 3.0;
 
+    // 标记该任务是否曾经开始执行过（turn > 1），用于防止同优先级饥饿
+    protected boolean inProgress = false;
+
     @Override
     public double getPriority(){
         return this.priority;
+    }
+
+    @Override
+    public boolean isInProgress() {
+        return this.inProgress;
+    }
+
+    @Override
+    public void markInProgress() {
+        this.inProgress = true;
     }
 
     // 注意：getTaskText() 保持抽象，强制要求具体的子类去实现它

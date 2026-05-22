@@ -17,4 +17,8 @@ public interface DefaultAgentTaskUnit {
     String getTurnsAddition();
     void setTurnsAddition(String addition);
 
+    // 标记该任务是否曾经开始执行过（turn > 1），用于防止同优先级饥饿
+    boolean isInProgress();
+    void markInProgress();
+
 }
