@@ -22,17 +22,17 @@ public class Main {
 
     public static BlockingQueue<DefaultAgentInputUnit> AgentInputTasksQueue = new LinkedBlockingQueue<>(4096);
 
-    public static NapcatAdapter GlobalNapcatAdapter;
-    public static DiscordAdapter GlobalDiscordAdapter;
-    public static LivingLoop loop = new LivingLoop();
+    public static volatile NapcatAdapter GlobalNapcatAdapter;
+    public static volatile DiscordAdapter GlobalDiscordAdapter;
+    public static final LivingLoop loop = new LivingLoop();
     // 声明插件管理器
-    public static PluginsManager pluginsManager;
+    public static volatile PluginsManager pluginsManager;
 
-    public static ConsoleCommandSystem consoleCommandSystem;
+    public static volatile ConsoleCommandSystem consoleCommandSystem;
 
-    public static WorkSpaceManager workspaceManager = new WorkSpaceManager();
+    public static final WorkSpaceManager workspaceManager = new WorkSpaceManager();
 
-    public static WebServer webServer;
+    public static volatile WebServer webServer;
 
     public static void main(String[] args){
 

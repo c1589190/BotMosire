@@ -70,7 +70,7 @@ public class LivingLoop implements MosireAPI {
 
     private final Map<Class<? extends DefaultAgentInputUnit>, DefaultAgentInputHandlerUnit> inputHandlerRegistry = new ConcurrentHashMap<>();
 
-    DefaultAgentTaskUnit lastSolvingTask = null;
+    volatile DefaultAgentTaskUnit lastSolvingTask = null;
     //状态管理方法是，当一个任务结束时，这玩意也必须成为null
 
 
@@ -117,6 +117,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new UpdateWebUI());
         this.registerTool(new ToolUsageReader());
         this.registerTool(new FinishTask());
+        this.registerTool(new GetNowTime());
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -212,7 +213,7 @@ public class LivingLoop implements MosireAPI {
         return log;
     }
 
-    private void trimTaskQueue() {
+    private synchronized void trimTaskQueue() {
         while (TaskQueue.size() > ConfigsManager.MAX_TASK_AMOUNT) {
             // 队列积压时，遍历找到优先级数值最大（即优先级最低）的任务进行移除
             DefaultAgentTaskUnit lowestPriorityTask = null;
@@ -301,7 +302,8 @@ public class LivingLoop implements MosireAPI {
 
 
                     ArrayNode toolsDefinitionArray = mapper.createArrayNode();
-                    for (DefaultAgentToolUnit tool : largeLLMToolbox.values()) {
+                    // 对工具箱做快照，避免迭代期间被插件系统并发修改
+                    for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
                         if(tool.isAutoLoad()){
                             toolsDefinitionArray.add(tool.getToolDefinition());
                         }
@@ -352,7 +354,7 @@ public class LivingLoop implements MosireAPI {
         CallResult result;
 
         StringBuilder currentMemory = new StringBuilder();
-        currentMemory.append(Utils.getNowFormatted() + "时,\n");
+        currentMemory.append(Utils.getNowPrecise() + "时,\n");
         //储存本轮任务处理中所有需要被短期记忆记录的东西
 
         if (turn == 1) {
