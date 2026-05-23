@@ -57,10 +57,11 @@ public class LLMAdapter {
                 return new double[0];
             }
 
-            log.debug("emb模型响应: " + response.body());
+            String responseBody = response.body().string();           // 只调一次
+            log.debug("emb模型响应: " + responseBody);
 
-            // 根据 SiliconFlow 的输出格式，物理定位到 data[0].embedding 节点
-            JsonNode rootNode = jsonMapper.readTree(response.body().string());
+            JsonNode rootNode = jsonMapper.readTree(responseBody);    // 复用变量
+
             JsonNode vectorNode = rootNode.path("data").get(0).path("embedding");
 
             return jsonMapper.convertValue(vectorNode, new TypeReference<double[]>() {});

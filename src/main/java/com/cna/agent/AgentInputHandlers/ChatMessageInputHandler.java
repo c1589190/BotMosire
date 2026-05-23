@@ -9,6 +9,7 @@ import com.cna.db.FeelingDimensionManager;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 @Slf4j
 public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInput> {
@@ -16,6 +17,21 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
     protected LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();
     protected Set<String> updatedRoles = new HashSet<>();
     protected final Map<String, Long> lastTaskPushedTime = new java.util.concurrent.ConcurrentHashMap<>();
+
+    // ========== 积压区 ==========
+    private final ConcurrentLinkedQueue<BackloggedInput> backlog = new ConcurrentLinkedQueue<>();
+
+    private static class BackloggedInput {
+        final ChatMessageInput input;
+        final double interestScore;
+        final String reason;
+
+        BackloggedInput(ChatMessageInput input, double interestScore, String reason) {
+            this.input = input;
+            this.interestScore = interestScore;
+            this.reason = reason;
+        }
+    }
 
     // 基准门槛
     private static final double BASE_REFLEX_THRESHOLD = ConfigsManager.SPINAL_REFLEX_THRESHOLD;
@@ -28,6 +44,42 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
     protected void processInputs(List<ChatMessageInput> inputs) {
         updatedRoles.clear();
         log.info("[CognitiveCycle] ChatMessage处理器捕获到 {} 条待处理的感知输入", inputs.size());
+
+        // ==========================================
+        // 阶段 0：判断是否需要积压
+        // ==========================================
+        boolean taskQueueFull = engine.getPendingTaskCount() >= ConfigsManager.MAX_TASK_AMOUNT;
+        boolean hasBacklog = !backlog.isEmpty();
+
+        if (taskQueueFull || hasBacklog) {
+            // 积压模式：跳过正常审查，所有Input评分后直接入积压区
+            log.info("[Backlog] TaskQueue已满({})或积压区已有积压，{} 条Input进入积压区",
+                    taskQueueFull ? "满" : "有空位但积压区非空", inputs.size());
+
+            FeelingDimensionManager feelingManager = FeelingDimensionManager.getInstance();
+
+            for (ChatMessageInput input : inputs) {
+                String textContent = input.getContent();
+                double score = 0;
+                String reason = "默认";
+
+                if (feelingManager != null) {
+                    FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(textContent);
+                    score = eval.InterestScore;
+                    reason = String.format("触达关注点：[%s] (得分: %.2f)", eval.topConcept, eval.InterestScore);
+                }
+
+                backlog.offer(new BackloggedInput(input, score, reason));
+                // 超上限踢最旧
+                while (backlog.size() > ConfigsManager.INPUT_BACKLOG_MAX_SIZE) {
+                    backlog.poll();
+                }
+            }
+            log.info("[Backlog] 积压区大小: {}", backlog.size());
+            return;
+        }
+
+        // ========== 正常审查流程（原有逻辑不变） ==========
 
         List<ChatMessageInput> unknownInputs = new ArrayList<>();
 
@@ -48,14 +100,6 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                 }
 
                 updatedRoles.add(senderRole);
-
-                /*
-                List<String> l = new LinkedList<>();
-                l.add("为自己创建了任务，有关于 [ " + input.getInputText() + " ]");
-                MemoryManager.getInstance().inputCurrentMemorys(l);
-
-                 */
-
                 log.info("为已有任务 [Role:{}] 追加了新消息", senderRole);
             } else {
                 unknownInputs.add(input);
@@ -71,10 +115,9 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
             Map<ChatMessageInput, String> interestingInputsWithReasons = new LinkedHashMap<>();
             FeelingDimensionManager feelingManager = FeelingDimensionManager.getInstance();
 
-            // 计算动态阈值与当前系统的空虚状态
             double currentDynamicThreshold = getDynamicThreshold(BASE_REFLEX_THRESHOLD);
             int currentHeat = this.engine.getCognitiveHeat().get();
-            boolean isStarving = (currentHeat == 0); // 系统压力为 0 时，判定为处于极度空虚的“饥饿状态”
+            boolean isStarving = (currentHeat == 0);
 
             log.info("[Gatekeeper] 当前系统压力热度: {}, 动态拦截阈值已自适应调整为: {}", currentHeat, currentDynamicThreshold);
 
@@ -89,9 +132,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                 FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(textContent);
 
-                // 【核心重构】：一次性判定是否接纳
                 boolean isHighValue = eval.InterestScore >= currentDynamicThreshold;
-                // 仅当分值不够，且系统极度空虚时，才触发概率捞取
                 boolean isLuckyTrash = !isHighValue && isStarving && (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE);
 
                 if (isHighValue || isLuckyTrash) {
@@ -104,15 +145,11 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         reason = String.format("这条消息在你的感觉中枢里得分极低(%.2f < %.2f)，你感觉它是废话。但是由于现在你也没其他事干，你决定勉为其难地随便回复一下它，维持活性。",
                                 eval.InterestScore, currentDynamicThreshold);
                         log.info("系统处于空虚状态，低价值消息被破格捞起。");
-
-                        // 【防抖保护】：一旦破格捞起了一条垃圾，系统立刻脱离空虚状态，防止在本轮循环中捞取多条废话
                         isStarving = false;
                     }
                     interestingInputsWithReasons.put(input, reason);
                     int newHeat = this.engine.getCognitiveHeat().incrementAndGet();
                     log.debug("认知热度上升至: {}", newHeat);
-
-
                 } else {
                     log.info("消息被抛弃 (得分: {} < 门槛: {}): [{}]", eval.InterestScore, currentDynamicThreshold, textContent);
                 }
@@ -122,7 +159,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                 log.info("[Gatekeeper-Feeling] 全盘否定，判定所有新消息均为无意义噪音（未能打破动态阈值 {}）。", currentDynamicThreshold);
             }
 
-            // 处理最终被接纳的所有消息（无论是高优还是捞取的）
+            // 处理最终被接纳的所有消息
             for (Map.Entry<ChatMessageInput, String> entry : interestingInputsWithReasons.entrySet()) {
                 ChatMessageInput input = entry.getKey();
                 String reason = entry.getValue();
@@ -147,14 +184,11 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         task.addContext(text);
                         task.addContext(reasonContext);
 
-                        // 计算优先级：默认3.0 - 私聊bonus - 刺激度加成
                         FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(text);
                         double priority = 3.0;
-                        // 私聊消息降低0.5（更优先）
                         if ("private".equalsIgnoreCase(source)) {
                             priority -= 0.5;
                         }
-                        // 语义刺激度加成（刺激越强烈越优先）
                         priority -= eval.stimulusBonus;
                         task.setPriority(priority);
                         log.info("为新目标 [Role:{}] 创建了预备任务，优先级: {} (私聊优惠: {}, 刺激加成: {})",
@@ -172,12 +206,12 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                     updatedRoles.add(senderRole);
                 }
             }
-            // 阶段 2.5 代码块已彻底消灭
         }
     }
 
     @Override
     public void tick() {
+        // ========== 原有逻辑：催熟 PreparationPool → pushTask ==========
         Iterator<Map.Entry<String, ChatTask>> iterator = ChatTaskPreparationPool.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, ChatTask> entry = iterator.next();
@@ -202,5 +236,84 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
             }
         }
         updatedRoles.clear();
+
+        // ========== 新增：积压区择优消化 ==========
+        boolean taskQueueFull = engine.getPendingTaskCount() >= ConfigsManager.MAX_TASK_AMOUNT;
+        if (taskQueueFull || backlog.isEmpty()) {
+            return;
+        }
+
+        log.info("[Backlog-Drain] TaskQueue有空位，积压区有 {} 条待审查Input，启动择优消化", backlog.size());
+
+        // 1. 收集所有积压条目，按 interestScore 降序排列
+        List<BackloggedInput> allBacklogged = new ArrayList<>(backlog);
+        allBacklogged.sort((a, b) -> Double.compare(b.interestScore, a.interestScore));
+
+        // 2. 取前 INPUT_REVIEW_BATCH_SIZE 条
+        int batchSize = Math.min(ConfigsManager.INPUT_REVIEW_BATCH_SIZE, allBacklogged.size());
+        List<BackloggedInput> selected = allBacklogged.subList(0, batchSize);
+
+        // 3. 按 role 分组选中条目
+        Map<String, List<BackloggedInput>> groupedByRole = new LinkedHashMap<>();
+        for (BackloggedInput bi : selected) {
+            String role = bi.input.getRole();
+            if (role != null && !role.isBlank()) {
+                groupedByRole.computeIfAbsent(role, k -> new ArrayList<>()).add(bi);
+            }
+        }
+
+        // 4. 为每个 role 创建 ChatTask，并压入该 role 在积压区中的所有消息
+        FeelingDimensionManager feelingManager = FeelingDimensionManager.getInstance();
+
+        for (Map.Entry<String, List<BackloggedInput>> group : groupedByRole.entrySet()) {
+            String role = group.getKey();
+            List<BackloggedInput> roleBatch = group.getValue();
+
+            // 取第一条作为代表构建 ChatTask
+            BackloggedInput first = roleBatch.get(0);
+            ChatMessageInput rep = first.input;
+
+            String source = rep.getSource();
+            String source_name = rep.getSource_name();
+            String senderName = rep.getRole_name();
+            long quotedId = rep.getQuotedMessageId();
+
+            ChatTask task;
+            if (ChatTaskPreparationPool.containsKey(role)) {
+                task = ChatTaskPreparationPool.get(role);
+            } else {
+                task = new ChatTask(source, source_name, role, senderName, quotedId);
+
+                // 优先级计算
+                double priority = 3.0;
+                if ("private".equalsIgnoreCase(source)) {
+                    priority -= 0.5;
+                }
+                if (feelingManager != null) {
+                    FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(rep.getContent());
+                    priority -= eval.stimulusBonus;
+                }
+                task.setPriority(priority);
+            }
+
+            // 把该 role 在积压区中的所有消息文本 + 理由全部灌入
+            for (BackloggedInput bi : roleBatch) {
+                task.addContext(bi.input.getContent());
+                task.addContext("( 理由: " + bi.reason + " )");
+            }
+
+            ChatTaskPreparationPool.put(role, task);
+            log.info("[Backlog-Drain] 为 [Role:{}] 从积压区创建/扩容了ChatTask，消耗 {} 条积压Input", role, roleBatch.size());
+
+            List<String> l = new LinkedList<>();
+            l.add("从积压区消化了来自 " + role + " 的消息，回复理由是: " + first.reason);
+            MemoryManager.getInstance().inputCurrentMemorys(l);
+        }
+
+        // 5. 从积压区移除已消费的条目
+        Set<BackloggedInput> consumed = new HashSet<>(selected);
+        backlog.removeIf(consumed::contains);
+
+        log.info("[Backlog-Drain] 消化完成，积压区剩余: {}", backlog.size());
     }
 }

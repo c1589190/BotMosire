@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+// 弃用!
 
 import com.cna.config.ToolPromptsManager;
 import com.cna.db.MDManager;
