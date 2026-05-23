@@ -1,7 +1,9 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.Utils;
 import com.cna.config.ToolPromptsManager;
 import com.cna.db.FeelingDimensionManager;
+import com.cna.db.MDManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -104,6 +106,10 @@ public class FinishTask implements DefaultAgentToolUnit {
             } else {
                 log.info("[FinishTask] 概念列表为空，仅记录总结，无维度更新。");
             }
+
+            // 异步追加 summary 到 thoughts.md（替代已取缔的 add_inner_thought）
+            String contentToAppend = String.format("\n\n### [%s]\n%s", Utils.getNowPrecise(), summary);
+            MDManager.appendAsync("thoughts.md", contentToAppend);
 
             return "任务已完成并提交反馈。总结：" + summary;
         } catch (Exception e) {

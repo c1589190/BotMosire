@@ -271,7 +271,7 @@ public class FeelingDimensionManager {
         double stimulusBonus = absHitWeightSum / (ConfigsManager.FEELING_DIMENSION_COUNT * 2.0);
 
         // 将刺激度加成叠加到最终的 InterestScore 上
-        double adjustedScore = bestMatch.InterestScore + stimulusBonus;
+        double adjustedScore = bestMatch.InterestScore;
 
         if (shouldLog) {
             StringBuilder top3 = new StringBuilder("[");

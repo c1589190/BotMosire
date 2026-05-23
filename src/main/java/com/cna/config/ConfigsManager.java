@@ -47,6 +47,8 @@ public class ConfigsManager {
     public static final double FD_QUALITY_WEIGHT;
     public static final int FEELING_DIMENSION_COUNT;
     public static final int MAX_COGNITIVE_HEAT;
+    public static final int INPUT_BACKLOG_MAX_SIZE;
+    public static final int INPUT_REVIEW_BATCH_SIZE;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
@@ -217,6 +219,8 @@ public class ConfigsManager {
         FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
 
         MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
+        INPUT_BACKLOG_MAX_SIZE = getInt("cognitive.inputBacklogMaxSize", 128);
+        INPUT_REVIEW_BATCH_SIZE = getInt("cognitive.inputReviewBatchSize", 2);
 
         // ==========================================
         // 4. Napcat 物理通信配置

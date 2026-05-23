@@ -75,6 +75,19 @@ public class LivingLoop implements MosireAPI {
     volatile DefaultAgentTaskUnit lastSolvingTask = null;
     //状态管理方法是，当一个任务结束时，这玩意也必须成为null
 
+    /**
+     * 获取待处理（未开始执行）的Task数量，供Input积压机制使用
+     */
+    public int getPendingTaskCount() {
+        int count = 0;
+        for (DefaultAgentTaskUnit t : TaskQueue) {
+            if (!t.isInProgress()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
 
     @Getter
     AtomicInteger cognitiveHeat = new AtomicInteger(0); // 认知热度，模拟大脑疲劳度，数值越高代表越疲劳
@@ -92,13 +105,11 @@ public class LivingLoop implements MosireAPI {
 
         //装载默认工具箱
         DefaultAgentToolUnit updateInterestsTool = new UpdateInterests();
-        DefaultAgentToolUnit updateThoughtsTool = new UpdateThoughts();
         DefaultAgentToolUnit updateScheduledTool = new UpdateScheduled();
         DefaultAgentToolUnit switchModelTool = new SwitchToAdvancedModel();
 
         largeLLMToolbox.put(new SendChatMessage().getName(), new SendChatMessage());
         largeLLMToolbox.put(new GetChatHistory().getName(), new GetChatHistory());
-        largeLLMToolbox.put(updateThoughtsTool.getName(), updateThoughtsTool);
         largeLLMToolbox.put(updateInterestsTool.getName(), updateInterestsTool);
         largeLLMToolbox.put(updateScheduledTool.getName(), updateScheduledTool);
         largeLLMToolbox.put(new GetScheduled().getName(), new GetScheduled());
@@ -437,6 +448,7 @@ public class LivingLoop implements MosireAPI {
             currentMemory.append("你的想法是: \"" + result.getContent() + "\";\n");
         }
 
+        /*
         // ---------- 检测 LLM 返回的错误/异常响应，防止无限循环 ----------
         if (result.getContent() != null && isLLMErrorResponse(result.getContent())) {
             log.error("[EXEC-Engine] LLM 返回了无法恢复的错误，强制结束任务: {}", result.getContent());
@@ -445,25 +457,16 @@ public class LivingLoop implements MosireAPI {
             return null;
         }
 
-        // 如果没有调用任何工具，直接判定闭环
-        if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
-            log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
-            currentMemory.append("你在本轮处理中没有调用任何工具。");
-            nowTurnAddition.append("你没有调用任何工具;\n");
-            nowTurnAddition.append("（也许你该结束这次任务了？或是自己一时抽抽，忘记把工具调用JSON错误地放到了文本栏一起输出了？自行判断吧）\n");
-            taskUnit.setTurnsAddition(nowTurnAddition.toString());
-            taskUnit.setCurrentTurn(turn + 1); // 向前推进一步！
-            if (taskUnit.getCurrentTurn() > ConfigsManager.CONSUMER_CYCLING_TIME) {
-                log.warn("[EXEC-Engine] 任务执行达到 {} 轮上限，防死循环，强制结束。", ConfigsManager.CONSUMER_CYCLING_TIME);
-                currentMemory.append("……由于任务处理循环到上限了，这个任务被强制结束了……");
-                lastSolvingTask = null;
+         */
 
-                MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
-                return null; // 超出轮数，销毁
-            }
-
+        // 只要没有工具调用，直接结束任务并归档
+        if (!result.isToolCall() || result.getToolCalls() == null
+                || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
+            log.info("[EXEC-Engine] 💤 模型未返回工具调用，直接结束任务。响应内容: {}", result.getContent());
+            currentMemory.append("在本轮处理中没有调用任何工具，任务自动结束——也许是出错了...");
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
-            return taskUnit; // 返回更新后的任务，准备重新入队
+            lastSolvingTask = null;
+            return null;
         }
 
 
