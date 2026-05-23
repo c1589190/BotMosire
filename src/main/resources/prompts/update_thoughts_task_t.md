@@ -31,8 +31,11 @@ ${scheduled}
 如果您的思维链经过判断认为需要，您可以在本轮先行提炼一些想要努力回忆相关内容的关键词，然后调用query_deep_memory进行先行查询；
 最后，不要调用finish_task，等待下一轮调用。
 
-当前时间：
-${now_time}
+<#if current_memories??>
+---
+以下为系统注入的动态上下文信息，供你参考：
+
+当前时间：${now_time}
 
 <#if current_memories?? && (current_memories?size > 0)>
 这是你最近与外界的交互记录，你依旧清晰地记得它们：{
@@ -40,4 +43,5 @@ ${now_time}
 - ${mem}
 </#list>
 }
+</#if>
 </#if>

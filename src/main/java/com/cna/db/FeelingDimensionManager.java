@@ -235,15 +235,19 @@ public class FeelingDimensionManager {
     public static class FeelingEvaluation {
         public final String topConcept;
         public final double InterestScore;
+        /** 刺激度加成 (0~0.5)，基于 top3 感觉维度的 abs(hitWeight) 均值，用于 Gatekeeper 过滤和优先级排序 */
+        public final double stimulusBonus;
 
-        public FeelingEvaluation(String topConcept, double finalScore) {
+        public FeelingEvaluation(String topConcept, double finalScore, double stimulusBonus) {
             this.topConcept = topConcept;
             this.InterestScore = finalScore;
+            this.stimulusBonus = stimulusBonus;
         }
     }
 
     /**
      * 老接口兼容：获取最契合的单个感觉维度（保留特有的随机抽样打印 Top3 逻辑）
+     * 现在同时计算 top3 abs(hitWeight) 刺激度加成，叠加到 InterestScore 中
      */
     public FeelingEvaluation evaluateInput(String input) {
         boolean shouldLog = Math.random() < 0.1;
@@ -253,10 +257,21 @@ public class FeelingDimensionManager {
 
         if (allScores.isEmpty()) {
             if (shouldLog) feelingLog.info("EVAL     | input={} | verdict=NO_DIMS", truncate(input, 30));
-            return new FeelingEvaluation("none", 0.0);
+            return new FeelingEvaluation("none", 0.0, 0.0);
         }
 
         DimensionScore bestMatch = allScores.get(0);
+
+        // 计算 topN 的刺激度加成：abs(hitWeight) 求和 / (FEELING_DIMENSION_COUNT * 2)，范围 0~0.5
+        int topN = Math.min(ConfigsManager.FEELING_DIMENSION_COUNT, allScores.size());
+        double absHitWeightSum = 0.0;
+        for (int i = 0; i < topN; i++) {
+            absHitWeightSum += Math.abs(allScores.get(i).hitWeight);
+        }
+        double stimulusBonus = absHitWeightSum / (ConfigsManager.FEELING_DIMENSION_COUNT * 2.0);
+
+        // 将刺激度加成叠加到最终的 InterestScore 上
+        double adjustedScore = bestMatch.InterestScore + stimulusBonus;
 
         if (shouldLog) {
             StringBuilder top3 = new StringBuilder("[");
@@ -267,11 +282,14 @@ public class FeelingDimensionManager {
                 if (i < n - 1) top3.append(", ");
             }
             top3.append("]");
-            feelingLog.info("EVAL     | input={} | top3={} | best_score={}",
-                    truncate(input, 30), top3.toString(), String.format("%.4f", bestMatch.InterestScore));
+            feelingLog.info("EVAL     | input={} | top3={} | best_score={} | stimulusBonus={} | adjusted={}",
+                    truncate(input, 30), top3.toString(),
+                    String.format("%.4f", bestMatch.InterestScore),
+                    String.format("%.3f", stimulusBonus),
+                    String.format("%.4f", adjustedScore));
         }
 
-        return new FeelingEvaluation(bestMatch.concept, bestMatch.InterestScore);
+        return new FeelingEvaluation(bestMatch.concept, adjustedScore, stimulusBonus);
     }
 
     private static String truncate(String s, int n) {

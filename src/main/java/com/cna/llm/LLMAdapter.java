@@ -261,16 +261,12 @@ public class LLMAdapter {
             String responseBody = response.body().string();
             log.debug("【Tool Calling 原始响应】: {}", responseBody);
 
-            // ---------- 清洗非 JSON 污染 ----------
-            String cleanedBody = responseBody.trim();
-            if (cleanedBody.startsWith("data:")) {
-                int jsonStart = cleanedBody.indexOf('{');
-                if (jsonStart != -1) {
-                    cleanedBody = cleanedBody.substring(jsonStart);
-                }
-            }
-            if (cleanedBody.endsWith("data: [DONE]")) {
-                cleanedBody = cleanedBody.substring(0, cleanedBody.lastIndexOf("data: [DONE]")).trim();
+            // ---------- SSE 多段聚合：即使 stream=false，某些模型仍可能返回多段 data chunk ----------
+            String cleanedBody = extractFirstValidChunk(responseBody.trim());
+            if (cleanedBody == null || cleanedBody.isEmpty()) {
+                log.error("无法从 SSE 响应中提取有效 JSON 数据: {}", responseBody);
+                result.setContent("响应格式异常：无有效数据");
+                return result;
             }
 
             JsonNode rootNode;
@@ -377,9 +373,145 @@ public class LLMAdapter {
             JsonNode args = func.get("arguments");
             if (args.isObject() || args.isArray()) {
                 func.put("arguments", args.toString());
+            } else if (args.isTextual()) {
+                // 检测并修复 DeepSeek 内层 JSON 未转义双引号的问题
+                String raw = args.asText();
+                String repaired = repairInnerJsonQuotes(raw);
+                func.put("arguments", repaired);
             }
         }
         return normalized;
+    }
+
+    /**
+     * 修复 DeepSeek 模型在 arguments 内层 JSON 中偶尔未转义双引号的问题。
+     * 启发式策略：遍历字符，用简单的 JSON 上下文判断 " 是结构符还是内容符。
+     * 标准解析已由上层 fail-safe 机制兜底。
+     */
+    public static String repairInnerJsonQuotes(String raw) {
+        // 先尝试标准解析，成功则直接返回
+        try {
+            jsonMapper.readTree(raw);
+            return raw;
+        } catch (Exception ignored) {
+            // 需要修复
+        }
+
+        StringBuilder sb = new StringBuilder(raw.length() + 32);
+        boolean inString = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\\') {
+                // 保留已有转义
+                sb.append(c);
+                if (i + 1 < raw.length()) {
+                    sb.append(raw.charAt(++i));
+                }
+                continue;
+            }
+            if (c == '"') {
+                if (!inString) {
+                    inString = true;
+                    sb.append(c);
+                } else {
+                    // 判断这个 " 是否属于 JSON 结构（后跟 : , } ] 或空白+结构符）
+                    int j = i + 1;
+                    while (j < raw.length() && (raw.charAt(j) == ' ' || raw.charAt(j) == '\t' || raw.charAt(j) == '\n' || raw.charAt(j) == '\r')) {
+                        j++;
+                    }
+                    if (j < raw.length()) {
+                        char next = raw.charAt(j);
+                        if (next == ':' || next == ',' || next == '}' || next == ']') {
+                            // 结构符号
+                            inString = false;
+                            sb.append(c);
+                        } else {
+                            // 内容中的引号，需要转义
+                            sb.append("\\\"");
+                        }
+                    } else {
+                        inString = false;
+                        sb.append(c);
+                    }
+                }
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 对接视觉大模型 (Vision)
+     * 传入提示词和 Base64 格式的图片，返回对图片的文字描述
+     */
+    /**
+     * 从可能包含多段 SSE data chunk 的原始响应体中，提取第一个包含有效 choices (非空数组) 的 JSON 片段。
+     * 某些模型 (如 DeepSeek v4) 即使 stream=false，仍可能返回 SSE 格式的多段响应。
+     *
+     * @param rawResponse 原始 HTTP 响应体
+     * @return 第一个有效 JSON 字符串，或 null 如果所有 chunk 都没有有效 choices
+     */
+    private String extractFirstValidChunk(String rawResponse) {
+        if (rawResponse == null || rawResponse.isEmpty()) {
+            return null;
+        }
+
+        // 如果不以 "data:" 开头，说明不是 SSE 格式，按原来的纯 JSON 处理
+        if (!rawResponse.startsWith("data:")) {
+            return rawResponse;
+        }
+
+        // 按行分割，收集所有 "data: {...}" 行
+        String[] lines = rawResponse.split("\\r?\\n");
+        for (String line : lines) {
+            String trimmed = line.trim();
+
+            // 跳过空行和结束标记
+            if (trimmed.isEmpty() || trimmed.equals("data: [DONE]")) {
+                continue;
+            }
+
+            if (!trimmed.startsWith("data: ")) {
+                continue;
+            }
+
+            // 提取 JSON 部分
+            String jsonPart = trimmed.substring(6).trim(); // 截掉 "data: "
+
+            // 快速跳过明显不是 JSON 对象的内容
+            if (!jsonPart.startsWith("{")) {
+                continue;
+            }
+
+            try {
+                JsonNode chunkNode = jsonMapper.readTree(jsonPart);
+
+                // 跳过包含 error 的 chunk
+                if (chunkNode.has("error")) {
+                    log.warn("[SSE聚合] 跳过包含错误的 chunk: {}", jsonPart);
+                    continue;
+                }
+
+                JsonNode choices = chunkNode.path("choices");
+                // 跳过 choices 为空的 chunk，寻找有实际数据的 chunk
+                if (choices.isMissingNode() || !choices.isArray() || choices.isEmpty()) {
+                    log.debug("[SSE聚合] 跳过 choices 为空的 chunk");
+                    continue;
+                }
+
+                // 找到第一个有效的 chunk
+                log.debug("[SSE聚合] 找到有效 chunk，choices 数量: {}", choices.size());
+                return jsonPart;
+
+            } catch (Exception e) {
+                log.debug("[SSE聚合] 跳过无法解析的 chunk: {}", jsonPart);
+            }
+        }
+
+        // 所有 chunk 都没有有效 choices，返回 null
+        log.warn("[SSE聚合] 所有 SSE chunk 均不包含有效的 choices 数据");
+        return null;
     }
 
     /**

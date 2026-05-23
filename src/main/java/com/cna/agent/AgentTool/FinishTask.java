@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTool;
 
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.FeelingDimensionManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,10 +26,12 @@ public class FinishTask implements DefaultAgentToolUnit {
         ObjectNode toolDef = mapper.createObjectNode();
         toolDef.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = toolDef.putObject("function");
         function.put("name", getName());
         function.put("description",
-                "当任务彻底完成时调用此工具。你必须提供本次任务中涉及的多个语义要点，并对所有要点进行简单的正面/负面感觉评价。");
+                p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -38,12 +41,12 @@ public class FinishTask implements DefaultAgentToolUnit {
         // 任务总结
         ObjectNode summaryProp = properties.putObject("summary");
         summaryProp.put("type", "string");
-        summaryProp.put("description", "本次任务的核心成果或执行摘要，用一段话概括。");
+        summaryProp.put("description", p.getCustomDescription("summary"));
 
         // 关键概念数组（与 FeelingDimensionManager 的提取格式兼容）
         ObjectNode conceptsProp = properties.putObject("concepts");
         conceptsProp.put("type", "array");
-        conceptsProp.put("description", "任务中涉及的若干个最重要的底层概念或实体，并给出其客观极性判断。");
+        conceptsProp.put("description", p.getCustomDescription("concepts"));
 
         ObjectNode items = conceptsProp.putObject("items");
         items.put("type", "object");
@@ -51,12 +54,12 @@ public class FinishTask implements DefaultAgentToolUnit {
         ObjectNode itemProps = items.putObject("properties");
         ObjectNode nameProp = itemProps.putObject("name");
         nameProp.put("type", "string");
-        nameProp.put("description", "概念或实体的名称");
+        nameProp.put("description", p.getCustomDescription("name"));
 
         ObjectNode isPositiveProp = itemProps.putObject("is_positive");
         isPositiveProp.put("type", "boolean");
         isPositiveProp.put("description",
-                "该概念在本任务中是建设性/正向的（true），还是破坏性/负向的（false）");
+                p.getCustomDescription("is_positive"));
 
         ArrayNode itemRequired = items.putArray("required");
         itemRequired.add("name");

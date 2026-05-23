@@ -21,4 +21,8 @@ public interface DefaultAgentTaskUnit {
     boolean isInProgress();
     void markInProgress();
 
+    // 感觉维度快照，仅在任务首次创建时计算一次，后续轮次复用
+    String getInitialFeelings();
+    void setInitialFeelings(String feelings);
+
 }

@@ -15,6 +15,9 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     protected boolean requireAdvancedModel = false;
     protected String deepMemoriesCache = null;
 
+    // 仅在任务首次创建时计算并缓存的感觉快照，后续轮次复用，避免每轮重新计算破坏缓存前缀
+    protected String initialFeelings = null;
+
     public AbstractAgentTask() {
         // 实例化时自动分配唯一 UUID
         this.uuid = UUID.randomUUID();
@@ -58,6 +61,16 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     @Override
     public void markInProgress() {
         this.inProgress = true;
+    }
+
+    @Override
+    public String getInitialFeelings() {
+        return this.initialFeelings;
+    }
+
+    @Override
+    public void setInitialFeelings(String feelings) {
+        this.initialFeelings = feelings;
     }
 
     // 注意：getTaskText() 保持抽象，强制要求具体的子类去实现它

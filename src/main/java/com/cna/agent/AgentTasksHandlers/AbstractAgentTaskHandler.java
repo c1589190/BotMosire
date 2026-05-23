@@ -19,25 +19,34 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
 
     @Override
     public DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
-        log.info("[TaskHandler] 正在准备抽象执行流水线: {}", task.getTaskName());
+        log.info("[TaskHandler] 正在准备抽象执行流水线: {}, 优先级 {}", task.getTaskName(), task.getPriority());
 
         appendCustomTools(toolsDefinitionArray);
 
-        String currentContext = task.getTaskText() + "\n" + task.getTurnsAddition();
-        List<DimensionScore> topFeelings = FeelingDimensionManager.getInstance().getTargetDimensions(currentContext, true, 3);
+        String currentFeelingsStr;
+        if (task.getCurrentTurn() == 1) {
+            // 仅在任务首次执行时计算感觉维度快照，并缓存到 task 上
+            String currentContext = task.getTaskText() + "\n" + task.getTurnsAddition();
+            List<DimensionScore> topFeelings = FeelingDimensionManager.getInstance().getTargetDimensions(currentContext, true, ConfigsManager.FEELING_DIMENSION_COUNT);
 
-        StringBuilder feelingsBuilder = new StringBuilder();
-        if (topFeelings.isEmpty()) {
-            feelingsBuilder.append("当前无明显的潜意识概念共鸣。");
-        } else {
-            for (DimensionScore score : topFeelings) {
-                String polarityText = score.hitWeight >= 0 ? "正面、良好" : "负面、差劲";
-                feelingsBuilder.append(String.format("\"%s\",(记忆兴趣权重: %.2f ,语义映像权重: %.2f )  你对它的映像是 %s 的;\n",
-                        score.concept, score.InterestScore, score.hitWeight, polarityText));
+            StringBuilder feelingsBuilder = new StringBuilder();
+            if (topFeelings.isEmpty()) {
+                feelingsBuilder.append("当前无明显的潜意识概念共鸣。");
+            } else {
+                for (DimensionScore score : topFeelings) {
+                    String polarityText = score.hitWeight >= 0 ? "正面、良好" : "负面、差劲";
+                    feelingsBuilder.append(String.format("\"%s\",(记忆兴趣权重: %.2f ,语义映像权重: %.2f )  你对它的映像是 %s 的;\n",
+                            score.concept, score.InterestScore, score.hitWeight, polarityText));
+                }
             }
+            currentFeelingsStr = feelingsBuilder.toString().trim();
+            task.setInitialFeelings(currentFeelingsStr);
+            log.info("[TaskHandler] 任务首次执行，计算并缓存感觉维度快照: \n{}", currentFeelingsStr);
+        } else {
+            // 后续轮次直接复用第1轮的感觉快照
+            currentFeelingsStr = task.getInitialFeelings();
+            log.info("[TaskHandler] 任务第{}轮执行，复用感觉维度快照", task.getCurrentTurn());
         }
-        String currentFeelingsStr = feelingsBuilder.toString().trim();
-        log.info("[TaskHandler] 当前任务阶段触发潜意识数据快照: \n{}", currentFeelingsStr);
 
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", task.getTaskText());

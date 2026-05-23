@@ -47,6 +47,10 @@ public class ChatTask extends AbstractAgentTask {
         this.replyToMessageId = id;
     }
 
+    public void setPriority(double priority) {
+        this.priority = priority;
+    }
+
     @Override
     public String getTaskText() {
         StringBuilder ret = new StringBuilder();

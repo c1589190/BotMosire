@@ -45,6 +45,7 @@ public class ConfigsManager {
     //public static final double FD_MAX_WEIGHT;
     public static final double FD_PRESSURE_PENALTY;
     public static final double FD_QUALITY_WEIGHT;
+    public static final int FEELING_DIMENSION_COUNT;
     public static final int MAX_COGNITIVE_HEAT;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
@@ -213,6 +214,7 @@ public class ConfigsManager {
         FD_HABITUATION_LIMIT = getInt("memory.fdHabituationLimit", 10);
         FD_PRESSURE_PENALTY = getDouble("memory.fdPressurePenalty", 0.01);
         FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
+        FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
 
         MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
 

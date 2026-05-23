@@ -55,49 +55,6 @@ public class LLManager {
         }
     }
 
-    /**
-     * 【核心修改】：直接接收 System 和 User 的提示词字符串 (完美解耦)
-     * * @param systemPrompt 系统提示词 (例如从 CORE.md 读出的纯文本)
-     * @param userTemplate 用户提示词模板 (包含 ${...} 占位符的纯文本)
-     * @param dataModel    需要注入的参数变量
-     * @param llm          使用的模型适配器
-     * @param tools        大模型可用的工具箱
-     */
-
-    /*
-    public static CallResult executeScene(
-            String userTemplate,
-            Map<String, Object> dataModel,
-            LLMAdapter llm,
-            ArrayNode tools) {
-
-        Map<String, Object> data = dataModel;
-        // 注入一些必要前置参数
-        if(!data.containsKey("current_memories")) {
-            data.put("current_memories", MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
-        }
-        data.put("now_time", Utils.getNowFormatted());
-        data.put("current_thoughts", MDManager.read("thoughts.md", ""));
-        data.put("tools_guide", MDManager.read("prompts/toolsGuide.md",""));
-
-        // 在内存中渲染出完美的 Prompt
-        String userPrompt = render(userTemplate, dataModel);
-        log.debug("[LLMManager] Prompt [\n{}\n] 渲染完毕，准备提交大模型.", userPrompt);
-
-        // 呼叫大模型并直接返回结果
-        if (tools == null) {
-            CallResult result = new CallResult();
-            result.setToolCall(false);
-            // 此时 systemPrompt 也是由 Handler 直接从外部传入的
-            result.setContent(llm.generateStreamResponse(userPrompt, MDManager.read("prompts/CORE.md"), chunk -> {}));
-            result.setToolCalls(null);
-            return result;
-        }
-        return llm.generateResponseWithTools(userPrompt, MDManager.read("prompts/CORE.md"), tools);
-    }
-
-     */
-
     public static ExecutorService getExecutor() {
         return LLM_EXECUTOR;
     }
@@ -114,7 +71,7 @@ public class LLManager {
             dataModel.put("current_memories",
                     MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
         }
-        dataModel.put("now_time", Utils.getNowFormatted());
+        dataModel.put("now_time", Utils.getNowPrecise());
         dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
         dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
 

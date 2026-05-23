@@ -66,6 +66,10 @@ public class CreatePendingChatTask implements DefaultAgentToolUnit {
 
             // 1. 创建预备挂起任务
             ChatTask pendingTask = new ChatTask(source, sourceName, role, roleName, 0);
+            // 私聊任务降低优先级（更优先执行）
+            if ("private".equalsIgnoreCase(source)) {
+                pendingTask.setPriority(3.0 - 0.5);
+            }
 
             // 2. 写入大模型当时的OS，作为未来被唤醒时的上下文
             String innerMonologue = "在之前你回复完消息后，你还想要继续回复 " + roleName + "(" + role + ") 在 " + sourceName + "(" + source + ") 的消息，理由是:[ " + reason + " ], 以下将会是ta的新消息;";

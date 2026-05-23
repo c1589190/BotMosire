@@ -146,8 +146,23 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
                         task.addContext(text);
                         task.addContext(reasonContext);
+
+                        // 计算优先级：默认3.0 - 私聊bonus - 刺激度加成
+                        FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(text);
+                        double priority = 3.0;
+                        // 私聊消息降低0.5（更优先）
+                        if ("private".equalsIgnoreCase(source)) {
+                            priority -= 0.5;
+                        }
+                        // 语义刺激度加成（刺激越强烈越优先）
+                        priority -= eval.stimulusBonus;
+                        task.setPriority(priority);
+                        log.info("为新目标 [Role:{}] 创建了预备任务，优先级: {} (私聊优惠: {}, 刺激加成: {})",
+                                senderRole, String.format("%.2f", priority),
+                                "private".equalsIgnoreCase(source) ? "是" : "否",
+                                String.format("%.3f", eval.stimulusBonus));
+
                         ChatTaskPreparationPool.put(senderRole, task);
-                        log.info("为新目标 [Role:{}] 创建了预备任务及潜意识理由", senderRole);
                     }
 
                     List<String> l = new LinkedList<>();

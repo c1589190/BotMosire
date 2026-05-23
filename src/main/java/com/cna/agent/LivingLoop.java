@@ -437,6 +437,14 @@ public class LivingLoop implements MosireAPI {
             currentMemory.append("你的想法是: \"" + result.getContent() + "\";\n");
         }
 
+        // ---------- 检测 LLM 返回的错误/异常响应，防止无限循环 ----------
+        if (result.getContent() != null && isLLMErrorResponse(result.getContent())) {
+            log.error("[EXEC-Engine] LLM 返回了无法恢复的错误，强制结束任务: {}", result.getContent());
+            lastSolvingTask = null;
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+            return null;
+        }
+
         // 如果没有调用任何工具，直接判定闭环
         if (!result.isToolCall() || result.getToolCalls() == null || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
             log.info("[EXEC-Engine] 💤 模型选择不采取物理动作，输出文本闭环: \n{}", result.getContent());
@@ -477,7 +485,16 @@ public class LivingLoop implements MosireAPI {
             DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
             if (targetTool != null) {
                 try {
-                    JsonNode argsNode = mapper.readTree(argumentsStr);
+                    JsonNode argsNode;
+                    try {
+                        argsNode = mapper.readTree(argumentsStr);
+                    } catch (Exception parseEx) {
+                        // 尝试修复末转义的双引号（DeepSeek 已知问题）
+                        log.warn("[EXEC-Engine] 标准 JSON 解析失败，将尝试修复未转义双引号: {}", argumentsStr);
+                        String repaired = LLMAdapter.repairInnerJsonQuotes(argumentsStr);
+                        log.info("[EXEC-Engine] 修复后的 arguments: {}", repaired);
+                        argsNode = mapper.readTree(repaired);
+                    }
                     String execResult = targetTool.execute(argsNode);
                     log.info("[EXEC-Engine] 动作反馈: {}", execResult);
 
@@ -557,6 +574,22 @@ public class LivingLoop implements MosireAPI {
         for (DefaultAgentInputHandlerUnit handler : inputHandlerRegistry.values()) {
             handler.tick();
         }
+    }
+
+    /**
+     * 判断 LLM 返回的内容是否为不可恢复的错误响应，
+     * 防止将 API 解析错误误认为"模型不调用工具"而进入无限循环。
+     */
+    private static boolean isLLMErrorResponse(String content) {
+        if (content == null) return false;
+        return content.startsWith("响应缺少 choices")
+                || content.startsWith("响应格式异常")
+                || content.startsWith("API 错误")
+                || content.startsWith("请求超时")
+                || content.startsWith("网络异常")
+                || content.startsWith("计算资源请求失败")
+                || content.startsWith("响应结构异常")
+                || content.startsWith("无法解析 JSON");
     }
 
     public void stop() {
