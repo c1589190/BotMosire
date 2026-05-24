@@ -65,7 +65,7 @@
 
     <!-- ==================== 业务包日志 ==================== -->
     <!-- com.cna 到文件：DEBUG 级别，捕获所有业务细节 -->
-    <logger name="com.cna" level="DEBUG" additivity="false">
+    <logger name="com.cna" level="INFO" additivity="false">
         <appender-ref ref="FILE"/>
         <appender-ref ref="CONSOLE"/>
     </logger>

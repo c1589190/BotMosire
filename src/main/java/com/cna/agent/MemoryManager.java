@@ -117,7 +117,7 @@ public class MemoryManager {
         // 2. 发起请求，传入 Tool
         CallResult result;
         try {
-            result = LLManager.executeSceneAsync(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
+            result = LLManager.executeSceneAsyncWithCache(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
                     .get(90, TimeUnit.SECONDS);
         } catch (ExecutionException | InterruptedException | TimeoutException e) {
             throw new RuntimeException(e);
@@ -125,14 +125,20 @@ public class MemoryManager {
 
         // 3. 直接拦截 Tool Call
         if (result.isToolCall() && result.getToolCalls() != null && !result.getToolCalls().isEmpty()) {
+            LLManager.clearCache();
             try {
                 // 精确提取第一个工具调用的 arguments 字符串
                 JsonNode firstToolCall = result.getToolCalls().get(0);
                 String argumentsJson = firstToolCall.path("function").path("arguments").asText();
 
                 ObjectMapper mapper = new ObjectMapper();
-                // 解析 arguments 里面的 JSON 对象
-                JsonNode argsNode = mapper.readTree(argumentsJson);
+                // 解析 arguments 里面的 JSON 对象（容错：LLM 可能将数组的 ] 误写为 }）
+                JsonNode argsNode = safeParseArguments(argumentsJson, mapper);
+                if (argsNode == null) {
+                    log.warn("[MemoryManager] arguments JSON 解析失败（含修复重试），跳过本次折叠。原始: {}", argumentsJson);
+                    log.info("[MemoryManager] 潜意识折叠完毕，锁已释放。");
+                    return;
+                }
 
                 // 现在可以安全地拿到 points 数组了
                 JsonNode pointsNode = argsNode.get("points");
@@ -256,6 +262,127 @@ public class MemoryManager {
             this.content = content;
             this.similarity = similarity;
         }
+    }
+
+    /**
+     * 容错解析 LLM 返回的 arguments JSON。
+     * LLM 可能将数组的 ] 误写为 }，导致 Jackson 抛出括号不匹配异常。
+     * 此方法先尝试直接解析，失败则自动修复后重试。
+     *
+     * @param argumentsJson LLM 返回的原始 arguments 字符串
+     * @param mapper        ObjectMapper 实例
+     * @return 解析成功的 JsonNode，修复后仍失败则返回 null
+     */
+    private JsonNode safeParseArguments(String argumentsJson, ObjectMapper mapper) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return null;
+        }
+        // 第一次：直接解析
+        try {
+            return mapper.readTree(argumentsJson);
+        } catch (com.fasterxml.jackson.core.JsonParseException e) {
+            log.warn("[MemoryManager] arguments JSON 直接解析失败，尝试自动修复。错误: {}", e.getOriginalMessage());
+        } catch (Exception e) {
+            log.warn("[MemoryManager] arguments JSON 直接解析出现未知异常，尝试自动修复。错误: {}", e.getMessage());
+        }
+
+        // 第二次：修复后重试
+        String repaired = repairJsonBrackets(argumentsJson);
+        if (repaired == null) {
+            return null;
+        }
+        try {
+            return mapper.readTree(repaired);
+        } catch (Exception e) {
+            log.error("[MemoryManager] arguments JSON 修复后仍解析失败。修复后内容: {}", repaired, e);
+            return null;
+        }
+    }
+
+    /**
+     * 修复 JSON 中数组/对象括号不匹配问题。
+     * 策略：从后往前扫描，将多余的 } 替换为 ]（针对 \"Unexpected close marker '}'\" 错误）。
+     *
+     * @param json 原始 JSON 字符串
+     * @return 修复后的 JSON，若无法修复则返回 null
+     */
+    private String repairJsonBrackets(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        // 使用栈来跟踪括号深度，找出不匹配的 }
+        StringBuilder sb = new StringBuilder(json);
+        // 从后往前扫描，找到第一个导致栈为负的 }
+        // 简化策略：统计 ] 和 } 的数量差异，如果 } 多于预期顶级闭合需要，替换多余的 }
+        // 更精准的方式：使用计数器模拟解析
+        int braceDepth = 0;   // { } 深度
+        int bracketDepth = 0; // [ ] 深度
+        boolean inString = false;
+        boolean escaped = false;
+
+        // 第一遍扫描，找出所有不匹配的 }
+        for (int i = 0; i < sb.length(); i++) {
+            char c = sb.charAt(i);
+
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+
+            switch (c) {
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    braceDepth--;
+                    // 如果 braceDepth < 0，说明这个 } 是多余的，应该改为 ]
+                    if (braceDepth < 0) {
+                        // 检查当前 bracketDepth 是否 > 0（即我们在某个数组内部）
+                        if (bracketDepth > 0) {
+                            sb.setCharAt(i, ']');
+                            bracketDepth--;
+                            braceDepth = 0; // 修复后重置 braceDepth 为 0
+                        } else {
+                            // 无法修复：不在数组内部却多了 }
+                            log.warn("[MemoryManager] JSON 修复失败：多余的 '}' 但不在数组内，位置: {}", i);
+                            return null;
+                        }
+                    }
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    bracketDepth--;
+                    if (bracketDepth < 0) {
+                        log.warn("[MemoryManager] JSON 修复失败：多余的 ']' ，位置: {}", i);
+                        return null;
+                    }
+                    break;
+            }
+        }
+
+        // 修复后验证：所有深度应该归零（或允许末尾有未闭合，Jackson 会处理）
+        if (braceDepth == 0 && bracketDepth == 0) {
+            log.info("[MemoryManager] JSON 括号修复成功。修复后: {}", sb.toString());
+            return sb.toString();
+        }
+
+        // 如果还有未闭合的括号，尝试在末尾补全
+        // 这种情况通常不需要，因为主要问题是多余的 }
+        log.warn("[MemoryManager] JSON 修复后仍有未闭合括号: braceDepth={}, bracketDepth={}", braceDepth, bracketDepth);
+        return null;
     }
 
     private ArrayNode buildMemoryExtractorTool() {

@@ -475,6 +475,7 @@ public class LivingLoop implements MosireAPI {
         for (JsonNode toolCall : result.getToolCalls()) {
             String functionName = toolCall.path("function").path("name").asText();
             String argumentsStr = toolCall.path("function").path("arguments").asText();
+            String toolCallId = toolCall.path("id").asText();
 
             log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
 
@@ -503,6 +504,9 @@ public class LivingLoop implements MosireAPI {
 
                     toolResults.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 
+                    // 将工具执行结果以标准 tool 角色消息写入多轮上下文缓存
+                    LLManager.feedToolResult(toolCallId, functionName, execResult);
+
                     if(targetTool.isAutoMemory()){
                         currentMemory.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
                         //MemoryManager.getInstance().inputCurrentMemorys(list);
@@ -510,10 +514,16 @@ public class LivingLoop implements MosireAPI {
 
                 } catch (Exception e) {
                     log.error("[EXEC-Engine] 工具解析或执行异常", e);
+                    String errorResult = "程序错误: " + e.toString();
                     toolResults.append("调用了工具 [").append(functionName).append("] , 却发生了发生程序错误:[\n" + e.toString() + "\n];\n");
+                    // 异常时也写入 tool 消息，让 LLM 知道工具执行失败了
+                    LLManager.feedToolResult(toolCallId, functionName, errorResult);
                 }
             } else {
+                String notFoundResult = "工具 \"" + functionName + "\" 不存在，请检查工具名称是否正确。";
                 toolResults.append("调用了工具 [").append(functionName).append("] , 但是这个工具压根不存在;\n");
+                // 不存在的工具也写入 tool 消息，让 LLM 收到反馈
+                LLManager.feedToolResult(toolCallId, functionName, notFoundResult);
             }
 
             if ("finish_task".equals(functionName)) {

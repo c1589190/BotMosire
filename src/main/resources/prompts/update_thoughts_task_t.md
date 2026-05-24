@@ -1,4 +1,4 @@
-${tools_guide}
+${tools_guide!""}
 
 现在你需要进行一次定期的、深度的自我反思，以提炼与精简、总结您的内心独白（Thoughts）、兴趣与注意力雷达（Interests）、定时任务列表（Scheduled）。
 通俗来讲，其实就是回味您近期的心中所想；

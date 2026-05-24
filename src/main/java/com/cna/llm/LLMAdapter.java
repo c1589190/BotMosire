@@ -86,8 +86,10 @@ public class LLMAdapter {
         if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
         if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
-            payload.put("enable_thinking", true);
-            //finalSysPrompt += "\n\n【指令约束】在给出最终结果前，必须先进行严谨的逻辑推导。";
+            ObjectNode thinking = jsonMapper.createObjectNode();
+            thinking.put("type", "enabled");
+            payload.set("thinking", thinking);
+            payload.put("reasoning_effort", config.getReasoningEffort());
         }
 
         ArrayNode messages = payload.putArray("messages");
@@ -182,27 +184,61 @@ public class LLMAdapter {
         return fullResponse.toString();
     }
     /**
-     * 对接文本模型 (非流式 Tool Calling 专用)
-     * 传入工具定义的 JSON 数组，返回工具调用结果或普通文本
+     * 对接文本模型 (非流式 Tool Calling 专用) - 原始签名，内部委托给完整 messages 版本
+     */
+    /*
+    public CallResult generateResponseWithTools(ArrayNode userMessage,
+                                                ArrayNode tools) {
+        // 构建初始 messages: [system, user]
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode messages = mapper.createArrayNode();
+
+        String finalSysPrompt = config.getSystemPrompt();
+        if (contextMemories != null && !contextMemories.isEmpty()) {
+            finalSysPrompt += contextMemories;
+        }
+
+        ObjectNode sysMsg = mapper.createObjectNode();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", finalSysPrompt);
+        messages.add(sysMsg);
+
+        ObjectNode userMsg = mapper.createObjectNode();
+        userMsg.put("role", "user");
+        userMsg.put("content", userMessage);
+        messages.add(userMsg);
+
+        return generateResponseWithTools(messages, tools);
+    }
+
+     */
+
+    /**
+     * 对接文本模型 (非流式 Tool Calling 专用) - 完整 messages 版本
+     * 接收预先构建好的 messages 数组（可包含多轮历史），直接发送给 API。
+     * 返回的 CallResult.contextMessages 包含本轮完整上下文，供 LLManager 缓存复用。
      * - 强制清洗 SSE 前缀与非法尾缀；
      * - 同时识别 tool_calls (数组) 和 function_call (旧格式)，并统一成 tool_calls 数组；
      * - 对所有 NullNode / MissingNode / 空数组 做防御，确保不会因格式差异导致工具调用信息丢失；
      * - 工具调用结果的闭合性由此方法完全保证，上层不再需要做额外清洗。
      */
-    public CallResult generateResponseWithTools(String userMessage,
-                                                String contextMemories,
+    public CallResult generateResponseWithTools(ArrayNode messages,
                                                 ArrayNode tools) {
+        // 深拷贝 messages，避免污染调用方缓存的原始引用
+        ArrayNode finalMessages = messages.deepCopy();
 
         ObjectNode payload = jsonMapper.createObjectNode();
         payload.put("model", config.getChatModel());
         payload.put("stream", false);
         payload.put("temperature", config.getTemperature());
         payload.put("max_tokens", config.getMax_tokens());
-        payload.put("thinking_budget", config.getMax_tokens());
         if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
         if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
         if (config.isEnableCoT()) {
-            payload.put("enable_thinking", true);
+            ObjectNode thinking = jsonMapper.createObjectNode();
+            thinking.put("type", "enabled");
+            payload.set("thinking", thinking);
+            payload.put("reasoning_effort", config.getReasoningEffort());
         }
 
         if (tools != null && !tools.isEmpty()) {
@@ -210,29 +246,15 @@ public class LLMAdapter {
             payload.put("tool_choice", "auto");
         }
 
-        ArrayNode messages = payload.putArray("messages");
-
-        String finalSysPrompt = config.getSystemPrompt();
-        if (contextMemories != null && !contextMemories.isEmpty()) {
-            finalSysPrompt += contextMemories;
-        }
-
-        ObjectNode sysMsg = jsonMapper.createObjectNode();
-        sysMsg.put("role", "system");
-        sysMsg.put("content", finalSysPrompt);
-        messages.add(sysMsg);
-
-        ObjectNode userMsg = jsonMapper.createObjectNode();
-        userMsg.put("role", "user");
-        userMsg.put("content", userMessage);
-        messages.add(userMsg);
+        // 直接使用传入的完整 messages 数组（已包含多轮历史）
+        payload.set("messages", finalMessages);
 
         String url = config.getApiBase().endsWith("/") ?
                 config.getApiBase() + "chat/completions" :
                 config.getApiBase() + "/chat/completions";
 
         String payloadStr = payload.toString();
-        log.debug("请求体大小: {} bytes", payloadStr.length());
+        log.debug("请求体: {} ", payloadStr);
 
         Request request = new Request.Builder()
                 .url(url)
@@ -354,6 +376,21 @@ public class LLMAdapter {
                 result.setToolCall(false);
                 result.setToolCalls(null);
             }
+
+            // 构建本轮 assistant 回复消息，追加到 messages 后写入 contextMessages
+            ObjectNode assistantMsg = jsonMapper.createObjectNode();
+            assistantMsg.put("role", "assistant");
+            if (result.getContent() != null) {
+                assistantMsg.put("content", result.getContent());
+            }
+            if (result.getReasoningContent() != null) {
+                assistantMsg.put("reasoning_content", result.getReasoningContent());
+            }
+            if (toolCallsArray != null && toolCallsArray.size() > 0) {
+                assistantMsg.set("tool_calls", toolCallsArray);
+            }
+            finalMessages.add(assistantMsg);
+            result.setContextMessages(finalMessages);
 
         } catch (java.net.SocketTimeoutException e) {
             long elapsed = System.currentTimeMillis() - startTime;
