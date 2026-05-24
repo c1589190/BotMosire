@@ -166,11 +166,16 @@ public class LLManager {
                 CallResult result = llm.generateResponseWithTools(workingMessages, toolsParam);
 
                 if (result != null) {
+                    // 将本轮 user 消息加入全局历史
                     GLOBAL_CACHE.messages.add(userMsgNode);
 
+                    // 构造 assistant 消息，必须保留 tool_calls 信息以防后续 tool 消息报错
                     ObjectNode assistantMsg = jsonMapper.createObjectNode();
                     assistantMsg.put("role", "assistant");
                     assistantMsg.put("content", result.getContent() != null ? result.getContent() : "");
+                    if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().size() > 0) {
+                        assistantMsg.set("tool_calls", result.getToolCalls());
+                    }
                     GLOBAL_CACHE.messages.add(assistantMsg);
 
                     GLOBAL_CACHE.roundCount.incrementAndGet();
@@ -232,10 +237,10 @@ public class LLManager {
     }
 
     public static void clearTaskCache(UUID taskId) {
-        synchronized (GLOBAL_CACHE.lock) {
-            GLOBAL_CACHE.messages = null;
-            GLOBAL_CACHE.roundCount.set(0);
-            log.info("[LLManager] 🗑️ 全局共享上下文已被主动清空");
-        }
+  //      synchronized (GLOBAL_CACHE.lock) {
+//            GLOBAL_CACHE.messages = null;
+  //         GLOBAL_CACHE.roundCount.set(0);
+    //        log.info("[LLManager] 🗑️ 全局共享上下文已被主动清空");
+//        }
     }
 }
