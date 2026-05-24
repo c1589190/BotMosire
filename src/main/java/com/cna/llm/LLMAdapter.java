@@ -58,7 +58,7 @@ public class LLMAdapter {
             }
 
             String responseBody = response.body().string();           // 只调一次
-            log.debug("emb模型响应: " + responseBody);
+            //log.debug("emb模型响应: " + responseBody);
 
             JsonNode rootNode = jsonMapper.readTree(responseBody);    // 复用变量
 
