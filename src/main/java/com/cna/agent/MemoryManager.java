@@ -117,7 +117,7 @@ public class MemoryManager {
         // 2. 发起请求，传入 Tool
         CallResult result;
         try {
-            result = LLManager.executeSceneAsync(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
+            result = LLManager.executeSceneAsyncWithCache(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
                     .get(90, TimeUnit.SECONDS);
         } catch (ExecutionException | InterruptedException | TimeoutException e) {
             throw new RuntimeException(e);
@@ -125,6 +125,7 @@ public class MemoryManager {
 
         // 3. 直接拦截 Tool Call
         if (result.isToolCall() && result.getToolCalls() != null && !result.getToolCalls().isEmpty()) {
+            LLManager.clearCache();
             try {
                 // 精确提取第一个工具调用的 arguments 字符串
                 JsonNode firstToolCall = result.getToolCalls().get(0);

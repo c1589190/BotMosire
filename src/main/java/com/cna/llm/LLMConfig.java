@@ -21,4 +21,7 @@ public class LLMConfig {
 
     // 思维链开关
     @Builder.Default private boolean enableCoT = false;
+
+    // 思维链推理力度 (deepseek: "high" / "medium" / "low")
+    @Builder.Default private String reasoningEffort = "high";
 }

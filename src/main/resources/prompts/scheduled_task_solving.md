@@ -1,4 +1,4 @@
-${tools_guide}
+${tools_guide!""}
 
 现在你需要处理定时任务；
 
