@@ -34,14 +34,23 @@ public class Main {
 
     public static volatile WebServer webServer;
 
+    /** 統一入隊入口，滿了 log warn 而非靜默丟棄 */
+    public static void offerInput(DefaultAgentInputUnit input, String source) {
+        if (!AgentInputTasksQueue.offer(input)) {
+            log.warn("[Queue] AgentInputTasksQueue 已滿 ({}/4096)，丟棄來自 [{}] 的輸入",
+                    AgentInputTasksQueue.size(), source);
+        }
+    }
+
     public static void main(String[] args){
 
         //new BotGUI();
 
-        FeelingDimensionManager.init(new MemoryDB());
-
         ConfigsManager.init();
         ConfigsLoader.loadAll();
+
+        // 必须在 ConfigsLoader.loadAll() 之后初始化，否则 EMBEDDING_CONFIG / DB_URL 还是 null
+        FeelingDimensionManager.init(new MemoryDB());
 
         workspaceManager.initWebsite(); // 确保 website 目录和初始 index.html 存在
         // 去掉了你多敲的那个点，并保存了实例
@@ -91,8 +100,12 @@ public class Main {
             if (GlobalDiscordAdapter != null) {
                 GlobalDiscordAdapter.disconnect();
             }
+            if (webServer != null) {
+                webServer.stop(); // 避免重启时 port 8080 被佔用
+            }
             loop.stop();
             MemoryManager.getInstance().stop();
+            com.cna.db.MemoryDB.shutdown(); // 关闭 HikariCP 连接池（I19）
         }));
 
         consoleCommandSystem = new ConsoleCommandSystem();

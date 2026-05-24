@@ -108,6 +108,9 @@ public class ConfigsManager {
                 .chatModel(getString("llm.gatekeeper.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
                 .temperature(getDouble("llm.gatekeeper.temperature", 0.3))
                 .enableCoT(getBoolean("llm.gatekeeper.enableCoT", true))
+                .connectTimeoutSec(getInt("llm.gatekeeper.connectTimeoutSec", 30))
+                .readTimeoutSec(getInt("llm.gatekeeper.readTimeoutSec", 30))
+                .writeTimeoutSec(getInt("llm.gatekeeper.writeTimeoutSec", 30))
                 .build();
 
         // 【新增】：战略规划者配置 (第0轮专用)
@@ -133,6 +136,9 @@ public class ConfigsManager {
                 .presencePenalty(getDouble("llm.brain.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.brain.enableCoT", false))
                 .max_tokens(getInt("llm.brain.maxTokens", 65535))
+                .connectTimeoutSec(getInt("llm.brain.connectTimeoutSec", 30))
+                .readTimeoutSec(getInt("llm.brain.readTimeoutSec", 180))
+                .writeTimeoutSec(getInt("llm.brain.writeTimeoutSec", 30))
                 .build();
 
         /*
@@ -154,6 +160,9 @@ public class ConfigsManager {
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.embedding.apiKey", ""))
                 .embeddingModel(getString("llm.embedding.embeddingModel", "Qwen/Qwen3-Embedding-4B"))
                 .temperature(getDouble("llm.embedding.temperature", 0.0))
+                .connectTimeoutSec(getInt("llm.embedding.connectTimeoutSec", 30))
+                .readTimeoutSec(getInt("llm.embedding.readTimeoutSec", 30))
+                .writeTimeoutSec(getInt("llm.embedding.writeTimeoutSec", 30))
                 .build();
 
         /*
@@ -177,6 +186,9 @@ public class ConfigsManager {
                 //.frequencyPenalty(getDouble("llm.vision.frequencyPenalty", 0.4))
                 //.presencePenalty(getDouble("llm.vision.presencePenalty", 0.5))
                 //.enableCoT(getBoolean("llm.vision.enableCoT", true))
+                .connectTimeoutSec(getInt("llm.vision.connectTimeoutSec", 30))
+                .readTimeoutSec(getInt("llm.vision.readTimeoutSec", 60))
+                .writeTimeoutSec(getInt("llm.vision.writeTimeoutSec", 60))
                 .build();
 
         LLM_TIMEOUT_TIME = getInt("llm.timeoutTime", 180000);

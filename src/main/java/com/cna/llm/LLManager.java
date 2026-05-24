@@ -67,13 +67,20 @@ public class LLManager {
             ArrayNode tools) {
 
         // 补全数据（渲染前的轻量操作在主调线程完成没问题）
+        // 全用 containsKey 检查，允许 Handler 在 prepareBaseData 时覆盖这些值
         if (!dataModel.containsKey("current_memories")) {
             dataModel.put("current_memories",
                     MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
         }
-        dataModel.put("now_time", Utils.getNowPrecise());
-        dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
-        dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
+        if (!dataModel.containsKey("now_time")) {
+            dataModel.put("now_time", Utils.getNowPrecise());
+        }
+        if (!dataModel.containsKey("current_thoughts")) {
+            dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
+        }
+        if (!dataModel.containsKey("tools_guide")) {
+            dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
+        }
 
         String userPrompt = render(userTemplate, dataModel);
         log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
@@ -111,13 +118,18 @@ public class LLManager {
             LLMAdapter llm,
             ArrayNode tools) {
 
+        // 提前持有 future 引用，超时时可以 cancel 释放线程槽
+        // 注意：cancel(true) 只发出中断信号，对 OkHttp blocking call 不会立刻断开 socket，
+        // 必须配合 LLMConfig.readTimeoutSec 设置合理值，避免线程槽被独占到 socket 超时为止。
+        CompletableFuture<CallResult> future = executeSceneAsync(userTemplate, dataModel, llm, tools);
         try {
-            return executeSceneAsync(userTemplate, dataModel, llm, tools)
-                    .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            return future.get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("[LLManager] 场景执行超时 ({} {})", ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            future.cancel(true);
+            log.error("[LLManager] 场景执行超时 ({} ms)，已 cancel future", ConfigsManager.LLM_TIMEOUT_TIME);
             return errorResult("请求超时，请稍后重试或缩短上下文");
         } catch (InterruptedException | ExecutionException e) {
+            future.cancel(true);
             log.error("[LLManager] 场景执行异常", e);
             return errorResult("系统错误: " + e.getMessage());
         }
@@ -158,11 +170,14 @@ public class LLManager {
      * @return 向量数组，超时或异常返回空数组
      */
     public static double[] getTextVector(String text, LLMAdapter emb) {
+        CompletableFuture<double[]> future = getEmbeddingAsync(text, emb);
         try {
-            return getEmbeddingAsync(text, emb).get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            return future.get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("[LLManager] 嵌入调用超时 ({} {})", ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            future.cancel(true);
+            log.error("[LLManager] 嵌入调用超时 ({} ms)，已 cancel future", ConfigsManager.LLM_TIMEOUT_TIME);
         } catch (InterruptedException | ExecutionException e) {
+            future.cancel(true);
             log.error("[LLManager] 嵌入调用异常", e);
         }
         return new double[0];

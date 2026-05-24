@@ -10,23 +10,30 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 
+import com.cna.config.ConfigsManager;
+
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.CompletableFuture;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Slf4j
 public class WebServer {
 
+    private static final int RATE_PER_MIN = 30;
+    private static final int MAX_BODY_BYTES = 64 * 1024;
+
     private final Javalin app;
     private final ConcurrentLinkedQueue<LlmCommand> commandQueue = new ConcurrentLinkedQueue<>();
-    private final String indexHtmlAbsolutePath; // 记录 index.html 的绝对路径
-
-    private static final ExecutorService IO_EXECUTOR = Executors.newFixedThreadPool(2);
+    private final String indexHtmlAbsolutePath;
+    private final Object indexHtmlLock = new Object(); // 防止並發 update_html 互蓋
+    private final Map<String, Deque<Long>> ipBuckets = new ConcurrentHashMap<>();
+    private final String webhookToken = ConfigsManager.getConfig("web.webhookToken", "");
 
     public WebServer(String workspaceAbsolutePath) {
         String websitePath = workspaceAbsolutePath + "/website";
@@ -38,12 +45,27 @@ public class WebServer {
                 staticFiles.directory = websitePath;
                 staticFiles.location = Location.EXTERNAL;
             });
-            config.bundledPlugins.enableCors(cors -> {
-                cors.addRule(it -> it.anyHost());
-            });
+            config.bundledPlugins.enableCors(cors -> cors.addRule(it -> it.anyHost()));
+            config.http.maxRequestSize = MAX_BODY_BYTES; // server 層直接拒絕過大 payload，不先讀進記憶體
         });
 
         setupRoutes();
+        startIpBucketCleanup();
+    }
+
+    private void startIpBucketCleanup() {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ip-bucket-cleanup");
+            t.setDaemon(true);
+            return t;
+        }).scheduleAtFixedRate(() -> {
+            long now = System.currentTimeMillis();
+            ipBuckets.entrySet().removeIf(e -> {
+                synchronized (e.getValue()) {
+                    return e.getValue().isEmpty() || now - e.getValue().peekLast() > 30 * 60 * 1000;
+                }
+            });
+        }, 30, 30, java.util.concurrent.TimeUnit.MINUTES);
     }
 
     public void start(int port) {
@@ -51,29 +73,44 @@ public class WebServer {
         log.info("[WebServer] 动态网页服务器已启动，访问地址: http://localhost:{}", port);
     }
 
-    public void stop() {
-        app.stop();
+    public void stop() { app.stop(); }
+
+    private boolean rateLimited(String ip) {
+        long now = System.currentTimeMillis();
+        Deque<Long> bucket = ipBuckets.computeIfAbsent(ip, k -> new ArrayDeque<>());
+        synchronized (bucket) {
+            while (!bucket.isEmpty() && now - bucket.peekFirst() > 60_000) bucket.pollFirst();
+            if (bucket.size() >= RATE_PER_MIN) return true;
+            bucket.addLast(now);
+            return false;
+        }
     }
 
     private void setupRoutes() {
-
-        // =========================================================
-        // 【标准感知通道】前端事件 -> 全局感知总线
-        // =========================================================
         app.post("/api/agent/webhook", ctx -> {
             try {
-                String rawBody = ctx.body();
+                // Bearer token 驗證（token 為空時跳過，方便本機開發）
+                if (!webhookToken.isBlank()) {
+                    String auth = ctx.header("Authorization");
+                    if (!("Bearer " + webhookToken).equals(auth)) {
+                        ctx.status(401).json(new ResponsePayload("ERROR", "Unauthorized"));
+                        return;
+                    }
+                }
+                // per-IP rate limit
                 String ip = ctx.ip();
-
+                if (rateLimited(ip)) {
+                    ctx.status(429).json(new ResponsePayload("ERROR", "Too Many Requests"));
+                    return;
+                }
+                // payload 大小上限已在 Javalin config.http.maxRequestSize 層處理，不需再讀 body 檢查
+                String rawBody = ctx.body();
                 if (rawBody == null || rawBody.isBlank()) {
                     ctx.status(400).json(new ResponsePayload("ERROR", "请求体不能为空"));
                     return;
                 }
-
-                WebEventInput webEvent = new WebEventInput(rawBody, ip);
-                Main.AgentInputTasksQueue.offer(webEvent);
-                log.info("[WebServer] 成功捕获前端事件并已投入全局感知总线: {}", rawBody);
-
+                Main.offerInput(new WebEventInput(rawBody, ip), "WebHook:" + ip);
+                log.info("[WebServer] 前端事件已投入感知总线: {}", rawBody);
                 ctx.json(new ResponsePayload("SUCCESS", "事件已送达主脑"));
             } catch (Exception e) {
                 log.error("[WebServer] 处理前端 webhook 失败", e);
@@ -81,46 +118,28 @@ public class WebServer {
             }
         });
 
-        // =========================================================
-        // 【下发通道】前端轮询获取指令
-        // =========================================================
         app.get("/api/llm/command", ctx -> {
             LlmCommand cmd = commandQueue.poll();
-            if (cmd != null) {
-                ctx.json(cmd);
-            } else {
-                ctx.status(204);
-            }
+            if (cmd != null) ctx.json(cmd);
+            else ctx.status(204);
         });
 
-        // =========================================================
-        // 【接收 Agent 指令】持久化修改文件并推送到队列
-        // =========================================================
-        // 修改 POST /api/llm/command
         app.post("/api/llm/command", ctx -> {
             try {
                 LlmCommand cmd = ctx.bodyAsClass(LlmCommand.class);
 
-                // 前端渲染队列的推送（轻量操作，可以留在当前线程）
-                commandQueue.offer(cmd);
-                log.info("[WebServer] 收到 LLM 指令，已推送到前端队列");
-
-                // 如果是修改 HTML 的指令，异步持久化到磁盘（不阻塞网络线程）
                 if ("update_html".equals(cmd.getAction()) || "append_html".equals(cmd.getAction())) {
-                    CompletableFuture.runAsync(() -> {
-                        boolean patched = patchHtmlFile(cmd);
-                        if (!patched) {
-                            // 由于已经返回了，这里的错误只能通过日志记录
-                            log.error("[WebServer] 异步持久化失败，未找到目标节点: {}", cmd.getTarget());
-                        }
-                    }, IO_EXECUTOR).exceptionally(ex -> {
-                        log.error("[WebServer] 异步持久化异常", ex);
-                        return null;
-                    });
+                    boolean patched = patchHtmlFile(cmd);
+                    if (!patched) {
+                        ctx.status(400).json(new ResponsePayload("ERROR",
+                            "未找到目标节点 [" + cmd.getTarget() + "]，请先调用 read_file 查看 website/index.html 的当前 DOM 结构，确认 CSS 选择器正确后重试。"));
+                        return;
+                    }
                 }
 
-                // 无论是否持久化完成，都先返回成功
-                ctx.json(new ResponsePayload("SUCCESS", "指令已接收"));
+                commandQueue.offer(cmd);
+                log.info("[WebServer] LLM 指令已推送: action={}, target={}", cmd.getAction(), cmd.getTarget());
+                ctx.json(new ResponsePayload("SUCCESS", "指令已执行，HTML 改动已持久化到磁盘并推送至前端实时渲染。"));
             } catch (Exception e) {
                 log.error("[WebServer] 解析 LLM 指令失败", e);
                 ctx.status(400).json(new ResponsePayload("ERROR", "处理异常: " + e.getMessage()));
@@ -128,42 +147,28 @@ public class WebServer {
         });
     }
 
-    /**
-     * 使用 Jsoup 安全地局部修改 index.html
-     * @return 是否成功找到目标并修改
-     */
     private boolean patchHtmlFile(LlmCommand cmd) {
-        try {
-            File input = new File(indexHtmlAbsolutePath);
-            if (!input.exists()) {
-                log.error("[WebServer] 找不到文件: {}", indexHtmlAbsolutePath);
-                return false;
-            }
-
-            // 解析 HTML
-            Document doc = Jsoup.parse(input, "UTF-8");
-            // 关闭美化，防止 Jsoup 破坏已有的代码缩进格式
-            doc.outputSettings().prettyPrint(false);
-
-            Element targetElement = doc.selectFirst(cmd.getTarget());
-            if (targetElement != null) {
-                if ("update_html".equals(cmd.getAction())) {
-                    targetElement.html(cmd.getHtml()); // 替换节点内部所有内容
-                } else if ("append_html".equals(cmd.getAction())) {
-                    targetElement.append(cmd.getHtml()); // 在节点末尾追加内容
+        synchronized (indexHtmlLock) { // 防止並發 update_html 互蓋
+            try {
+                File input = new File(indexHtmlAbsolutePath);
+                if (!input.exists()) { log.error("[WebServer] 找不到文件: {}", indexHtmlAbsolutePath); return false; }
+                Document doc = Jsoup.parse(input, "UTF-8");
+                doc.outputSettings().prettyPrint(false);
+                Element targetElement = doc.selectFirst(cmd.getTarget());
+                if (targetElement != null) {
+                    if ("update_html".equals(cmd.getAction())) targetElement.html(cmd.getHtml());
+                    else if ("append_html".equals(cmd.getAction())) targetElement.append(cmd.getHtml());
+                    Files.writeString(Path.of(indexHtmlAbsolutePath), doc.outerHtml(), StandardCharsets.UTF_8);
+                    log.info("[WebServer] 已持久化改动到 index.html, 目标节点: {}", cmd.getTarget());
+                    return true;
+                } else {
+                    log.warn("[WebServer] 未能在 index.html 找到目标节点: {}", cmd.getTarget());
+                    return false;
                 }
-
-                // 保存回文件
-                Files.writeString(Path.of(indexHtmlAbsolutePath), doc.outerHtml(), StandardCharsets.UTF_8);
-                log.info("[WebServer] 已成功将改动持久化到硬盘的 index.html, 目标节点: {}", cmd.getTarget());
-                return true;
-            } else {
-                log.warn("[WebServer] 未能在 index.html 找到目标节点: {}", cmd.getTarget());
+            } catch (Exception e) {
+                log.error("[WebServer] Jsoup 持久化 index.html 失败", e);
                 return false;
             }
-        } catch (Exception e) {
-            log.error("[WebServer] Jsoup 持久化 index.html 失败", e);
-            return false;
         }
     }
 

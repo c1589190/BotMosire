@@ -304,7 +304,7 @@ public class DiscordAdapter extends ListenerAdapter {
                 if (finalContent.isEmpty()) return;
                 ChatMessageInput input = new ChatMessageInput(
                         finalSource, finalSourceName, role, authorName, finalContent);
-                Main.AgentInputTasksQueue.offer(input);
+                Main.offerInput(input, "Discord(視覺):" + finalSourceName);
                 logger.info("[DiscordAdapter] 📥(視覺) 推入訊息: {} / {} → {}",
                         finalSourceName, authorName, truncate(finalContent, 60));
             });
@@ -314,7 +314,7 @@ public class DiscordAdapter extends ListenerAdapter {
             if (finalContent.isEmpty()) return;
             ChatMessageInput input = new ChatMessageInput(
                     source, sourceName, role, authorName, finalContent);
-            Main.AgentInputTasksQueue.offer(input);
+            Main.offerInput(input, "Discord:" + sourceName);
             logger.info("[DiscordAdapter] 📥 推入訊息: {} / {} → {}",
                     sourceName, authorName, truncate(finalContent, 50));
         }

@@ -25,7 +25,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import com.cna.agent.AgentTool.*;
 import com.cna.agent.AgentTool.io.*;
 import org.slf4j.Logger;
 
@@ -41,11 +40,7 @@ public class LivingLoop implements MosireAPI {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
 
-    // 累加器：记录度过了多少个 Tick
-    private int tickCounter_CognitiveCycle = 0;
-
-    // 累加器：定时任务计数器
-    private int scheduledTaskCounter = 0;
+    // (移除 tickCounter_CognitiveCycle 和 scheduledTaskCounter：改用双 scheduler 直接按真实间隔触发)
 
     // Gatekeeper (小模型) 专用异步线程池，防止网络请求阻塞心跳总线
     private final ExecutorService gatekeeperExecutor = Executors.newSingleThreadExecutor();
@@ -94,9 +89,6 @@ public class LivingLoop implements MosireAPI {
 
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
-    //private LLMAdapter advancedLLM;
-    //private LLMAdapter plannerLLM;
-    //private LLMAdapter SchedulerLLM;
     private LLMAdapter embLLM;
 
     private final Map<String, DefaultAgentToolUnit> largeLLMToolbox = new ConcurrentHashMap<>();
@@ -104,17 +96,12 @@ public class LivingLoop implements MosireAPI {
     public LivingLoop() {
 
         //装载默认工具箱
-        DefaultAgentToolUnit updateInterestsTool = new UpdateInterests();
         DefaultAgentToolUnit updateScheduledTool = new UpdateScheduled();
-        DefaultAgentToolUnit switchModelTool = new SwitchToAdvancedModel();
 
         largeLLMToolbox.put(new SendChatMessage().getName(), new SendChatMessage());
         largeLLMToolbox.put(new GetChatHistory().getName(), new GetChatHistory());
-        //largeLLMToolbox.put(updateInterestsTool.getName(), updateInterestsTool);
         largeLLMToolbox.put(updateScheduledTool.getName(), updateScheduledTool);
         largeLLMToolbox.put(new GetScheduled().getName(), new GetScheduled());
-        //largeLLMToolbox.put(switchModelTool.getName(), switchModelTool);
-        //largeLLMToolbox.put(new GetInterests().getName(), new GetInterests());
         largeLLMToolbox.put(new WebSearch().getName(), new WebSearch());
         largeLLMToolbox.put(new ReadWebPage().getName(), new ReadWebPage());
         largeLLMToolbox.put(new WriteFile().getName(), new WriteFile());
@@ -149,17 +136,10 @@ public class LivingLoop implements MosireAPI {
     private void initLLM(){
         this.littleLLM    = new LLMAdapter(ConfigsManager.GATEKEEPER_CONFIG);
         this.largeLLM     = new LLMAdapter(ConfigsManager.BRAIN_CONFIG);
-        //this.advancedLLM  = new LLMAdapter(ConfigsManager.ADVANCED_BRAIN_CONFIG);
-        //this.plannerLLM   = new LLMAdapter(ConfigsManager.PLANNER_CONFIG);
-        //this.SchedulerLLM = new LLMAdapter(ConfigsManager.SCHEDULER_CONFIG);
         this.embLLM       = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
     }
 
-    //public LLMAdapter getLittleLLM()    { return littleLLM; }
-    //public LLMAdapter getLargeLLM()     { return largeLLM; }
-    //public LLMAdapter getAdvancedLLM()  { return advancedLLM; }
-    //public LLMAdapter getSchedulerLLM() { return SchedulerLLM; }
-    public LLMAdapter getEmbLLM()       { return embLLM; }
+    public LLMAdapter getEmbLLM() { return embLLM; }
 
     // ==========================================
     // 插件系统 API：工具箱动态装配接口
@@ -267,51 +247,53 @@ public class LivingLoop implements MosireAPI {
         this.initLLM();
 
         // ==========================================
-        // 线程 1：极速感官折叠与任务生产 (生产者)
+        // 线程 1a：认知觉醒（按真实间隔触发 Gatekeeper，不再每 1ms 空转）
+        // 内含：cognitive heat 衰减 + 反思任务定量触发
         // ==========================================
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                this.tickCounter_CognitiveCycle ++;
+                // cognitive heat 自然衰减（每认知周期 -1，并 clamp 到 MAX）
+                this.cognitiveHeat.set(Math.min(ConfigsManager.MAX_COGNITIVE_HEAT, this.cognitiveHeat.get()));
+                this.cognitiveHeat.set(Math.max(this.cognitiveHeat.get() - 1, 0));
 
-                if (this.tickCounter_CognitiveCycle >= ConfigsManager.COGNITIVE_CYCLE_TICKS) {
-
-                    this.cognitiveHeat.set(Math.min(ConfigsManager.MAX_COGNITIVE_HEAT, this.cognitiveHeat.get()));
-                    this.cognitiveHeat.set(Math.max(this.cognitiveHeat.get() - 1, 0));
-
-                    if (isGatekeeperThinking.compareAndSet(false, true)) {
-                        gatekeeperExecutor.submit(() -> {
-                            try {
-                                handleCognitiveCycle();
-                            } finally {
-                                isGatekeeperThinking.set(false);
-                            }
-                        });
-                    }
-                    this.tickCounter_CognitiveCycle = 0;
+                // 触发认知周期：Gatekeeper 处理 input
+                if (isGatekeeperThinking.compareAndSet(false, true)) {
+                    gatekeeperExecutor.submit(() -> {
+                        try {
+                            handleCognitiveCycle();
+                        } finally {
+                            isGatekeeperThinking.set(false);
+                        }
+                    });
                 }
 
-                // 【定量反思任务】
-                if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION && ConfigsManager.TASK_COUNT_FOR_REFLECTION > 1 ) {
+                // 定量反思任务
+                if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION
+                        && ConfigsManager.TASK_COUNT_FOR_REFLECTION > 1) {
                     processedTaskCount.set(0);
                     log.info("[System] 达到任务处理阈值，正在向潜意识抛入强制反思任务...");
-                    TaskQueue.offer(new UpdateThoughtsTask()); // 变更为 offer
+                    TaskQueue.offer(new UpdateThoughtsTask());
                     this.trimTaskQueue();
                 }
-
-                this.scheduledTaskCounter ++;
-
-                // 【定时计划任务】
-                if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME && ConfigsManager.SCHEDULE_CYCLING_TIME > 0) {
-                    log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
-                    TaskQueue.offer(new ScheduledTask()); // 变更为 offer
-                    this.trimTaskQueue();
-                    this.scheduledTaskCounter = 0;
-                }
-
             } catch (Exception e) {
-                log.error("[com.cna.agent.LivingLoop][SCHE] 任务生产循环异常：", e);
+                log.error("[LivingLoop][SCHE] 认知循环异常：", e);
             }
-        }, 1, 1, TimeUnit.MILLISECONDS);
+        }, ConfigsManager.COGNITIVE_CYCLE_TICKS, ConfigsManager.COGNITIVE_CYCLE_TICKS, TimeUnit.MILLISECONDS);
+
+        // ==========================================
+        // 线程 1b：定时任务生产（独立排程，不与认知循环耦合）
+        // ==========================================
+        if (ConfigsManager.SCHEDULE_CYCLING_TIME > 0) {
+            scheduler.scheduleAtFixedRate(() -> {
+                try {
+                    log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
+                    TaskQueue.offer(new ScheduledTask());
+                    this.trimTaskQueue();
+                } catch (Exception e) {
+                    log.error("[LivingLoop][SCHE] 定时任务触发异常：", e);
+                }
+            }, ConfigsManager.SCHEDULE_CYCLING_TIME, ConfigsManager.SCHEDULE_CYCLING_TIME, TimeUnit.MILLISECONDS);
+        }
 
         // ==========================================
         // 线程 2：大脑皮层深度思考与动作执行 (消费者)
@@ -477,13 +459,6 @@ public class LivingLoop implements MosireAPI {
             String argumentsStr = toolCall.path("function").path("arguments").asText();
 
             log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
-
-            if ("switch_to_advanced_model".equals(functionName)) {
-                log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
-                //没想好怎么写
-                toolResults.append("（调用了工具switch_to_advanced_model,切换到了更高级的大模型;）\n");
-                continue;
-            }
 
             DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
             if (targetTool != null) {

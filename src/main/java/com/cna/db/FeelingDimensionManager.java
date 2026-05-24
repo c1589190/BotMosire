@@ -34,21 +34,27 @@ public class FeelingDimensionManager {
     private static final ObjectMapper jsonMapper = new ObjectMapper();
     private static final org.slf4j.Logger feelingLog = org.slf4j.LoggerFactory.getLogger("feeling-log");
 
-    private static final LLMAdapter embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
+    // 改为 instance field + lazy init，避免类加载时 ConfigsManager.EMBEDDING_CONFIG 还是 null
+    private final LLMAdapter embLLM;
 
     private final MemoryDB memoryDB;
     //private static final double SIMILARITY_THRESHOLD = 0.6;
-    private static final double NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
-    private static final int HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
+
+    // 改为 instance final + constructor 内读，避免 class 第一次被载入时 ConfigsManager 还没 init() 拿到默认值
+    private final double NOVELTY_THRESHOLD;
+    private final int HABITUATION_LIMIT;
+    private final double ALPHA;
 
     // 仅依赖该阈值计算基础感觉权重
     //private static final double BLUNT_WEIGHT = ConfigsManager.FD_BLUNT_WEIGHT;
 
     public FeelingDimensionManager(MemoryDB memoryDB) {
         this.memoryDB = memoryDB;
+        this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
+        this.NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
+        this.HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
+        this.ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
     }
-
-    private static final double ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
 
     // ==========================================
     // 显式概念直接处理 (FinishTask 专用，无LLM二次提取)

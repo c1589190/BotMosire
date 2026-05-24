@@ -37,3 +37,19 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### BotMosire runtime config (含 API key/token，禁止 commit) ###
+application.properties
+src/main/resources/application.properties
+
+### BotMosire runtime data ###
+agent_memory.db
+agent_memory.db-shm
+agent_memory.db-wal
+logs/
+plugins/
+workspace/
+workspace_history/
+thoughts.md
+interests.md
+scheduled.md
