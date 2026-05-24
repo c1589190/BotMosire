@@ -16,6 +16,7 @@ import java.io.StringReader;
 import java.io.StringWriter;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -28,13 +29,12 @@ public class LLManager {
     // LLM 调用专用线程池，完全与 Jetty / LivingLoop 线程隔离
     private static final ExecutorService LLM_EXECUTOR = Executors.newFixedThreadPool(4);
 
-    // ==================== 多轮对话上下文缓存 ====================
-    // 按 cacheKey 隔离不同会话的上下文，N 轮后自动清空以节省 LLM 花费
-
-    //private static final Map<String, ContextCacheEntry> contextCache = new ConcurrentHashMap<>();
+    // ==================== 多轮对话上下文缓存 (基于任务 UUID 隔离) ====================
+    // 使用 ConcurrentHashMap，以任务的 UUID 为键，实现任务间的记忆完全隔离
+    private static final Map<UUID, ContextCacheEntry> taskContextCache = new ConcurrentHashMap<>();
 
     /**
-     * 上下文缓存在多少轮后自动清空重置，默认 10 轮
+     * 上下文缓存在多少轮后自动清空重置，默认 1024 轮
      */
     public static int MAX_CONTEXT_CACHE_ROUNDS = 1024;
 
@@ -43,9 +43,9 @@ public class LLManager {
         ArrayNode messages;
         /** 当前已累积的轮数 */
         AtomicInteger roundCount = new AtomicInteger(0);
+        /** 为每个任务分配一把独立的锁，取代原本的全局大锁，实现完全并发处理 */
+        final Object lock = new Object();
     }
-    private static ContextCacheEntry cache = new ContextCacheEntry();
-    private static final Object CACHE_LOCK = new Object();
 
     // 静态代码块：系统启动时自动初始化 FreeMarker
     static {
@@ -82,69 +82,33 @@ public class LLManager {
         return LLM_EXECUTOR;
     }
 
-    // ---------- 新增：异步执行，返回 Future ----------
-    /*
-    public static CompletableFuture<CallResult> executeSceneAsync(
-            String userTemplate,
-            Map<String, Object> dataModel,
-            LLMAdapter llm,
-            ArrayNode tools) {
-
-        // 补全数据（渲染前的轻量操作在主调线程完成没问题）
-        if (!dataModel.containsKey("current_memories")) {
-            dataModel.put("current_memories",
-                    MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
-        }
-        dataModel.put("now_time", Utils.getNowPrecise());
-        dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
-        dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
-
-        String userPrompt = render(userTemplate, dataModel);
-        log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
-        log.trace("[LLManager Async] Prompt 全文: {}", userPrompt);
-
-        return CompletableFuture.supplyAsync(() -> {
-            if (tools == null) {
-                CallResult result = new CallResult();
-                result.setToolCall(false);
-                result.setContent(llm.generateStreamResponse(
-                        userPrompt,
-                        MDManager.read("prompts/CORE.md"),
-                        chunk -> {}));
-                result.setToolCalls(null);
-                return result;
-            }
-            return llm.generateResponseWithTools(userPrompt,  tools);
-        }, LLM_EXECUTOR);
-    }
-
-     */
-
     /**
      * 同步封装：带超时的异步场景执行，方便快速替换原有的 executeScene 调用。
      * 超时或异常时返回一个内容为错误信息的 CallResult（toolCall=false）。
+     * 【核心修改】：增加 UUID taskId 参数，以精确匹配任务上下文。
      *
+     * @param taskId        任务的唯一标识符
      * @param userTemplate  用户提示词模板
      * @param dataModel     数据模型
      * @param llm           模型适配器
      * @param tools         工具定义
-
      * @return CallResult，保证非 null
      */
     public static CallResult executeScene(
+            UUID taskId,
             String userTemplate,
             Map<String, Object> dataModel,
             LLMAdapter llm,
             ArrayNode tools) {
 
         try {
-            return executeSceneAsyncWithCache(userTemplate, dataModel, llm, tools)
+            return executeSceneAsyncWithCache(taskId, userTemplate, dataModel, llm, tools)
                     .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("[LLManager] 场景执行超时 ({} {})", ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
+            log.error("[LLManager] 任务 {} 场景执行超时 ({} {})", taskId, ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
             return errorResult("请求超时，请稍后重试或缩短上下文");
         } catch (InterruptedException | ExecutionException e) {
-            log.error("[LLManager] 场景执行异常", e);
+            log.error("[LLManager] 任务 {} 场景执行异常", taskId, e);
             return errorResult("系统错误: " + e.getMessage());
         }
     }
@@ -158,14 +122,8 @@ public class LLManager {
         return r;
     }
 
-    // ========== 异步嵌入调用 ==========
+    // ========== 异步嵌入调用 (不涉及多轮对话状态，无需修改) ==========
 
-    /**
-     * 异步获取文本的嵌入向量，不阻塞调用线程
-     * @param text 要向量化的文本
-     * @param emb  嵌入模型适配器
-     * @return 包含 double[] 的 CompletableFuture，可以 get(timeout) 等待结果
-     */
     public static CompletableFuture<double[]> getEmbeddingAsync(String text, LLMAdapter emb) {
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -177,12 +135,6 @@ public class LLManager {
         }, LLM_EXECUTOR);
     }
 
-    /**
-     * 同步封装：带超时的异步嵌入调用，方便旧代码快速替换
-     * @param text   文本
-     * @param emb    嵌入模型
-     * @return 向量数组，超时或异常返回空数组
-     */
     public static double[] getTextVector(String text, LLMAdapter emb) {
         try {
             return getEmbeddingAsync(text, emb).get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
@@ -200,34 +152,28 @@ public class LLManager {
 
     // ==================== 多轮上下文缓存方法 ====================
 
-    /*
-    private static ContextCacheEntry getOrCreateEntry(String cacheKey) {
-        return contextCache.computeIfAbsent(cacheKey, k -> {
-            ContextCacheEntry entry = new ContextCacheEntry();
-            entry.messages = jsonMapper.createArrayNode();
-            ObjectNode sysMsg = jsonMapper.createObjectNode();
-            sysMsg.put("role", "system");
-            sysMsg.put("content", MDManager.read("prompts/CORE.md", ""));
-            entry.messages.add(sysMsg);
-            log.info("[LLManager 缓存] 创建新上下文缓存: cacheKey={}", cacheKey);
-            return entry;
-        });
-    }
-
+    /**
+     * 【核心修改】：接收 taskId，从 ConcurrentHashMap 动态分配或获取独立记忆空间。
      */
-
     public static CompletableFuture<CallResult> executeSceneAsyncWithCache(
+            UUID taskId,
             String userTemplate,
             Map<String, Object> dataModel,
             LLMAdapter llm,
             ArrayNode tools) {
         return CompletableFuture.supplyAsync(() -> {
 
-            // ---- 同步块：检查并初始化/重置缓存 ----
-            synchronized (CACHE_LOCK) {
+            // 1. 获取该任务专属的缓存条目，如果没有则自动创建一个新的
+            ContextCacheEntry cache = taskContextCache.computeIfAbsent(taskId, k -> {
+                log.info("[LLManager] 🧠 为新任务 [{}] 开辟了全新的独立思维空间", taskId);
+                return new ContextCacheEntry();
+            });
+
+            // 2. ---- 同步块：仅锁定当前任务的缓存，不影响其他线程的任务 ----
+            synchronized (cache.lock) {
                 if (cache.messages == null || cache.messages.isEmpty() || cache.roundCount.get() > MAX_CONTEXT_CACHE_ROUNDS) {
 
-                    // 在第一轮或超轮数时重置缓存
+                    // 在第一轮或超轮数时重置该任务的缓存
                     cache.messages = jsonMapper.createArrayNode();
                     ObjectNode sysMsg = jsonMapper.createObjectNode();
                     sysMsg.put("role", "system");
@@ -242,16 +188,16 @@ public class LLManager {
                 }
             }
 
-            // ---- 无锁区：渲染 prompt（不涉及共享状态） ----
+            // 3. ---- 无锁区：渲染 prompt（完全不涉及共享状态，支持极高并发） ----
             dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
             dataModel.put("now_time", Utils.getNowPrecise());
             dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
             String userPrompt = render(userTemplate, dataModel);
-            log.info("[LLManager 缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
+            log.info("[LLManager 缓存] 任务 {} Prompt 渲染完毕, 长度: {} chars", taskId, userPrompt.length());
 
-            // ---- 同步块：读取缓存做深拷贝 ----
+            // 4. ---- 同步块：读取该任务缓存做深拷贝 ----
             final ArrayNode workingMessages;
-            synchronized (CACHE_LOCK) {
+            synchronized (cache.lock) {
                 workingMessages = cache.messages.deepCopy();
             }
 
@@ -265,9 +211,9 @@ public class LLManager {
             CallResult result;
             result = llm.generateResponseWithTools(workingMessages, toolsParam);
 
-            // 仅当 LLM 正常返回时才更新缓存；null 时跳过避免缓存错误上下文
+            // 5. ---- 仅当 LLM 正常返回时才更新该任务的专属缓存 ----
             if (result != null) {
-                synchronized (CACHE_LOCK) {
+                synchronized (cache.lock) {
                     if (result.getContextMessages() != null) {
                         // 返回的 contextMessages 已是包含本轮 assistant 的完整消息数组，直接替换缓存
                         cache.messages = result.getContextMessages();
@@ -279,10 +225,10 @@ public class LLManager {
                         cache.messages.add(assistantMsg);
                     }
                     cache.roundCount.incrementAndGet();
-                    log.info("[LLManager] 第 {} 轮完成，消息数: {}", cache.roundCount.get(), cache.messages.size());
+                    log.info("[LLManager] 任务 {} 第 {} 轮思考完成，目前上下文深度: {}", taskId, cache.roundCount.get(), cache.messages.size());
                 }
             } else {
-                log.error("[LLManager] LLM 返回 null，跳过缓存更新");
+                log.error("[LLManager] 任务 {} LLM 返回 null，跳过该任务的缓存更新", taskId);
                 return errorResult("LLM 返回空结果");
             }
 
@@ -291,29 +237,40 @@ public class LLManager {
     }
 
     /**
-     * 清除全局上下文缓存。例如在 FinishTask 调用时重置对话。
+     * 【核心修改】：精准清除指定任务的全局上下文缓存。
+     * 例如在 FinishTask 调用时，或任务被丢弃时重置该任务对话，防止内存泄漏。
      */
-    public static void clearCache() {
-        synchronized (CACHE_LOCK) {
-            cache.messages = null;
-            cache.roundCount.set(0);
-            log.info("[LLManager] 全局上下文缓存已清除");
+    public static void clearTaskCache(UUID taskId) {
+        if (taskId != null) {
+            ContextCacheEntry removed = taskContextCache.remove(taskId);
+            if (removed != null) {
+                log.info("[LLManager] 🗑️ 任务 {} 的独立上下文缓存已彻底销毁释放", taskId);
+            }
         }
     }
 
     /**
-     * 向全局上下文缓存中追加一条 tool 角色消息。
+     * 向指定任务的上下文缓存中追加一条 tool 角色消息。
      * 在 LivingLoop 执行完工具后调用，使 LLM 能在下一轮看到工具执行结果，
      * 遵循 OpenAI tool calling 标准协议: system → user → assistant(tool_calls) → tool → tool → ...
      *
+     * @param taskId      任务的唯一标识符
      * @param toolCallId  LLM 返回的 tool call id
      * @param toolName    工具名称
      * @param toolResult  工具执行结果字符串
      */
-    public static void feedToolResult(String toolCallId, String toolName, String toolResult) {
-        synchronized (CACHE_LOCK) {
+    public static void feedToolResult(UUID taskId, String toolCallId, String toolName, String toolResult) {
+        if (taskId == null) return;
+
+        ContextCacheEntry cache = taskContextCache.get(taskId);
+        if (cache == null) {
+            log.warn("[LLManager] ⚠️ feedToolResult 被调用但未找到任务 {} 的缓存，可能是任务已被销毁", taskId);
+            return;
+        }
+
+        synchronized (cache.lock) {
             if (cache.messages == null || cache.messages.isEmpty()) {
-                log.warn("[LLManager] feedToolResult 被调用但缓存为空，callId={}, tool={}", toolCallId, toolName);
+                log.warn("[LLManager] feedToolResult: 任务 {} 的 messages 为空，跳过压入", taskId);
                 return;
             }
             ObjectNode toolMsg = jsonMapper.createObjectNode();
@@ -322,7 +279,8 @@ public class LLManager {
             toolMsg.put("name", toolName);
             toolMsg.put("content", toolResult);
             cache.messages.add(toolMsg);
-            log.info("[LLManager] feedToolResult: tool={}, callId={}, 消息总数: {}", toolName, toolCallId, cache.messages.size());
+            log.info("[LLManager] feedToolResult -> 任务 {} 压入动作结果: tool={}, callId={}, 消息总数: {}",
+                    taskId, toolName, toolCallId, cache.messages.size());
         }
     }
 

@@ -45,11 +45,6 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
         compactedSchedule.put("type", "string");
         compactedSchedule.put("description", p.getCustomDescription("compacted_schedule"));
 
-        // 兴趣压缩
-        ObjectNode compactedInterests = properties.putObject("compacted_interests");
-        compactedInterests.put("type", "string");
-        compactedInterests.put("description", p.getCustomDescription("compacted_interests"));
-
         // 设为空数组，代表参数都是可选的，大模型可以按需覆写
         parameters.putArray("required");
 
@@ -62,7 +57,6 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
         try {
             String thoughts = arguments.path("compacted_thoughts").asText(null);
             String schedule = arguments.path("compacted_schedule").asText(null);
-            String interests = arguments.path("compacted_interests").asText(null);
 
             StringBuilder resultMsg = new StringBuilder("SUCCESS: 记忆碎片压缩结果：\n");
             boolean modified = false;
@@ -78,13 +72,6 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
             if (schedule != null && !schedule.trim().isEmpty()) {
                 MDManager.write("scheduled.md", schedule);
                 resultMsg.append("- 日程任务 (scheduled.md) 已成功覆写。\n");
-                modified = true;
-            }
-
-            // 覆写 Interests
-            if (interests != null && !interests.trim().isEmpty()) {
-                MDManager.write("interests.md", interests);
-                resultMsg.append("- 注意力雷达 (interests.md) 已成功覆写。\n");
                 modified = true;
             }
 

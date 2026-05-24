@@ -26,10 +26,14 @@ public class LLMAdapter {
     public LLMAdapter(LLMConfig config) {
         this.config = config;
         // 重新配置 HTTP 客户端，将读取超时拉长到 5 分钟，防止带有深度思维链的模型被强制断线
+        // 连接池：keep-alive 30 秒后主动淘汰空闲连接（低于 LLM API 服务端的典型空闲超时 60s），
+        // 避免 OkHttp 复用已被服务端关闭的陈旧连接导致 Connection reset。
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.MINUTES)
                 .writeTimeout(30, TimeUnit.SECONDS)
+                .callTimeout(180, TimeUnit.SECONDS)
+                .connectionPool(new ConnectionPool(5, 30, TimeUnit.SECONDS))
                 .build();
     }
 
@@ -121,67 +125,87 @@ public class LLMAdapter {
                 .build();
 
         StringBuilder fullResponse = new StringBuilder();
+        int maxRetries = 2;
 
-        log.info("引擎点火，通过 OkHttp 建立 TCP 长连接...");
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful() || response.body() == null) {
-                return "计算资源请求失败: " + response.code();
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (attempt > 0) {
+                log.warn("SSE 流式请求第 {} 次重试 (总共最多 {} 次重试)...", attempt, maxRetries);
+                // 清理连接池中的陈旧连接，强制使用全新 TCP 连接
+                client.connectionPool().evictAll();
+                // 短暂等待，避免立即重试触发限流
+                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
             }
 
-            // 3. 物理剥离 SSE 协议的数据流
-            InputStream inputStream = response.body().byteStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                // 忽略空行
-                if (line.trim().isEmpty()) {
-                    continue;
+            log.info("引擎点火，通过 OkHttp 建立 TCP 长连接... (attempt={})", attempt + 1);
+            try (Response response = client.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    return "计算资源请求失败: " + response.code();
                 }
 
-                // SSE 协议的结束信号
-                if (line.equals("data: [DONE]")) {
-                    break;
-                }
+                // 3. 物理剥离 SSE 协议的数据流
+                InputStream inputStream = response.body().byteStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                String line;
 
-                // 只处理以 "data: " 开头的物理载荷
-                if (line.startsWith("data: ")) {
-                    String jsonChunk = line.substring(6); // 截掉 "data: " 前缀
+                while ((line = reader.readLine()) != null) {
+                    // 忽略空行
+                    if (line.trim().isEmpty()) {
+                        continue;
+                    }
 
-                    try {
-                        JsonNode chunkNode = jsonMapper.readTree(jsonChunk);
-                        JsonNode deltaNode = chunkNode.path("choices").get(0).path("delta");
+                    // SSE 协议的结束信号
+                    if (line.equals("data: [DONE]")) {
+                        break;
+                    }
 
-                        // 优先抓取思维链字段 (处理 DeepSeek/GLM 等非标字段)
-                        JsonNode reasoningNode = deltaNode.path("reasoning_content");
-                        if (!reasoningNode.isMissingNode() && !reasoningNode.isNull()) {
-                            String reasoning = reasoningNode.asText();
-                            if (!reasoning.isEmpty()) {
-                                chunkCallback.accept(reasoning);
-                                //System.out.print(reasoning);
+                    // 只处理以 "data: " 开头的物理载荷
+                    if (line.startsWith("data: ")) {
+                        String jsonChunk = line.substring(6); // 截掉 "data: " 前缀
+
+                        try {
+                            JsonNode chunkNode = jsonMapper.readTree(jsonChunk);
+                            JsonNode deltaNode = chunkNode.path("choices").get(0).path("delta");
+
+                            // 优先抓取思维链字段 (处理 DeepSeek/GLM 等非标字段)
+                            JsonNode reasoningNode = deltaNode.path("reasoning_content");
+                            if (!reasoningNode.isMissingNode() && !reasoningNode.isNull()) {
+                                String reasoning = reasoningNode.asText();
+                                if (!reasoning.isEmpty()) {
+                                    chunkCallback.accept(reasoning);
+                                    //System.out.print(reasoning);
+                                }
                             }
-                        }
 
-                        // 抓取最终的正式回复字段
-                        JsonNode contentNode = deltaNode.path("content");
-                        if (!contentNode.isMissingNode() && !contentNode.isNull()) {
-                            String content = contentNode.asText();
-                            if (!content.isEmpty()) {
-                                chunkCallback.accept(content);
-                                fullResponse.append(content);
+                            // 抓取最终的正式回复字段
+                            JsonNode contentNode = deltaNode.path("content");
+                            if (!contentNode.isMissingNode() && !contentNode.isNull()) {
+                                String content = contentNode.asText();
+                                if (!content.isEmpty()) {
+                                    chunkCallback.accept(content);
+                                    fullResponse.append(content);
+                                }
                             }
+                        } catch (Exception parseEx) {
+                            log.warn("无法解析的数据块: {}", jsonChunk);
                         }
-                    } catch (Exception parseEx) {
-                        log.warn("无法解析的数据块: {}", jsonChunk);
                     }
                 }
+                // 正常完成，跳出重试循环
+                return fullResponse.toString();
+
+            } catch (java.net.SocketException e) {
+                log.error("SSE 流式连接被重置，attempt={}/{}", attempt + 1, maxRetries + 1, e);
+                if (attempt >= maxRetries) {
+                    return fullResponse.append("\n[连接重置，已重试" + maxRetries + "次]").toString();
+                }
+                // 未达重试上限则继续循环
+            } catch (IOException e) {
+                log.error("流式网络 I/O 异常脱断", e);
+                return fullResponse.append("\n[生成意外中断]").toString();
             }
-        } catch (IOException e) {
-            log.error("流式网络 I/O 异常脱断", e);
-            return fullResponse.append("\n[生成意外中断]").toString();
         }
 
-        return fullResponse.toString();
+        return fullResponse.append("\n[所有重试均失败]").toString();
     }
     /**
      * 对接文本模型 (非流式 Tool Calling 专用) - 原始签名，内部委托给完整 messages 版本
@@ -264,141 +288,166 @@ public class LLMAdapter {
                 .build();
 
         CallResult result = new CallResult();
-
-        // ---------- 关键：创建带强制总超时的临时客户端 ----------
-        OkHttpClient timeoutClient = client.newBuilder()
-                .callTimeout(90, TimeUnit.SECONDS)   // 整个请求最多等 90 秒
-                .build();
-
         long startTime = System.currentTimeMillis();
-        try (Response response = timeoutClient.newCall(request).execute()) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
+        int maxRetries = 2;
+        boolean success = false;
 
-            if (!response.isSuccessful() || response.body() == null) {
-                log.error("计算资源请求失败，状态码: {}", response.code());
-                result.setContent("计算资源请求失败: " + response.code());
-                return result;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (attempt > 0) {
+                log.warn("Tool Calling 第 {} 次重试 (总共最多 {} 次重试)...", attempt, maxRetries);
+                // 清理连接池中的陈旧连接，强制使用全新 TCP 连接
+                client.connectionPool().evictAll();
+                // 短暂等待，避免立即重试触发限流
+                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
             }
 
-            String responseBody = response.body().string();
-            log.debug("【Tool Calling 原始响应】: {}", responseBody);
+            startTime = System.currentTimeMillis();
+            try (Response response = client.newCall(request).execute()) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
 
-            // ---------- SSE 多段聚合：即使 stream=false，某些模型仍可能返回多段 data chunk ----------
-            String cleanedBody = extractFirstValidChunk(responseBody.trim());
-            if (cleanedBody == null || cleanedBody.isEmpty()) {
-                log.error("无法从 SSE 响应中提取有效 JSON 数据: {}", responseBody);
-                result.setContent("响应格式异常：无有效数据");
-                return result;
-            }
-
-            JsonNode rootNode;
-            try {
-                rootNode = jsonMapper.readTree(cleanedBody);
-            } catch (Exception e) {
-                log.error("无法解析 JSON: {}", cleanedBody);
-                result.setContent("响应格式异常");
-                return result;
-            }
-
-            if (rootNode.has("error")) {
-                String err = rootNode.path("error").path("message").asText("未知错误");
-                log.error("API 返回错误: {}", err);
-                result.setContent("API 错误: " + err);
-                return result;
-            }
-
-            JsonNode choicesNode = rootNode.path("choices");
-            if (choicesNode.isMissingNode() || !choicesNode.isArray() || choicesNode.isEmpty()) {
-                log.error("缺少 choices 字段");
-                result.setContent("响应缺少 choices");
-                return result;
-            }
-
-            JsonNode choiceNode = choicesNode.get(0);
-            JsonNode messageNode = choiceNode.path("message");
-            if (messageNode.isMissingNode() || messageNode.isNull()) {
-                JsonNode deltaNode = choiceNode.path("delta");
-                if (!deltaNode.isMissingNode() && !deltaNode.isNull()) {
-                    messageNode = deltaNode;
-                } else {
-                    log.error("无 message 和 delta");
-                    result.setContent("响应结构异常");
+                if (!response.isSuccessful() || response.body() == null) {
+                    log.error("计算资源请求失败，状态码: {}", response.code());
+                    result.setContent("计算资源请求失败: " + response.code());
                     return result;
                 }
-            }
 
-            result.setReasoningContent(messageNode.path("reasoning_content").asText(null));
+                String responseBody = response.body().string();
+                log.debug("【Tool Calling 原始响应】: {}", responseBody);
 
-            JsonNode contentNode = messageNode.path("content");
-            if (!contentNode.isMissingNode() && !contentNode.isNull()) {
-                result.setContent(contentNode.asText());
-            } else {
-                result.setContent(null);
-            }
+                // ---------- SSE 多段聚合：即使 stream=false，某些模型仍可能返回多段 data chunk ----------
+                String cleanedBody = extractFirstValidChunk(responseBody.trim());
+                if (cleanedBody == null || cleanedBody.isEmpty()) {
+                    log.error("无法从 SSE 响应中提取有效 JSON 数据: {}", responseBody);
+                    result.setContent("响应格式异常：无有效数据");
+                    return result;
+                }
 
-            // --- 统一提取工具调用 ---
-            ArrayNode toolCallsArray = null;
+                JsonNode rootNode;
+                try {
+                    rootNode = jsonMapper.readTree(cleanedBody);
+                } catch (Exception e) {
+                    log.error("无法解析 JSON: {}", cleanedBody);
+                    result.setContent("响应格式异常");
+                    return result;
+                }
 
-            if (messageNode.has("tool_calls") && !messageNode.get("tool_calls").isNull()) {
-                JsonNode tcNode = messageNode.get("tool_calls");
-                if (tcNode.isArray() && tcNode.size() > 0) {
-                    toolCallsArray = jsonMapper.createArrayNode();
-                    for (JsonNode call : tcNode) {
-                        ObjectNode normalized = normalizeToolCall(call);
-                        toolCallsArray.add(normalized);
+                if (rootNode.has("error")) {
+                    String err = rootNode.path("error").path("message").asText("未知错误");
+                    log.error("API 返回错误: {}", err);
+                    result.setContent("API 错误: " + err);
+                    return result;
+                }
+
+                JsonNode choicesNode = rootNode.path("choices");
+                if (choicesNode.isMissingNode() || !choicesNode.isArray() || choicesNode.isEmpty()) {
+                    log.error("缺少 choices 字段");
+                    result.setContent("响应缺少 choices");
+                    return result;
+                }
+
+                JsonNode choiceNode = choicesNode.get(0);
+                JsonNode messageNode = choiceNode.path("message");
+                if (messageNode.isMissingNode() || messageNode.isNull()) {
+                    JsonNode deltaNode = choiceNode.path("delta");
+                    if (!deltaNode.isMissingNode() && !deltaNode.isNull()) {
+                        messageNode = deltaNode;
+                    } else {
+                        log.error("无 message 和 delta");
+                        result.setContent("响应结构异常");
+                        return result;
                     }
-                } else if (tcNode.isObject()) {
-                    toolCallsArray = jsonMapper.createArrayNode().add(normalizeToolCall(tcNode));
-                } else if (tcNode.isArray() && tcNode.size() == 0) {
-                    log.warn("tool_calls 为空数组，忽略");
                 }
-            } else if (messageNode.has("function_call") && !messageNode.get("function_call").isNull()) {
-                JsonNode fcNode = messageNode.get("function_call");
-                if (fcNode.isObject()) {
-                    ObjectNode converted = jsonMapper.createObjectNode();
-                    converted.put("id", "call_" + System.currentTimeMillis());
-                    converted.put("type", "function");
-                    converted.set("function", fcNode);
-                    toolCallsArray = jsonMapper.createArrayNode().add(converted);
+
+                result.setReasoningContent(messageNode.path("reasoning_content").asText(null));
+
+                JsonNode contentNode = messageNode.path("content");
+                if (!contentNode.isMissingNode() && !contentNode.isNull()) {
+                    result.setContent(contentNode.asText());
+                } else {
+                    result.setContent(null);
                 }
-            }
 
-            String finishReason = choiceNode.path("finish_reason").asText();
-            if (toolCallsArray == null && "tool_calls".equals(finishReason)) {
-                log.warn("finish_reason=tool_calls 但无 tool_calls 内容");
-            }
+                // --- 统一提取工具调用 ---
+                ArrayNode toolCallsArray = null;
 
-            if (toolCallsArray != null && toolCallsArray.size() > 0) {
-                result.setToolCall(true);
-                result.setToolCalls(toolCallsArray);
-            } else {
-                result.setToolCall(false);
-                result.setToolCalls(null);
-            }
+                if (messageNode.has("tool_calls") && !messageNode.get("tool_calls").isNull()) {
+                    JsonNode tcNode = messageNode.get("tool_calls");
+                    if (tcNode.isArray() && tcNode.size() > 0) {
+                        toolCallsArray = jsonMapper.createArrayNode();
+                        for (JsonNode call : tcNode) {
+                            ObjectNode normalized = normalizeToolCall(call);
+                            toolCallsArray.add(normalized);
+                        }
+                    } else if (tcNode.isObject()) {
+                        toolCallsArray = jsonMapper.createArrayNode().add(normalizeToolCall(tcNode));
+                    } else if (tcNode.isArray() && tcNode.size() == 0) {
+                        log.warn("tool_calls 为空数组，忽略");
+                    }
+                } else if (messageNode.has("function_call") && !messageNode.get("function_call").isNull()) {
+                    JsonNode fcNode = messageNode.get("function_call");
+                    if (fcNode.isObject()) {
+                        ObjectNode converted = jsonMapper.createObjectNode();
+                        converted.put("id", "call_" + System.currentTimeMillis());
+                        converted.put("type", "function");
+                        converted.set("function", fcNode);
+                        toolCallsArray = jsonMapper.createArrayNode().add(converted);
+                    }
+                }
 
-            // 构建本轮 assistant 回复消息，追加到 messages 后写入 contextMessages
-            ObjectNode assistantMsg = jsonMapper.createObjectNode();
-            assistantMsg.put("role", "assistant");
-            if (result.getContent() != null) {
-                assistantMsg.put("content", result.getContent());
-            }
-            if (result.getReasoningContent() != null) {
-                assistantMsg.put("reasoning_content", result.getReasoningContent());
-            }
-            if (toolCallsArray != null && toolCallsArray.size() > 0) {
-                assistantMsg.set("tool_calls", toolCallsArray);
-            }
-            finalMessages.add(assistantMsg);
-            result.setContextMessages(finalMessages);
+                String finishReason = choiceNode.path("finish_reason").asText();
+                if (toolCallsArray == null && "tool_calls".equals(finishReason)) {
+                    log.warn("finish_reason=tool_calls 但无 tool_calls 内容");
+                }
 
-        } catch (java.net.SocketTimeoutException e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("Tool Calling 请求超时 ({}ms)，可能是 prompt 过长或模型响应太慢", elapsed);
-            result.setContent("请求超时，请稍后重试或缩短上下文");
-        } catch (IOException e) {
-            log.error("Tool Calling 网络 I/O 异常", e);
-            result.setContent("网络异常: " + e.getMessage());
+                if (toolCallsArray != null && toolCallsArray.size() > 0) {
+                    result.setToolCall(true);
+                    result.setToolCalls(toolCallsArray);
+                } else {
+                    result.setToolCall(false);
+                    result.setToolCalls(null);
+                }
+
+                // 构建本轮 assistant 回复消息，追加到 messages 后写入 contextMessages
+                ObjectNode assistantMsg = jsonMapper.createObjectNode();
+                assistantMsg.put("role", "assistant");
+                if (result.getContent() != null) {
+                    assistantMsg.put("content", result.getContent());
+                }
+                if (result.getReasoningContent() != null) {
+                    assistantMsg.put("reasoning_content", result.getReasoningContent());
+                }
+                if (toolCallsArray != null && toolCallsArray.size() > 0) {
+                    assistantMsg.set("tool_calls", toolCallsArray);
+                }
+                finalMessages.add(assistantMsg);
+                result.setContextMessages(finalMessages);
+                success = true;
+                break; // 成功，跳出重试循环
+
+            } catch (java.net.SocketTimeoutException e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                log.error("Tool Calling 请求超时 ({}ms)，可能是 prompt 过长或模型响应太慢", elapsed);
+                result.setContent("请求超时，请稍后重试或缩短上下文");
+                // 超时不需要重试（只会继续超时）
+                break;
+            } catch (java.net.SocketException e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                log.error("Tool Calling 连接被重置 ({}ms)，attempt={}/{}", elapsed, attempt + 1, maxRetries + 1, e);
+                if (attempt >= maxRetries) {
+                    result.setContent("网络异常 (连接重置，已重试" + maxRetries + "次): " + e.getMessage());
+                }
+                // 未达重试上限则继续循环
+            } catch (IOException e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                log.error("Tool Calling 网络 I/O 异常 ({}ms)", elapsed, e);
+                result.setContent("网络异常: " + e.getMessage());
+                break;
+            }
+        }
+
+        if (!success && result.getContent() == null) {
+            result.setContent("网络异常: 所有重试均失败");
         }
 
         return result;

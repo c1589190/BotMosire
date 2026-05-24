@@ -66,6 +66,7 @@ public class ConfigsManager {
     public static final String WORKSPACE_DIR;
 
     public static final int MAX_TASK_AMOUNT;
+    public static final long TASK_EXPIRATION_TIME_MS;
     public static final long RATE_LIMIT_MS;
     public static final String DEPLOYER_ROLE;
     public static final String SEARCH_API_KEY;
@@ -190,6 +191,7 @@ public class ConfigsManager {
         TASK_COUNT_FOR_REFLECTION = getInt("cognitive.taskCountForReflection", 10);
         SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 300000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
+        TASK_EXPIRATION_TIME_MS = getLong("cognitive.taskExpirationTimeMs", 600_000L);
         RANDOM_CHAT_CHANCE = getDouble("cognitive.randomChatChance", 0.05);
         RATE_LIMIT_MS = getInt("cognitive.rateLimitMs", 5000);
         DEPLOYER_ROLE = getString("bot.deployerRole", "");
@@ -296,5 +298,12 @@ public class ConfigsManager {
         String val = props.getProperty(key);
         if (val == null) return defaultValue;
         return Boolean.parseBoolean(val.trim());
+    }
+
+    private static long getLong(String key, long defaultValue) {
+        String val = props.getProperty(key);
+        if (val == null) return defaultValue;
+        try { return Long.parseLong(val.trim()); }
+        catch (NumberFormatException e) { return defaultValue; }
     }
 }

@@ -25,4 +25,7 @@ public interface DefaultAgentTaskUnit {
     String getInitialFeelings();
     void setInitialFeelings(String feelings);
 
+    // 任务创建时间戳（毫秒），用于判断过期
+    long getCreateTime();
+
 }

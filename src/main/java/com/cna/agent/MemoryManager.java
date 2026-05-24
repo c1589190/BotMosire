@@ -1,7 +1,9 @@
 package com.cna.agent;
 
+import com.cna.Utils;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
+import com.cna.db.MDManager;
 import com.cna.db.MemoryDB;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
@@ -109,34 +111,49 @@ public class MemoryManager {
         Map<String, Object> data = new HashMap<>();
         data.put("text", sb.toString());
 
-        // 1. 获取 Tool 定义
-        //ArrayNode extractTool = buildMemoryExtractorTool();
+        // =========================================================
+        // 【核心修复】：补全 FreeMarker 模板所需的全局环境变量
+        // =========================================================
+        data.put("now_time", Utils.getNowPrecise());
+        data.put("current_thoughts", MDManager.read("thoughts.md", ""));
+        data.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
 
         log.info("[MemoryManager] 正在呼叫 LLM 提炼并压缩 {} 条记忆...", oldMemories.size());
 
-        // 2. 发起请求，传入 Tool
-        CallResult result;
-        try {
-            result = LLManager.executeSceneAsyncWithCache(new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt(), data, summaryLLM, buildMemoryExtractorTool())
-                    .get(90, TimeUnit.SECONDS);
-        } catch (ExecutionException | InterruptedException | TimeoutException e) {
-            throw new RuntimeException(e);
-        }
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode messages = mapper.createArrayNode();
 
-        // 3. 直接拦截 Tool Call
+        // 1. 组装 System Prompt
+        ObjectNode sysMsg = mapper.createObjectNode();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", "你是一个专门负责提炼、压缩并保存核心记忆的潜意识引擎。");
+        messages.add(sysMsg);
+
+        // 2. 渲染并组装 User Prompt
+        String template = new ScenePromptsManager(this.getClass().getName()).getSolvingPrompt();
+
+        // 这里现在可以正常渲染了，因为 data 里面有了 now_time 等变量
+        String userPrompt = LLManager.render(template, data);
+
+        ObjectNode userMsg = mapper.createObjectNode();
+        userMsg.put("role", "user");
+        userMsg.put("content", userPrompt);
+        messages.add(userMsg);
+
+        // 3. 直接调用底层的 generateResponseWithTools
+        CallResult result = summaryLLM.generateResponseWithTools(messages, buildMemoryExtractorTool());
+
+        // 4. 解析结果
         if (result.isToolCall() && result.getToolCalls() != null && !result.getToolCalls().isEmpty()) {
-            LLManager.clearCache();
             try {
                 // 精确提取第一个工具调用的 arguments 字符串
                 JsonNode firstToolCall = result.getToolCalls().get(0);
                 String argumentsJson = firstToolCall.path("function").path("arguments").asText();
 
-                ObjectMapper mapper = new ObjectMapper();
                 // 解析 arguments 里面的 JSON 对象（容错：LLM 可能将数组的 ] 误写为 }）
                 JsonNode argsNode = safeParseArguments(argumentsJson, mapper);
                 if (argsNode == null) {
                     log.warn("[MemoryManager] arguments JSON 解析失败（含修复重试），跳过本次折叠。原始: {}", argumentsJson);
-                    log.info("[MemoryManager] 潜意识折叠完毕，锁已释放。");
                     return;
                 }
 
@@ -163,6 +180,8 @@ public class MemoryManager {
             } catch (Exception e) {
                 log.error("[MemoryManager] 解析 Tool 参数失败，原始数据: {}", result.getToolCalls().toString(), e);
             }
+        } else {
+            log.warn("[MemoryManager] 模型未返回预期的工具调用，潜意识折叠失败。模型响应: {}", result.getContent());
         }
     }
 

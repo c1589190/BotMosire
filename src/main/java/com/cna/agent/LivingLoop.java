@@ -60,7 +60,7 @@ public class LivingLoop implements MosireAPI {
     // 同优先级时，正在执行中（inProgress）的任务优先，防止不断被同权重新任务抢占导致饥饿
     private PriorityBlockingQueue<DefaultAgentTaskUnit> TaskQueue = new PriorityBlockingQueue<>(
             1145, Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
-                            .thenComparing(t -> t.isInProgress() ? 0 : 1)
+            .thenComparing(t -> t.isInProgress() ? 0 : 1)
     );
 
     //Input队列
@@ -155,10 +155,6 @@ public class LivingLoop implements MosireAPI {
         this.embLLM       = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
     }
 
-    //public LLMAdapter getLittleLLM()    { return littleLLM; }
-    //public LLMAdapter getLargeLLM()     { return largeLLM; }
-    //public LLMAdapter getAdvancedLLM()  { return advancedLLM; }
-    //public LLMAdapter getSchedulerLLM() { return SchedulerLLM; }
     public LLMAdapter getEmbLLM()       { return embLLM; }
 
     // ==========================================
@@ -227,9 +223,11 @@ public class LivingLoop implements MosireAPI {
     }
 
     private synchronized void trimTaskQueue() {
-        // 队列上限仅作用于未开始执行的任务，已开始的任务不受上限约束，不会被清理
+        long now = System.currentTimeMillis();
+        long expirationMs = ConfigsManager.TASK_EXPIRATION_TIME_MS;
+        int maxAmount = ConfigsManager.MAX_TASK_AMOUNT;
+
         while (true) {
-            // 重新统计 pending 任务数量
             int pendingCount = 0;
             for (DefaultAgentTaskUnit t : TaskQueue) {
                 if (!t.isInProgress()) {
@@ -237,15 +235,39 @@ public class LivingLoop implements MosireAPI {
                 }
             }
 
-            if (pendingCount <= ConfigsManager.MAX_TASK_AMOUNT) {
-                break; // pending 任务数未超限，无需清理
+            // 第一轮：删除已过期的挂起任务（执行中的不会被删除）
+            DefaultAgentTaskUnit expiredVictim = null;
+            if (expirationMs > 0) {
+                for (DefaultAgentTaskUnit t : TaskQueue) {
+                    if (t.isInProgress()) {
+                        continue;
+                    }
+                    long age = now - t.getCreateTime();
+                    if (age > expirationMs) {
+                        expiredVictim = t;
+                        break;
+                    }
+                }
+            }
+            if (expiredVictim != null) {
+                TaskQueue.remove(expiredVictim);
+                // 【核心修改】：同时销毁过期废弃任务的上下文缓存，防止内存泄漏
+                LLManager.clearTaskCache(expiredVictim.getUUID());
+                long age = now - expiredVictim.getCreateTime();
+                log.info("[TaskQueue] 过期任务已删除及其缓存已释放: {} (创建后挂起 {}ms, 阈值 {}ms)",
+                        expiredVictim.getClass().getSimpleName(), age, expirationMs);
+                continue; // 继续循环检查是否还有其它过期任务
             }
 
-            // 只在未开始执行的任务中，找到优先级数值最大（即优先级最低）的任务进行移除
+            // 第二轮：pending 任务数仍在队列上限之上，删除最低优先级任务
+            if (pendingCount <= maxAmount) {
+                break;
+            }
+
             DefaultAgentTaskUnit victim = null;
             for (DefaultAgentTaskUnit t : TaskQueue) {
                 if (t.isInProgress()) {
-                    continue; // 跳过已开始的任务，不清除
+                    continue;
                 }
                 if (victim == null || t.getPriority() > victim.getPriority()) {
                     victim = t;
@@ -254,11 +276,13 @@ public class LivingLoop implements MosireAPI {
 
             if (victim != null) {
                 TaskQueue.remove(victim);
-                log.info("[TaskQueue] 队列积压，已抛弃最低优先级的等待任务: {} (Priority: {})",
+                // 【核心修改】：同时销毁被挤掉的积压任务的上下文缓存
+                LLManager.clearTaskCache(victim.getUUID());
+                log.info("[TaskQueue] 队列积压，已抛弃最低优先级的等待任务及释放缓存: {} (Priority: {})",
                         victim.getClass().getSimpleName(),
                         victim.getPriority());
             } else {
-                break; // 没有可清理的 pending 任务（理论上不应发生）
+                break;
             }
         }
     }
@@ -322,16 +346,15 @@ public class LivingLoop implements MosireAPI {
 
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    // 使用 poll 拿取队列头部任务（因为构造器传了升序比较器，所以拿到的必定是优先级数值最小的，即最高优任务）
+                    // 使用 poll 拿取队列头部任务
                     DefaultAgentTaskUnit task = TaskQueue.poll(1, TimeUnit.SECONDS);
                     if (task == null) {
                         continue;
                     }
 
-                    // 粘性执行：持有当前任务反复执行直到完成，不被同优先级任务打断
+                    // 粘性执行
                     DefaultAgentTaskUnit stickyTask = task;
                     while (stickyTask != null) {
-                        // 每次迭代前检查是否有更高优先级的任务插队
                         DefaultAgentTaskUnit preemptor = null;
                         double currentPriority = stickyTask.getPriority();
                         for (DefaultAgentTaskUnit t : TaskQueue) {
@@ -341,21 +364,18 @@ public class LivingLoop implements MosireAPI {
                             }
                         }
                         if (preemptor != null) {
-                            // 更高优先级任务插队，当前任务重新入队（保持 inProgress 标记）
                             log.info("\n[执行总线] 更高优先级的任务插队，挂起当前任务: {} (Priority: {}) -> 优先执行: {} (Priority: {})",
                                     stickyTask.getClass().getSimpleName(), stickyTask.getPriority(),
                                     preemptor.getClass().getSimpleName(), preemptor.getPriority());
-                            // 从队列中移除抢占者，防止重复处理
                             TaskQueue.remove(preemptor);
                             TaskQueue.offer(stickyTask);
                             stickyTask = preemptor;
-                            continue; // 切换到高优先级任务，继续粘性循环
+                            continue;
                         }
 
                         log.info("\n[执行总线] 开始处理任务: {}", stickyTask.getClass().getSimpleName());
 
                         ArrayNode toolsDefinitionArray = mapper.createArrayNode();
-                        // 对工具箱做快照，避免迭代期间被插件系统并发修改
                         for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
                             if (tool.isAutoLoad()) {
                                 toolsDefinitionArray.add(tool.getToolDefinition());
@@ -364,14 +384,11 @@ public class LivingLoop implements MosireAPI {
 
                         DefaultAgentTaskHandler handler = taskHandlerRegistry.get(stickyTask.getClass());
                         if (handler != null) {
-                            // 执行一回合，返回 null 表示任务完成，非 null 表示任务需要继续
                             stickyTask = handler.handleTask(stickyTask, LivingLoop.this, toolsDefinitionArray);
                             if (stickyTask != null) {
-                                // 任务未完成，继续粘性循环（不重新入队，不 poll 新任务）
                                 processedTaskCount.incrementAndGet();
                                 continue;
                             }
-                            // stickyTask == null，任务完成
                             processedTaskCount.incrementAndGet();
                             break;
                         } else {
@@ -402,15 +419,16 @@ public class LivingLoop implements MosireAPI {
 
         ObjectMapper mapper = new ObjectMapper();
 
-        // 【修复点 1】：动态决定使用哪个模型（支持高级模型切换）
+        // 动态决定使用哪个模型
         LLMAdapter llm = DefaultLLM;
         int turn = taskUnit.getCurrentTurn();
+
+        // 【核心修改】：提取当前任务的唯一标识符
+        UUID currentTaskId = taskUnit.getUUID();
 
         log.info("[EXEC-Engine] [{}] 正在进行第 {} 轮深度思考与动作执行...", taskDesc, turn);
 
         Map<String, Object> turnData = new HashMap<>(baseData);
-        // 注入之前的思考轨迹
-        turnData.put("turnsAddition", taskUnit.getTurnsAddition());
 
         CallResult result;
 
@@ -419,26 +437,33 @@ public class LivingLoop implements MosireAPI {
         //储存本轮任务处理中所有需要被短期记忆记录的东西
 
         if (turn == 1) {
+            // 【核心修改】：第1轮正常压入初始记忆或分析设定
+            turnData.put("turnsAddition", taskUnit.getTurnsAddition());
+
             if(lastSolvingTask != null){
                 //这说明这个任务插队了
                 currentMemory.append("上一轮执行的任务被挂起, " + taskUnit.getTaskName() + " 因判断后的执行权重更高被优先处理...\n");
             } else {
                 currentMemory.append(taskUnit.getTaskName() + " 开始被处理...\n");
             }
-            //MemoryManager.getInstance().inputCurrentMemorys(t);
             lastSolvingTask = taskUnit;
             taskUnit.markInProgress(); // 标记任务已开始执行，防止同权重饥饿
+
+            // 【核心修改】：在 LLManager 中传入 currentTaskId
             if(scenePrompts.getThinkingPrompt() != null && !scenePrompts.getThinkingPrompt().isEmpty() && !scenePrompts.getThinkingPrompt().equals("")) {
-                result = LLManager.executeScene(scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
+                result = LLManager.executeScene(currentTaskId, scenePrompts.getThinkingPrompt(), turnData, llm, toolsDefinitionArray);
             } else {
-                result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+                result = LLManager.executeScene(currentTaskId, scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
             }
         } else {
-            result = LLManager.executeScene(scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
+            // 【核心修改】：第2轮及以后，切断“上下文套娃”，把 turnsAddition 置空，让大模型完全依靠独立缓存追溯前情！
+            turnData.put("turnsAddition", "");
+            result = LLManager.executeScene(currentTaskId, scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
             currentMemory.append("之前的 " + taskUnit.getTaskName() + " 正在进行第" + turn + "轮处理...\n");
         }
+
         StringBuilder nowTurnAddition = new StringBuilder();
-        nowTurnAddition.append(taskUnit.getTurnsAddition());//把之前的工具调用结果压入
+        nowTurnAddition.append(taskUnit.getTurnsAddition());// 自身对象内部可以保留记录以供短期记忆提取，但不传给大模型
 
         nowTurnAddition.append("在任务 " + taskUnit.getTaskName() + " 的第" + turn + "轮思考中，");
         if(result.getContent() != null && !result.getContent().isEmpty() && !result.getContent().equals("") && !result.getContent().equals(" ")) {
@@ -448,16 +473,17 @@ public class LivingLoop implements MosireAPI {
             currentMemory.append("你的想法是: \"" + result.getContent() + "\";\n");
         }
 
-        /*
+        // 【核心修改】：解封错误拦截，异常时主动销毁缓存
         // ---------- 检测 LLM 返回的错误/异常响应，防止无限循环 ----------
         if (result.getContent() != null && isLLMErrorResponse(result.getContent())) {
             log.error("[EXEC-Engine] LLM 返回了无法恢复的错误，强制结束任务: {}", result.getContent());
             lastSolvingTask = null;
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+
+            // 主动销毁该任务由于网络异常半途而废的污染缓存
+            LLManager.clearTaskCache(currentTaskId);
             return null;
         }
-
-         */
 
         // 只要没有工具调用，直接结束任务并归档
         if (!result.isToolCall() || result.getToolCalls() == null
@@ -466,6 +492,9 @@ public class LivingLoop implements MosireAPI {
             currentMemory.append("在本轮处理中没有调用任何工具，任务自动结束——也许是出错了...");
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
             lastSolvingTask = null;
+
+            // 【核心修改】：任务自然结束，清空该任务的专属上下文缓存
+            LLManager.clearTaskCache(currentTaskId);
             return null;
         }
 
@@ -481,7 +510,6 @@ public class LivingLoop implements MosireAPI {
 
             if ("switch_to_advanced_model".equals(functionName)) {
                 log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
-                //没想好怎么写
                 toolResults.append("（调用了工具switch_to_advanced_model,切换到了更高级的大模型;）\n");
                 continue;
             }
@@ -493,7 +521,6 @@ public class LivingLoop implements MosireAPI {
                     try {
                         argsNode = mapper.readTree(argumentsStr);
                     } catch (Exception parseEx) {
-                        // 尝试修复末转义的双引号（DeepSeek 已知问题）
                         log.warn("[EXEC-Engine] 标准 JSON 解析失败，将尝试修复未转义双引号: {}", argumentsStr);
                         String repaired = LLMAdapter.repairInnerJsonQuotes(argumentsStr);
                         log.info("[EXEC-Engine] 修复后的 arguments: {}", repaired);
@@ -504,26 +531,25 @@ public class LivingLoop implements MosireAPI {
 
                     toolResults.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 
-                    // 将工具执行结果以标准 tool 角色消息写入多轮上下文缓存
-                    LLManager.feedToolResult(toolCallId, functionName, execResult);
+                    // 【核心修改】：向该任务的专属缓存中压入 Tool 执行结果
+                    LLManager.feedToolResult(currentTaskId, toolCallId, functionName, execResult);
 
                     if(targetTool.isAutoMemory()){
                         currentMemory.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
-                        //MemoryManager.getInstance().inputCurrentMemorys(list);
                     }
 
                 } catch (Exception e) {
                     log.error("[EXEC-Engine] 工具解析或执行异常", e);
                     String errorResult = "程序错误: " + e.toString();
                     toolResults.append("调用了工具 [").append(functionName).append("] , 却发生了发生程序错误:[\n" + e.toString() + "\n];\n");
-                    // 异常时也写入 tool 消息，让 LLM 知道工具执行失败了
-                    LLManager.feedToolResult(toolCallId, functionName, errorResult);
+                    // 【核心修改】：异常时同样要压入缓存，告知大模型报错了
+                    LLManager.feedToolResult(currentTaskId, toolCallId, functionName, errorResult);
                 }
             } else {
                 String notFoundResult = "工具 \"" + functionName + "\" 不存在，请检查工具名称是否正确。";
                 toolResults.append("调用了工具 [").append(functionName).append("] , 但是这个工具压根不存在;\n");
-                // 不存在的工具也写入 tool 消息，让 LLM 收到反馈
-                LLManager.feedToolResult(toolCallId, functionName, notFoundResult);
+                // 【核心修改】：工具不存在时压入缓存反馈
+                LLManager.feedToolResult(currentTaskId, toolCallId, functionName, notFoundResult);
             }
 
             if ("finish_task".equals(functionName)) {
@@ -531,12 +557,15 @@ public class LivingLoop implements MosireAPI {
                 lastSolvingTask = null;
 
                 MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+
+                // 【核心修改】：主动销毁该任务完成后的上下文缓存
+                LLManager.clearTaskCache(currentTaskId);
                 return null; // 直接终结任务
             }
 
         }
 
-        // 【修复点 3】：推进轮数，并检查最大循环限制
+        // 推进轮数，并检查最大循环限制
         log.info("[EXEC-Engine] 获取到观察线索，转入下一轮思考...");
         nowTurnAddition.append(toolResults.toString());
 
@@ -551,6 +580,9 @@ public class LivingLoop implements MosireAPI {
             List<String> a = new LinkedList<>();
             a.add(currentMemory.toString());
             MemoryManager.getInstance().inputCurrentMemorys(a);
+
+            // 【核心修改】：死循环被干掉时，清空缓存
+            LLManager.clearTaskCache(currentTaskId);
             return null; // 超出轮数，销毁
         }
         if(!currentMemory.isEmpty()) {

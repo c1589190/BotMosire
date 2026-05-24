@@ -18,9 +18,14 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     // 仅在任务首次创建时计算并缓存的感觉快照，后续轮次复用，避免每轮重新计算破坏缓存前缀
     protected String initialFeelings = null;
 
+    // 任务创建时间戳（毫秒），用于判断挂起过期
+    protected final long createTime;
+
     public AbstractAgentTask() {
         // 实例化时自动分配唯一 UUID
         this.uuid = UUID.randomUUID();
+        // 记录任务创建时间
+        this.createTime = System.currentTimeMillis();
     }
 
     @Override
@@ -71,6 +76,11 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     @Override
     public void setInitialFeelings(String feelings) {
         this.initialFeelings = feelings;
+    }
+
+    @Override
+    public long getCreateTime() {
+        return this.createTime;
     }
 
     // 注意：getTaskText() 保持抽象，强制要求具体的子类去实现它

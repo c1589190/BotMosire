@@ -10,6 +10,7 @@ import com.cna.config.ScenePromptsManager;
 import com.cna.db.MDManager;
 import com.cna.db.FeelingDimensionManager;
 import com.cna.llm.LLMAdapter;
+import com.cna.llm.LLManager;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import lombok.extern.slf4j.Slf4j;
 
