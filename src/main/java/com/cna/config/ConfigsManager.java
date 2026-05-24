@@ -49,6 +49,7 @@ public class ConfigsManager {
     public static final int MAX_COGNITIVE_HEAT;
     public static final int INPUT_BACKLOG_MAX_SIZE;
     public static final int INPUT_REVIEW_BATCH_SIZE;
+    public static final int MAX_CONTEXT_CACHE_ROUNDS;
 
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
@@ -219,6 +220,7 @@ public class ConfigsManager {
         FD_PRESSURE_PENALTY = getDouble("memory.fdPressurePenalty", 0.01);
         FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
         FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
+        MAX_CONTEXT_CACHE_ROUNDS = getInt("memory.maxContextCacheRounds", 128);
 
         MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
         INPUT_BACKLOG_MAX_SIZE = getInt("cognitive.inputBacklogMaxSize", 128);
