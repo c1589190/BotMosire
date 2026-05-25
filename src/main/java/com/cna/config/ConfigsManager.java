@@ -51,6 +51,9 @@ public class ConfigsManager {
     public static final int INPUT_REVIEW_BATCH_SIZE;
     public static final int MAX_CONTEXT_CACHE_ROUNDS;
 
+    public static final String SLEEP_START;
+    public static final String SLEEP_END;
+
     public static final int CURRENT_MEMORIES_MAXSIZE;
     public static final int EMB_MEMORY_SIZE;
     public static final int HISTORY_VIEW_AMOUNT;
@@ -221,6 +224,9 @@ public class ConfigsManager {
         FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
         FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
         MAX_CONTEXT_CACHE_ROUNDS = getInt("memory.maxContextCacheRounds", 128);
+
+        SLEEP_START = getString("agent.sleepStart", "");
+        SLEEP_END   = getString("agent.sleepEnd", "");
 
         MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
         INPUT_BACKLOG_MAX_SIZE = getInt("cognitive.inputBacklogMaxSize", 128);

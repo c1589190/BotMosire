@@ -31,6 +31,10 @@ ${scheduled}
 
 当前时间：${now_time}
 
+<#if pending_tasks_summary?has_content>
+${pending_tasks_summary}
+</#if>
+
 <#if current_memories?? && (current_memories?size > 0)>
 这是你最近与外界的交互记录，你依旧清晰地记得它们：{
 <#list current_memories as mem>

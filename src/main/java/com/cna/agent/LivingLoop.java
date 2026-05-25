@@ -88,6 +88,78 @@ public class LivingLoop implements MosireAPI {
         return count;
     }
 
+    /**
+     * 构建任务队列轻量概况，供 LLManager 注入 Prompt（方案 A）。
+     */
+    public String buildTaskQueueSummary() {
+        int pending = 0;
+        DefaultAgentTaskUnit inProgress = null;
+        for (DefaultAgentTaskUnit t : TaskQueue) {
+            if (t.isInProgress()) {
+                inProgress = t;
+            } else {
+                pending++;
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("【任务队列】");
+        if (inProgress != null) {
+            sb.append(String.format("当前正在执行: %s(第%d轮)", inProgress.getTaskName(), inProgress.getCurrentTurn()));
+        } else {
+            sb.append("当前无执行中任务");
+        }
+        if (pending > 0) {
+            sb.append(String.format(" | 待处理: %d 个 [", pending));
+            boolean first = true;
+            for (DefaultAgentTaskUnit t : TaskQueue) {
+                if (!t.isInProgress()) {
+                    if (!first) sb.append(", ");
+                    long ageSec = (System.currentTimeMillis() - t.getCreateTime()) / 1000;
+                    sb.append(String.format("%s(Pri=%.1f, %ds前)", t.getTaskName(), t.getPriority(), ageSec));
+                    first = false;
+                }
+            }
+            sb.append("]");
+        } else {
+            sb.append(" | 无待处理任务");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 构建任务队列完整详情，供 GetTaskQueueTool 使用（方案 B）。
+     */
+    public String buildTaskQueueDetail() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("===== 任务队列完整详情 =====\n");
+        sb.append(String.format("队列总数: %d\n\n", TaskQueue.size()));
+
+        for (DefaultAgentTaskUnit t : TaskQueue) {
+            long ageSec = (System.currentTimeMillis() - t.getCreateTime()) / 1000;
+            String status = t.isInProgress() ? "执行中" : "待处理";
+            sb.append(String.format("[%s] %s  Pri=%.1f  入队%ds前",
+                    status, t.getTaskName(), t.getPriority(), ageSec));
+            if (t.isInProgress()) {
+                sb.append(String.format("  第%d轮", t.getCurrentTurn()));
+            }
+            sb.append("\n");
+            String text = t.getTaskText();
+            if (text != null && !text.isBlank()) {
+                // 截断过长的文本
+                if (text.length() > 200) {
+                    text = text.substring(0, 200) + "...";
+                }
+                sb.append("  ").append(text.replace("\n", "\\n")).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        if (TaskQueue.isEmpty()) {
+            sb.append("（队列为空）\n");
+        }
+        return sb.toString();
+    }
 
     @Getter
     AtomicInteger cognitiveHeat = new AtomicInteger(0); // 认知热度，模拟大脑疲劳度，数值越高代表越疲劳
@@ -131,6 +203,9 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new ToolUsageReader());
         this.registerTool(new FinishTask());
         this.registerTool(new GetNowTime());
+        this.registerTool(new SetSleepTimeTool());
+        this.registerTool(new GetSleepTimeTool());
+        this.registerTool(new GetTaskQueueTool(this));
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -289,6 +364,12 @@ public class LivingLoop implements MosireAPI {
 
     public void start() {
         this.initLLM();
+
+        // 如果配置了默认休眠时间段，启动时自动应用
+        if (ConfigsManager.SLEEP_START != null && !ConfigsManager.SLEEP_START.isBlank()
+                && ConfigsManager.SLEEP_END != null && !ConfigsManager.SLEEP_END.isBlank()) {
+            SleepManager.getInstance().setSleepWindow(ConfigsManager.SLEEP_START, ConfigsManager.SLEEP_END);
+        }
 
         // ==========================================
         // 线程 1：极速感官折叠与任务生产 (生产者)
@@ -595,6 +676,10 @@ public class LivingLoop implements MosireAPI {
     }
 
     private void handleCognitiveCycle() {
+        if (SleepManager.getInstance().isSleeping()) {
+            return;
+        }
+
         List<DefaultAgentInputUnit> currentBatch = new ArrayList<>();
         Main.AgentInputTasksQueue.drainTo(currentBatch);
 

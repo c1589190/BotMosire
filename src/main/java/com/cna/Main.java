@@ -2,6 +2,7 @@ package com.cna;
 
 import com.cna.agent.AgentInput.DefaultAgentInputUnit;
 import com.cna.agent.LivingLoop;
+import com.cna.llm.LLManager;
 import com.cna.cmd.ConsoleCommandSystem;
 import com.cna.config.ConfigsLoader;
 import com.cna.config.ConfigsManager;
@@ -73,6 +74,7 @@ public class Main {
         }
 
         // 1. 启动核心循环
+        LLManager.init(loop);
         loop.start();
 
         // 2. 启动插件管理器，把 loop (实现了 MosireAPI) 传给它！

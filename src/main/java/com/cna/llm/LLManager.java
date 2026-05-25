@@ -33,7 +33,7 @@ public class LLManager {
 
     /**
      * 全局上下文中 messages 数组的最大长度（元素个数）。
-     * 达到此长度时自动截断：保留 system 消息（第一条）及后 50% 的其他消息。
+     * 达到此长度时自动全部清空。
      */
     public static int MAX_CONTEXT_CACHE_ROUNDS = 1024;
 
@@ -125,6 +125,12 @@ public class LLManager {
 
     // ==================== 全局共享上下文方法 ====================
 
+    private static com.cna.agent.LivingLoop livingLoop;
+
+    public static void init(com.cna.agent.LivingLoop loop) {
+        livingLoop = loop;
+    }
+
     public static CompletableFuture<CallResult> executeSceneAsyncWithCache(
             UUID taskId,
             String userTemplate,
@@ -152,6 +158,7 @@ public class LLManager {
                 dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
                 dataModel.put("now_time", Utils.getNowPrecise());
                 dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
+                dataModel.put("pending_tasks_summary", livingLoop != null ? livingLoop.buildTaskQueueSummary() : "");
 
                 String userPrompt = render(userTemplate, dataModel);
                 log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
@@ -212,27 +219,12 @@ public class LLManager {
         }
     }
 
-    /**
-     * 截断全局缓存：当 messages 长度超过 MAX_CONTEXT_CACHE_ROUNDS 时，
-     * 保留 system 消息（索引 0），删除其余消息的前一半，保留后一半。
-     */
     private static void truncateGlobalCacheIfNeeded() {
         int size = GLOBAL_CACHE.messages.size();
         if (size > MAX_CONTEXT_CACHE_ROUNDS) {
-            int nonSystemCount = size - 1;                 // 除 system 外的消息数量
-            int keepHalf = nonSystemCount / 2;             // 保留后一半的数量（向下取整）
-            int startIndex = 1 + (nonSystemCount - keepHalf); // 后一半的起始索引
-
-            ArrayNode truncated = jsonMapper.createArrayNode();
-            truncated.add(GLOBAL_CACHE.messages.get(0));  // 保留 system
-            for (int i = startIndex; i < size; i++) {
-                truncated.add(GLOBAL_CACHE.messages.get(i));
-            }
-
-            int removed = size - truncated.size();
-            GLOBAL_CACHE.messages = truncated;
-            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，删除前{}条（不含system），保留后{}条",
-                    size, MAX_CONTEXT_CACHE_ROUNDS, removed, keepHalf);
+            GLOBAL_CACHE.messages = jsonMapper.createArrayNode();
+            GLOBAL_CACHE.roundCount.set(0);
+            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已全部清空", size, MAX_CONTEXT_CACHE_ROUNDS);
         }
     }
 

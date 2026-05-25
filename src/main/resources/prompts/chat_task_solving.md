@@ -22,6 +22,10 @@ ${taskText}
 
 当前时间：${now_time}
 
+<#if pending_tasks_summary?has_content>
+${pending_tasks_summary}
+</#if>
+
 <#if current_thoughts?has_content>
 这是之前你自己希望自己记住的东西：{
 
