@@ -31,7 +31,9 @@ public abstract class AbstractInputHandler<T extends DefaultAgentInputUnit> impl
     @SuppressWarnings("unchecked")
     public void handleInputs(List<DefaultAgentInputUnit> inputs) {
 
-        this.engine.getCognitiveHeat().set(Math.max(0, this.engine.getCognitiveHeat().get() + 1));
+        // 累加 heat，但 clamp 到 MAX_COGNITIVE_HEAT 上限，避免短时累计超过认知循环 8 秒 decay 窗口
+        AtomicInteger heat = this.engine.getCognitiveHeat();
+        heat.set(Math.min(ConfigsManager.MAX_COGNITIVE_HEAT, heat.get() + 1));
 
         if (inputs == null || inputs.isEmpty()) return;
 

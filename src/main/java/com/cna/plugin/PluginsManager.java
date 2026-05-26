@@ -14,6 +14,8 @@ public class PluginsManager {
     private final List<BotPlugin> activePlugins = new ArrayList<>();
     private final File pluginFolder = new File("plugins");
     private final MosireAPI api; // 主程序传进来的底层能力实现
+    // 持有 ClassLoader 引用，disableAll 时要 close，否则每次 reload 都会洩漏一個 ClassLoader + 所有插件 class
+    private URLClassLoader pluginClassLoader;
 
     public PluginsManager(MosireAPI api) {
         this.api = api;
@@ -39,8 +41,8 @@ public class PluginsManager {
                 urls[i] = jarFiles[i].toURI().toURL();
             }
 
-            // 2. 创建一个专属的类加载器，让 Java 认识这些外部的 class
-            URLClassLoader pluginClassLoader = new URLClassLoader(urls, this.getClass().getClassLoader());
+            // 2. 创建一个专属的类加载器，让 Java 认识这些外部的 class（改为欄位以便 disableAll 时 close）
+            pluginClassLoader = new URLClassLoader(urls, this.getClass().getClassLoader());
 
             // 3. 核心机制：利用 SPI 自动发现所有实现了 BotPlugin 的类
             ServiceLoader<BotPlugin> loader = ServiceLoader.load(BotPlugin.class, pluginClassLoader);
@@ -71,5 +73,17 @@ public class PluginsManager {
             }
         }
         activePlugins.clear();
+
+        // 释放 ClassLoader，否则会洩漏插件类
+        if (pluginClassLoader != null) {
+            try {
+                pluginClassLoader.close();
+                log.info("[PluginManager] 插件 ClassLoader 已关闭。");
+            } catch (Exception e) {
+                log.error("[PluginManager] 关闭 ClassLoader 时出错", e);
+            } finally {
+                pluginClassLoader = null;
+            }
+        }
     }
 }

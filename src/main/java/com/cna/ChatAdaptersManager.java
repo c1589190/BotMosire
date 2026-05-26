@@ -4,12 +4,30 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static com.cna.Main.GlobalDiscordAdapter;
 import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
 public class ChatAdaptersManager {
+
+    // getHistory TTL cache：避免 Gatekeeper 每次都同步呼叫平台 API
+    private record CachedHistory(String content, long timestamp) {}
+    private static final Map<String, CachedHistory> historyCache = new ConcurrentHashMap<>();
+    private static final long HISTORY_TTL_MS    = 30_000; // 30 秒快取
+    private static final long HISTORY_TIMEOUT_MS = 2_000; // 最多等 2 秒
+    private static final ExecutorService historyFetcher = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "history-fetcher");
+        t.setDaemon(true);
+        return t;
+    });
 
     public static String send(String namespace, String message, long replyToId) {
         try {
@@ -26,9 +44,11 @@ public class ChatAdaptersManager {
                 }
                 return "SUCCESS: 消息已成功发送至群聊 " + namespace;
 
-            }  else if (namespace.startsWith("qq_private:")) {
+            }  else if (namespace.startsWith("qq_private:") || namespace.startsWith("qqid:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动，无法发送私聊消息。";
-                long userId = Long.parseLong(namespace.substring("qq_private:".length()));
+                // 兼容 qqid:senderId 形式（NapcatAdapter 用此当 role）
+                int prefixLen = namespace.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
+                long userId = Long.parseLong(namespace.substring(prefixLen));
                 if (replyToId > 0) {
                     GlobalNapcatAdapter.sendPrivateMsgWithReply(userId, message, replyToId);
                 } else {
@@ -54,8 +74,7 @@ public class ChatAdaptersManager {
 
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
-                // 【修复】：去掉了多余重复的 'qq_private:'
-                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
+                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'qqid:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
         } catch (NumberFormatException e) {
             log.error("[ChatAdaptersManager] ID 解析错误: {}", namespace, e);
@@ -102,6 +121,32 @@ public class ChatAdaptersManager {
     }
 
     public static String getHistory(String namespace, int count) {
+        long now = System.currentTimeMillis();
+        CachedHistory cached = historyCache.get(namespace);
+
+        // 快取未過期，直接返回（避免 Gatekeeper 同步 REST 卡 gatekeeperExecutor）
+        if (cached != null && now - cached.timestamp() < HISTORY_TTL_MS) {
+            return cached.content();
+        }
+
+        // 背景執行真實 API 呼叫，最多等 HISTORY_TIMEOUT_MS
+        Future<String> future = historyFetcher.submit(() -> fetchHistorySync(namespace, count));
+        try {
+            String content = future.get(HISTORY_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            historyCache.put(namespace, new CachedHistory(content, System.currentTimeMillis()));
+            return content;
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            log.warn("[ChatAdaptersManager] getHistory({}) 超時 {}ms，返回{}快取",
+                    namespace, HISTORY_TIMEOUT_MS, cached != null ? "舊" : "空");
+            return cached != null ? cached.content() : "SYSTEM_FEEDBACK: 歷史記錄暫時無法獲取。";
+        } catch (Exception e) {
+            log.error("[ChatAdaptersManager] 获取历史记录异常", e);
+            return cached != null ? cached.content() : "ERROR: 获取历史记录失败：" + e.getMessage();
+        }
+    }
+
+    private static String fetchHistorySync(String namespace, int count) {
         try {
             List<String> historyList;
             String chatTypeDesc;
@@ -113,10 +158,11 @@ public class ChatAdaptersManager {
                 historyList = GlobalNapcatAdapter.getGroupHistorySync(groupId, count);
                 chatTypeDesc = "QQ群聊";
 
-            } else if (namespace.startsWith("qq_private:")) {
+            } else if (namespace.startsWith("qq_private:") || namespace.startsWith("qqid:")) {
                 if (GlobalNapcatAdapter == null) return "ERROR: QQ 适配器未启动。";
-                // 【罪魁祸首在此已被修复】：把 5 改成了 "qq_private:".length()
-                long userId = Long.parseLong(namespace.substring("qq_private:".length()));
+                // 兼容 qqid:senderId 形式
+                int prefixLen = namespace.startsWith("qq_private:") ? "qq_private:".length() : "qqid:".length();
+                long userId = Long.parseLong(namespace.substring(prefixLen));
                 historyList = GlobalNapcatAdapter.getFriendHistorySync(userId, count);
                 chatTypeDesc = "QQ私聊";
 
@@ -138,7 +184,7 @@ public class ChatAdaptersManager {
 
             } else {
                 log.warn("[ChatAdaptersManager] 无法识别的 namespace: {}", namespace);
-                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'discord_dm:'、'discord_guild:' 前缀。";
+                return "ERROR: 无法识别的 namespace 格式。支持 'qq_group:'、'qq_private:'、'qqid:'、'discord_dm:'、'discord_guild:' 前缀。";
             }
 
             if (historyList == null || historyList.isEmpty()) {

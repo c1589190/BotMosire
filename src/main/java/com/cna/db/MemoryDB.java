@@ -21,7 +21,21 @@ public class MemoryDB {
         initTables();
     }
 
-    private synchronized void initDataSource() {
+    /** 关闭 HikariCP 连接池，配合 Main shutdown hook 防止 process exit 时 SQLite WAL 残留。 */
+    public static synchronized void shutdown() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            try {
+                dataSource.close();
+                log.info("[MemoryDB] HikariCP 连接池已优雅关闭。");
+            } catch (Exception e) {
+                log.error("[MemoryDB] 关闭连接池失败", e);
+            } finally {
+                dataSource = null;
+            }
+        }
+    }
+
+    private static synchronized void initDataSource() {
         if (dataSource != null) return;
 
         HikariConfig config = new HikariConfig();

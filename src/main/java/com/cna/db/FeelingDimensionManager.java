@@ -34,7 +34,8 @@ public class FeelingDimensionManager {
     private static final ObjectMapper jsonMapper = new ObjectMapper();
     private static final org.slf4j.Logger feelingLog = org.slf4j.LoggerFactory.getLogger("feeling-log");
 
-    private static final LLMAdapter embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
+    // 改为 instance field + lazy init，避免类加载时 ConfigsManager.EMBEDDING_CONFIG 还是 null
+    private final LLMAdapter embLLM;
 
     private final MemoryDB memoryDB;
     //private static final double SIMILARITY_THRESHOLD = 0.6;
@@ -47,9 +48,11 @@ public class FeelingDimensionManager {
 
     public FeelingDimensionManager(MemoryDB memoryDB) {
         this.memoryDB = memoryDB;
+        this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
+        this.NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
+        this.HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
+        this.ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
     }
-
-    private static final double ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
 
     // ==========================================
     // 显式概念直接处理 (FinishTask 专用，无LLM二次提取)
@@ -87,6 +90,7 @@ public class FeelingDimensionManager {
 
                     double[] conceptVector = getEmbeddingMock(concept);
 
+                    // 整个"读 → 匹配 → 写"链条原子化，防止 Lost Update
                     synchronized (dimensionLock) {
                         List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
                         FeelingDimension bestMatch = null;

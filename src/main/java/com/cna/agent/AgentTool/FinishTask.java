@@ -91,13 +91,22 @@ public class FinishTask implements DefaultAgentToolUnit {
             }
 
             // 直接从 LLM 的输出构建概念列表，不再转成文本再让 LLM 提取
+            // 严格要求 is_positive 必须明确传 boolean，缺失或类型错误就拒收该 concept，避免默认 true 导致 feeling 系统长期偏正向
             List<FeelingDimensionManager.ConceptInput> conceptInputs = new ArrayList<>();
+            int rejectedCount = 0;
             for (JsonNode item : conceptsNode) {
                 String name = item.path("name").asText().trim();
-                boolean isPositive = item.path("is_positive").asBoolean(true);
-                if (!name.isEmpty()) {
-                    conceptInputs.add(new FeelingDimensionManager.ConceptInput(name, isPositive));
+                JsonNode posNode = item.path("is_positive");
+                if (name.isEmpty()) continue;
+                if (posNode.isMissingNode() || posNode.isNull() || !posNode.isBoolean()) {
+                    log.warn("[FinishTask] 概念 [{}] 缺少有效的 is_positive boolean，已拒收（避免错误偏正向）", name);
+                    rejectedCount++;
+                    continue;
                 }
+                conceptInputs.add(new FeelingDimensionManager.ConceptInput(name, posNode.asBoolean()));
+            }
+            if (rejectedCount > 0) {
+                log.info("[FinishTask] 本次拒收 {} 个 is_positive 不合格的概念。", rejectedCount);
             }
 
             if (!conceptInputs.isEmpty()) {

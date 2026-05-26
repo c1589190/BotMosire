@@ -25,6 +25,10 @@ public class LLMAdapter {
 
     public LLMAdapter(LLMConfig config) {
         this.config = config;
+        // 从 config 读 per-model timeout，避免 Gatekeeper 慢响应卡住整个线程池
+        int connectSec = config != null ? config.getConnectTimeoutSec() : 30;
+        int readSec    = config != null ? config.getReadTimeoutSec()    : 300;
+        int writeSec   = config != null ? config.getWriteTimeoutSec()   : 30;
         this.client = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.MINUTES)
@@ -32,7 +36,38 @@ public class LLMAdapter {
                 .callTimeout(10, TimeUnit.MINUTES)
                 .connectionPool(new ConnectionPool(5, 10, TimeUnit.SECONDS))
                 .retryOnConnectionFailure(true)
+                .connectTimeout(connectSec, TimeUnit.SECONDS)
+                .readTimeout(readSec,       TimeUnit.SECONDS)
+                .writeTimeout(writeSec,     TimeUnit.SECONDS)
                 .build();
+    }
+
+    /**
+     * 带 429 exponential backoff 的 HTTP 调用。最多重试 maxRetries 次（总共 maxRetries+1 次尝试）。
+     * 注意：caller 应该用 try-with-resources 包裹返回的 Response。
+     * 429 触顶（仍然 429）后会回传最后一个 Response，由 caller 处理。
+     */
+    private Response executeWithRetry(Request request, int maxRetries) throws IOException {
+        long backoff = 1000;
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            Response response = client.newCall(request).execute();
+            if (response.code() != 429 || attempt == maxRetries) {
+                return response;
+            }
+            // 429 且还有重试次数 → 关闭当前 response 再 sleep
+            response.close();
+            log.warn("[LLMAdapter] HTTP 429 rate limit, attempt {}/{}, backoff {}ms",
+                    attempt + 1, maxRetries + 1, backoff);
+            try {
+                Thread.sleep(backoff);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("429 retry interrupted", e);
+            }
+            backoff *= 2;
+        }
+        // 理论上不会到这里
+        return client.newCall(request).execute();
     }
 
     /**
@@ -54,14 +89,14 @@ public class LLMAdapter {
                 .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = executeWithRetry(request, 2)) {
             if (!response.isSuccessful() || response.body() == null) {
                 log.error("Embedding 网络阻断，状态码: {}", response.code());
                 return new double[0];
             }
 
             String responseBody = response.body().string();           // 只调一次
-            //log.debug("emb模型响应: " + responseBody);
+            log.debug("emb模型响应: " + responseBody);
 
             JsonNode rootNode = jsonMapper.readTree(responseBody);    // 复用变量
 
@@ -140,6 +175,11 @@ public class LLMAdapter {
                 if (!response.isSuccessful() || response.body() == null) {
                     return "计算资源请求失败: " + response.code();
                 }
+        log.info("引擎点火，通过 OkHttp 建立 TCP 长连接...");
+        try (Response response = executeWithRetry(request, 2)) {
+            if (!response.isSuccessful() || response.body() == null) {
+                return "计算资源请求失败: " + response.code();
+            }
 
                 // 3. 物理剥离 SSE 协议的数据流
                 InputStream inputStream = response.body().byteStream();
@@ -289,6 +329,8 @@ public class LLMAdapter {
                 .build();
 
         CallResult result = new CallResult();
+
+        // 直接用 base client，timeout 由 LLMConfig.readTimeoutSec 统一控制（避免 callTimeout 90s 覆盖 brain 的 180s readTimeout）
         long startTime = System.currentTimeMillis();
         int maxRetries = 2;
         boolean success = false;
@@ -306,6 +348,9 @@ public class LLMAdapter {
             try (Response response = client.newCall(request).execute()) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
+        try (Response response = executeWithRetry(request, 2)) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
 
                 if (!response.isSuccessful() || response.body() == null) {
                     log.error("计算资源请求失败，状态码: {}", response.code());
@@ -646,7 +691,7 @@ public class LLMAdapter {
                 .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = executeWithRetry(request, 2)) {
             if (!response.isSuccessful() || response.body() == null) {
                 log.error("视觉计算资源请求失败，状态码: {}", response.code());
                 return "[图片解析失败: 服务端无响应]";

@@ -24,4 +24,9 @@ public class LLMConfig {
 
     // 思维链推理力度 (deepseek: "high" / "medium" / "low")
     @Builder.Default private String reasoningEffort = "high";
+
+    // HTTP 超時設定（秒）：不同模型需要不同的 timeout，避免一个慢模型卡死整个线程池
+    @Builder.Default private int connectTimeoutSec = 30;
+    @Builder.Default private int readTimeoutSec    = 300;
+    @Builder.Default private int writeTimeoutSec   = 30;
 }

@@ -255,7 +255,7 @@ public class NapcatAdapter extends WebSocketClient {
                     content,
                     replyToMessageId
             );
-            Main.AgentInputTasksQueue.offer(input);
+            Main.offerInput(input, "QQ群:" + groupId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 群消息推入主线队列失败", t);
         }
@@ -276,7 +276,7 @@ public class NapcatAdapter extends WebSocketClient {
                     content,
                     replyToMessageId
             );
-            Main.AgentInputTasksQueue.offer(input);
+            Main.offerInput(input, "QQ私聊:" + senderId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 私聊消息推入主线队列失败", t);
         }
