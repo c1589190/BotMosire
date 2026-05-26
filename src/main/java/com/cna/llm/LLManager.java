@@ -35,7 +35,7 @@ public class LLManager {
      * 全局上下文中 messages 数组的最大长度（元素个数）。
      * 达到此长度时自动全部清空。
      */
-    public static int MAX_CONTEXT_CACHE_ROUNDS = 1024;
+    public static int MAX_CONTEXT_CACHE_ROUNDS = ConfigsManager.MAX_CONTEXT_CACHE_ROUNDS;
 
     private static class ContextCacheEntry {
         ArrayNode messages;
