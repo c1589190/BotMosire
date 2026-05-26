@@ -457,7 +457,7 @@ public class LivingLoop implements MosireAPI {
             }
             if (expiredVictim != null) {
                 pendingQueue.remove(expiredVictim);
-                LLManager.clearTaskCache(expiredVictim.getUUID());
+                //LLManager.clearTaskCache(expiredVictim.getUUID());
                 int cognitiveAge = this.consumerLoopCount - expiredVictim.getBornAtLoop();
                 log.info("[TaskQueue] 过期任务已删除及其缓存已释放: {} (认知年龄: {}轮, 阈值: {}轮)",
                         expiredVictim.getClass().getSimpleName(), cognitiveAge, maxCognitiveAge);
@@ -481,7 +481,7 @@ public class LivingLoop implements MosireAPI {
 
             if (victim != null) {
                 pendingQueue.remove(victim);
-                LLManager.clearTaskCache(victim.getUUID());
+                //LLManager.clearTaskCache(victim.getUUID());
                 log.info("[TaskQueue] 队列积压，已抛弃最低优先级的等待任务及释放缓存: {} (Priority: {})",
                         victim.getClass().getSimpleName(),
                         victim.getPriority());
@@ -701,7 +701,7 @@ public class LivingLoop implements MosireAPI {
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
 
             // 主动销毁该任务由于网络异常半途而废的污染缓存
-            LLManager.clearTaskCache(currentTaskId);
+            //LLManager.clearTaskCache(currentTaskId);
             return null;
         }
 
@@ -714,7 +714,7 @@ public class LivingLoop implements MosireAPI {
             lastSolvingTask = null;
 
             // 【核心修改】：任务自然结束，清空该任务的专属上下文缓存
-            LLManager.clearTaskCache(currentTaskId);
+            //LLManager.clearTaskCache(currentTaskId);
             return null;
         }
 
@@ -762,7 +762,7 @@ public class LivingLoop implements MosireAPI {
                     log.error("[EXEC-Engine] 工具解析或执行异常", e);
                     toolResults.append("调用了工具 [").append(functionName).append("] , 却发生了发生程序错误:[\n" + e.toString() + "\n];\n");
                     // 【核心修改】：异常时同样要压入缓存，告知大模型报错了
-                    LLManager.feedToolResult(currentTaskId, toolCallId, functionName, errorResult);
+                    LLManager.feedToolResult(currentTaskId, toolCallId, functionName, toolResults.toString());
                 }
             } else {
                 String notFoundResult = "工具 \"" + functionName + "\" 不存在，请检查工具名称是否正确。";
@@ -778,7 +778,7 @@ public class LivingLoop implements MosireAPI {
                 MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
 
                 // 【核心修改】：主动销毁该任务完成后的上下文缓存
-                LLManager.clearTaskCache(currentTaskId);
+                //LLManager.clearTaskCache(currentTaskId);
                 return null; // 直接终结任务
             }
 
@@ -796,17 +796,15 @@ public class LivingLoop implements MosireAPI {
             currentMemory.append("……由于任务处理循环到上限了，这个任务被强制结束了……");
             lastSolvingTask = null;
 
-            List<String> a = new LinkedList<>();
-            a.add(currentMemory.toString());
+            List<String> a = Collections.singletonList(currentMemory.toString());
             MemoryManager.getInstance().inputCurrentMemorys(a);
 
             // 【核心修改】：死循环被干掉时，清空缓存
-            LLManager.clearTaskCache(currentTaskId);
+            //LLManager.clearTaskCache(currentTaskId);
             return null; // 超出轮数，销毁
         }
         if(!currentMemory.isEmpty()) {
-            List<String> a = new LinkedList<>();
-            a.add(currentMemory.toString());
+            List<String> a = Collections.singletonList(currentMemory.toString());
             MemoryManager.getInstance().inputCurrentMemorys(a);
         }
 

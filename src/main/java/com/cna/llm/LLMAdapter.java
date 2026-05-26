@@ -30,9 +30,6 @@ public class LLMAdapter {
         int readSec    = config != null ? config.getReadTimeoutSec()    : 300;
         int writeSec   = config != null ? config.getWriteTimeoutSec()   : 30;
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(20, TimeUnit.MINUTES)
-                .writeTimeout(60, TimeUnit.SECONDS)
                 .callTimeout(10, TimeUnit.MINUTES)
                 .connectionPool(new ConnectionPool(5, 10, TimeUnit.SECONDS))
                 .retryOnConnectionFailure(true)
@@ -171,15 +168,10 @@ public class LLMAdapter {
             }
 
             log.info("引擎点火，通过 OkHttp 建立 TCP 长连接... (attempt={})", attempt + 1);
-            try (Response response = client.newCall(request).execute()) {
+            try (Response response = executeWithRetry(request, 2)) {
                 if (!response.isSuccessful() || response.body() == null) {
                     return "计算资源请求失败: " + response.code();
                 }
-        log.info("引擎点火，通过 OkHttp 建立 TCP 长连接...");
-        try (Response response = executeWithRetry(request, 2)) {
-            if (!response.isSuccessful() || response.body() == null) {
-                return "计算资源请求失败: " + response.code();
-            }
 
                 // 3. 物理剥离 SSE 协议的数据流
                 InputStream inputStream = response.body().byteStream();
@@ -345,12 +337,9 @@ public class LLMAdapter {
             }
 
             startTime = System.currentTimeMillis();
-            try (Response response = client.newCall(request).execute()) {
+            try (Response response = executeWithRetry(request, 2)) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
-        try (Response response = executeWithRetry(request, 2)) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
 
                 if (!response.isSuccessful() || response.body() == null) {
                     log.error("计算资源请求失败，状态码: {}", response.code());
