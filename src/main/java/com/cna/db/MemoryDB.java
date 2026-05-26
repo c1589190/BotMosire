@@ -243,6 +243,24 @@ public class MemoryDB {
     }
 
     /**
+     * 高相似度替换：用新概念名和新向量完全覆写旧记录，同时重置 trigger_count 为 1。
+     * 适用于新概念与旧概念语义足够接近、可直接视为同一概念进化的情况。
+     */
+    public void replaceFeelingDimension(int id, String newConcept, double[] newVector, double newHitWeight) {
+        String sql = "UPDATE Feeling_Dimensions SET concept = ?, vector_json = ?, hit_weight = ?, trigger_count = 1 WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, newConcept);
+            pstmt.setString(2, mapper.writeValueAsString(newVector));
+            pstmt.setDouble(3, newHitWeight);
+            pstmt.setInt(4, id);
+            pstmt.executeUpdate();
+        } catch (SQLException | JsonProcessingException e) {
+            log.error("替换感觉维度失败 ID: " + id, e);
+        }
+    }
+
+    /**
      * 【保险修复版】获取全量感觉维度。
      * 遍历每条记录时，实时检测 vector_json 的合法性，
      * 若出现 null、空串、解析失败或维度长度与有效记录不一致，

@@ -18,13 +18,20 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     // 仅在任务首次创建时计算并缓存的感觉快照，后续轮次复用，避免每轮重新计算破坏缓存前缀
     protected String initialFeelings = null;
 
-    // 任务创建时间戳（毫秒），用于判断挂起过期
+    // 任务专属感觉维度，在 pushTask 时计算，随任务队列展示
+    protected String taskFeelings = null;
+
+    // 任务创建时间戳（毫秒），保留兼容
     protected final long createTime;
 
+    // 任务被推入队列时的认知循环轮次
+    protected int bornAtLoop = 0;
+
+    // 展示用编号，LLM 可据此引用特定任务，-1 表示未分配
+    protected int displayId = -1;
+
     public AbstractAgentTask() {
-        // 实例化时自动分配唯一 UUID
         this.uuid = UUID.randomUUID();
-        // 记录任务创建时间
         this.createTime = System.currentTimeMillis();
     }
 
@@ -59,6 +66,11 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     }
 
     @Override
+    public void setPriority(double priority) {
+        this.priority = priority;
+    }
+
+    @Override
     public boolean isInProgress() {
         return this.inProgress;
     }
@@ -79,8 +91,38 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     }
 
     @Override
+    public String getTaskFeelings() {
+        return this.taskFeelings;
+    }
+
+    @Override
+    public void setTaskFeelings(String feelings) {
+        this.taskFeelings = feelings;
+    }
+
+    @Override
     public long getCreateTime() {
         return this.createTime;
+    }
+
+    @Override
+    public int getBornAtLoop() {
+        return this.bornAtLoop;
+    }
+
+    @Override
+    public void setBornAtLoop(int loop) {
+        this.bornAtLoop = loop;
+    }
+
+    @Override
+    public int getDisplayId() {
+        return this.displayId;
+    }
+
+    @Override
+    public void setDisplayId(int id) {
+        this.displayId = id;
     }
 
     // 注意：getTaskText() 保持抽象，强制要求具体的子类去实现它

@@ -39,6 +39,7 @@ public class FeelingDimensionManager {
     private final MemoryDB memoryDB;
     //private static final double SIMILARITY_THRESHOLD = 0.6;
     private static final double NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
+    private static final double REPLACE_THRESHOLD = ConfigsManager.FD_REPLACE_THRESHOLD;
     private static final int HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
 
     // 仅依赖该阈值计算基础感觉权重
@@ -77,6 +78,7 @@ public class FeelingDimensionManager {
             try {
                 int addedCount = 0;
                 int updatedCount = 0;
+                int replacedCount = 0;
 
                 for (ConceptInput ci : concepts) {
                     String concept = ci.name.trim();
@@ -85,7 +87,6 @@ public class FeelingDimensionManager {
 
                     double[] conceptVector = getEmbeddingMock(concept);
 
-                    // 整个"读 → 匹配 → 写"链条原子化，防止 Lost Update
                     synchronized (dimensionLock) {
                         List<FeelingDimension> currentDimensions = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
                         FeelingDimension bestMatch = null;
@@ -99,7 +100,17 @@ public class FeelingDimensionManager {
                             }
                         }
 
-                        if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
+                        if (bestMatch != null && highestSim >= REPLACE_THRESHOLD) {
+                            // 相似度极高：新词直接替代旧词，向量和概念名全部覆写
+                            replacedCount++;
+                            double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
+                            memoryDB.replaceFeelingDimension(bestMatch.id, concept, conceptVector, newHitWeight);
+
+                            log.info("[Feeling-Replace] 概念 [{}] 与 [{}] 相似度 {:.3f} >= 替换阈值 {:.3f}，已覆盖旧词。Weight: {:.3f}->{:.3f}",
+                                    concept, bestMatch.concept, highestSim, REPLACE_THRESHOLD,
+                                    bestMatch.hitWeight, newHitWeight);
+                        } else if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
+                            // 中等相似度：保留旧概念，仅更新权重和触发计数
                             updatedCount++;
                             int newTriggerCount = memoryDB.hitDimension(bestMatch.id);
                             double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
@@ -116,7 +127,7 @@ public class FeelingDimensionManager {
                     }
                 }
 
-                log.info("[Feeling] 显式概念处理完毕：新节点 {} 个，重塑旧节点 {} 个。", addedCount, updatedCount);
+                log.info("[Feeling] 显式概念处理完毕：新节点 {} 个，重塑旧节点 {} 个，覆盖替换 {} 个。", addedCount, updatedCount, replacedCount);
                 this.tick();  // 成功处理后触发全局衰减
 
             } catch (Exception e) {

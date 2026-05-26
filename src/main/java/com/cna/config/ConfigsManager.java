@@ -38,6 +38,7 @@ public class ConfigsManager {
     public static final int PENDING_CHAT_WAITING_TIME;
 
     public static final double NOVELTY_THRESHOLD;
+    public static final double FD_REPLACE_THRESHOLD;
     //public static final double DECAY_CONSTANT;
     public static final double SPINAL_REFLEX_THRESHOLD;
     public static final int FD_HABITUATION_LIMIT;
@@ -71,6 +72,8 @@ public class ConfigsManager {
 
     public static final int MAX_TASK_AMOUNT;
     public static final long TASK_EXPIRATION_TIME_MS;
+    public static final int MAX_TASK_COGNITIVE_AGE;
+    public static final double TASK_PRIORITY_ADJUSTMENT_RANGE;
     public static final long RATE_LIMIT_MS;
     public static final String DEPLOYER_ROLE;
     public static final String SEARCH_API_KEY;
@@ -196,6 +199,8 @@ public class ConfigsManager {
         SCHEDULE_CYCLING_TIME = getInt("cognitive.scheduleCyclingTime", 300000);
         MAX_TASK_AMOUNT = getInt("cognitive.maxTaskAmount", 3);
         TASK_EXPIRATION_TIME_MS = getLong("cognitive.taskExpirationTimeMs", 600_000L);
+        MAX_TASK_COGNITIVE_AGE = getInt("cognitive.maxTaskCognitiveAge", 12);
+        TASK_PRIORITY_ADJUSTMENT_RANGE = getDouble("cognitive.taskPriorityAdjustmentRange", 0.4);
         RANDOM_CHAT_CHANCE = getDouble("cognitive.randomChatChance", 0.05);
         RATE_LIMIT_MS = getInt("cognitive.rateLimitMs", 5000);
         DEPLOYER_ROLE = getString("bot.deployerRole", "");
@@ -215,6 +220,7 @@ public class ConfigsManager {
         DB_URL = getString("memory.dbUrl", "jdbc:sqlite:agent_memory.db");
 
         NOVELTY_THRESHOLD = getDouble("memory.noveltyThreshold", 0.6);
+        FD_REPLACE_THRESHOLD = getDouble("memory.fdReplaceThreshold", 0.85);
         //DECAY_CONSTANT = getDouble("memory.decayConstant", 0.01);
         SPINAL_REFLEX_THRESHOLD = getDouble("memory.spinalReflexThreshold", 0.4);
         //FD_BLUNT_WEIGHT=getDouble("memory.fdBluntWeight", 0.25);

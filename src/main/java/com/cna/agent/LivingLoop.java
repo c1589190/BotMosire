@@ -15,6 +15,7 @@ import com.cna.agent.AgentTool.*;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.db.FeelingDimensionManager;
+import com.cna.db.FeelingDimensionManager.DimensionScore;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -56,12 +57,23 @@ public class LivingLoop implements MosireAPI {
     // 累加器：跨线程安全的任务处理计数器，用于触发定期反思
     private final AtomicInteger processedTaskCount = new AtomicInteger(0);
 
-    // 将双端队列替换为优先级阻塞队列，根据 priority 升序排列（数值越小，越先出队）
-    // 同优先级时，正在执行中（inProgress）的任务优先，防止不断被同权重新任务抢占导致饥饿
-    private PriorityBlockingQueue<DefaultAgentTaskUnit> TaskQueue = new PriorityBlockingQueue<>(
+    // 即将执行的任务队列，按 priority 升序排列（数值越小越先出队）
+    // 同优先级时 inProgress 任务优先，确保被抢占的任务优先恢复
+    private final PriorityBlockingQueue<DefaultAgentTaskUnit> pendingQueue = new PriorityBlockingQueue<>(
             1145, Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
             .thenComparing(t -> t.isInProgress() ? 0 : 1)
     );
+
+    // 当前正在执行的任务（消费者线程独占，至多一个）
+    private DefaultAgentTaskUnit executingTask = null;
+
+    /**
+     * 任务队列快照，将执行中与待处理分离，供 LLM 感知。
+     */
+    public record TaskQueueSnapshot(
+            DefaultAgentTaskUnit executingTask,
+            List<DefaultAgentTaskUnit> pendingTasks
+    ) {}
 
     //Input队列
     private final ConcurrentLinkedQueue<DefaultAgentTaskUnit> globalPendingRequests = new ConcurrentLinkedQueue<>();
@@ -80,7 +92,7 @@ public class LivingLoop implements MosireAPI {
      */
     public int getPendingTaskCount() {
         int count = 0;
-        for (DefaultAgentTaskUnit t : TaskQueue) {
+        for (DefaultAgentTaskUnit t : pendingQueue) {
             if (!t.isInProgress()) {
                 count++;
             }
@@ -89,40 +101,123 @@ public class LivingLoop implements MosireAPI {
     }
 
     /**
-     * 构建任务队列轻量概况，供 LLManager 注入 Prompt（方案 A）。
+     * 获取任务队列快照，将执行中与待处理分离为两个列表。
      */
-    public String buildTaskQueueSummary() {
-        int pending = 0;
-        DefaultAgentTaskUnit inProgress = null;
-        for (DefaultAgentTaskUnit t : TaskQueue) {
-            if (t.isInProgress()) {
-                inProgress = t;
-            } else {
-                pending++;
+    public TaskQueueSnapshot getTaskQueueSnapshot() {
+        List<DefaultAgentTaskUnit> pending = new ArrayList<>();
+        for (DefaultAgentTaskUnit t : pendingQueue) {
+            pending.add(t);
+        }
+        pending.sort(Comparator.comparingDouble(DefaultAgentTaskUnit::getPriority)
+                .thenComparing(t -> t.isInProgress() ? 0 : 1));
+        return new TaskQueueSnapshot(executingTask, pending);
+    }
+
+    /**
+     * 根据展示编号查找任务并调整其优先级。
+     * @param displayId LLM 可见的任务编号 [#N]
+     * @param delta 调整量，自动钳位到 ±TASK_PRIORITY_ADJUSTMENT_RANGE
+     * @return 操作结果描述，失败时返回 null
+     */
+    public String adjustTaskPriority(int displayId, double delta) {
+        double range = ConfigsManager.TASK_PRIORITY_ADJUSTMENT_RANGE;
+        double clampedDelta = Math.max(-range, Math.min(range, delta));
+
+        // 先刷新快照以获取最新的 displayId 映射
+        TaskQueueSnapshot snapshot = getTaskQueueSnapshot();
+
+        DefaultAgentTaskUnit target = null;
+        int idCounter = 0;
+
+        if (snapshot.executingTask != null) {
+            snapshot.executingTask.setDisplayId(++idCounter);
+            if (snapshot.executingTask.getDisplayId() == displayId) {
+                target = snapshot.executingTask;
+            }
+        }
+        if (target == null) {
+            for (DefaultAgentTaskUnit t : snapshot.pendingTasks) {
+                t.setDisplayId(++idCounter);
+                if (t.getDisplayId() == displayId) {
+                    target = t;
+                    break;
+                }
             }
         }
 
+        if (target == null) {
+            return "未找到编号为 [#" + displayId + "] 的任务，请先调用 get_task_queue 确认当前队列状态。";
+        }
+
+        double oldPriority = target.getPriority();
+        double newPriority = Math.max(0.1, oldPriority + clampedDelta);
+        target.setPriority(newPriority);
+
+        // 在目标任务的 turnsAddition 中留下调权记录
+        String record = String.format(
+                "\n[系统记录] 任务 %s 的优先级被手动调整，从 %.2f 变为 %.2f（%s了 %.2f），当前为第 %d 轮认知循环。\n",
+                target.getTaskName(), oldPriority, newPriority,
+                clampedDelta >= 0 ? "降低" : "提高", Math.abs(clampedDelta),
+                this.consumerLoopCount);
+        target.setTurnsAddition(target.getTurnsAddition() + record);
+
+        // 如果目标在 pendingQueue 中，需要触发重新排序
+        if (target != executingTask && pendingQueue.remove(target)) {
+            pendingQueue.offer(target);
+        }
+
+        String dir = clampedDelta >= 0 ? "降低" : "提高";
+        return String.format("已将任务 [#%d] %s 的优先级从 %.2f %s为 %.2f（%s了 %.2f）。",
+                displayId, target.getTaskName(),
+                oldPriority, clampedDelta >= 0 ? "降低" : "提高", newPriority,
+                clampedDelta >= 0 ? "降低" : "提高", Math.abs(clampedDelta));
+    }
+
+    /**
+     * 构建任务队列轻量概况，供 LLManager 注入 Prompt（方案 A）。
+     */
+    public String buildTaskQueueSummary() {
+        TaskQueueSnapshot snapshot = getTaskQueueSnapshot();
+
+        int maxCognitiveAge = ConfigsManager.MAX_TASK_COGNITIVE_AGE;
+        int displayIdCounter = 0;
+
         StringBuilder sb = new StringBuilder();
         sb.append("【任务队列】");
-        if (inProgress != null) {
-            sb.append(String.format("当前正在执行: %s(第%d轮)", inProgress.getTaskName(), inProgress.getCurrentTurn()));
+
+        // 正在执行
+        if (snapshot.executingTask != null) {
+            snapshot.executingTask.setDisplayId(++displayIdCounter);
+            sb.append(String.format("正在执行: [#%d]%s(第%d轮)",
+                    snapshot.executingTask.getDisplayId(),
+                    snapshot.executingTask.getTaskName(),
+                    snapshot.executingTask.getCurrentTurn()));
         } else {
-            sb.append("当前无执行中任务");
+            sb.append("正在执行: 无");
         }
-        if (pending > 0) {
-            sb.append(String.format(" | 待处理: %d 个 [", pending));
+
+        // 待处理
+        sb.append(" | 待处理: ");
+        if (snapshot.pendingTasks.isEmpty()) {
+            sb.append("无");
+        } else {
+            sb.append(String.format("%d 个 [", snapshot.pendingTasks.size()));
             boolean first = true;
-            for (DefaultAgentTaskUnit t : TaskQueue) {
-                if (!t.isInProgress()) {
-                    if (!first) sb.append(", ");
-                    long ageSec = (System.currentTimeMillis() - t.getCreateTime()) / 1000;
-                    sb.append(String.format("%s(Pri=%.1f, %ds前)", t.getTaskName(), t.getPriority(), ageSec));
-                    first = false;
+            for (DefaultAgentTaskUnit t : snapshot.pendingTasks) {
+                if (!first) sb.append(", ");
+                t.setDisplayId(++displayIdCounter);
+                int cognitiveAge = this.consumerLoopCount - t.getBornAtLoop();
+                int remaining = Math.max(0, maxCognitiveAge - cognitiveAge);
+                String marker = t.isInProgress() ? "(挂起)" : "";
+                sb.append(String.format("[#%d]%s%s(Pri=%.1f, 剩余%d轮)",
+                        t.getDisplayId(), t.getTaskName(), marker, t.getPriority(), remaining));
+                String feel = t.getTaskFeelings();
+                if (feel != null && !feel.isBlank()) {
+                    sb.append(String.format(" 感觉:%s", feel));
                 }
+                first = false;
             }
             sb.append("]");
-        } else {
-            sb.append(" | 无待处理任务");
         }
         return sb.toString();
     }
@@ -131,38 +226,69 @@ public class LivingLoop implements MosireAPI {
      * 构建任务队列完整详情，供 GetTaskQueueTool 使用（方案 B）。
      */
     public String buildTaskQueueDetail() {
+        TaskQueueSnapshot snapshot = getTaskQueueSnapshot();
+        int maxCognitiveAge = ConfigsManager.MAX_TASK_COGNITIVE_AGE;
+        int displayIdCounter = 0;
+
+        int total = (snapshot.executingTask != null ? 1 : 0) + snapshot.pendingTasks.size();
+
         StringBuilder sb = new StringBuilder();
         sb.append("===== 任务队列完整详情 =====\n");
-        sb.append(String.format("队列总数: %d\n\n", TaskQueue.size()));
+        sb.append(String.format("队列总数: %d\n", total));
 
-        for (DefaultAgentTaskUnit t : TaskQueue) {
-            long ageSec = (System.currentTimeMillis() - t.getCreateTime()) / 1000;
-            String status = t.isInProgress() ? "执行中" : "待处理";
-            sb.append(String.format("[%s] %s  Pri=%.1f  入队%ds前",
-                    status, t.getTaskName(), t.getPriority(), ageSec));
-            if (t.isInProgress()) {
-                sb.append(String.format("  第%d轮", t.getCurrentTurn()));
+        // 正在执行
+        sb.append("\n【正在执行】\n");
+        if (snapshot.executingTask != null) {
+            DefaultAgentTaskUnit t = snapshot.executingTask;
+            t.setDisplayId(++displayIdCounter);
+            sb.append(String.format("[#%d] %s  Pri=%.1f  第%d轮\n",
+                    t.getDisplayId(), t.getTaskName(), t.getPriority(), t.getCurrentTurn()));
+            String feel = t.getTaskFeelings();
+            if (feel != null && !feel.isBlank()) {
+                sb.append("  感觉: ").append(feel).append("\n");
             }
-            sb.append("\n");
             String text = t.getTaskText();
             if (text != null && !text.isBlank()) {
-                // 截断过长的文本
-                if (text.length() > 200) {
-                    text = text.substring(0, 200) + "...";
-                }
+                if (text.length() > 200) text = text.substring(0, 200) + "...";
                 sb.append("  ").append(text.replace("\n", "\\n")).append("\n");
             }
-            sb.append("\n");
+        } else {
+            sb.append("（无）\n");
         }
 
-        if (TaskQueue.isEmpty()) {
-            sb.append("（队列为空）\n");
+        // 待处理
+        sb.append("\n【待处理】\n");
+        if (snapshot.pendingTasks.isEmpty()) {
+            sb.append("（无）\n");
+        } else {
+            for (DefaultAgentTaskUnit t : snapshot.pendingTasks) {
+                t.setDisplayId(++displayIdCounter);
+                int cognitiveAge = this.consumerLoopCount - t.getBornAtLoop();
+                int remaining = Math.max(0, maxCognitiveAge - cognitiveAge);
+                String marker = t.isInProgress() ? " [挂起]" : "";
+                sb.append(String.format("[#%d]%s %s  Pri=%.1f  认知年龄=%d轮(剩余%d轮)\n",
+                        t.getDisplayId(), marker, t.getTaskName(), t.getPriority(),
+                        cognitiveAge, remaining));
+                String feel = t.getTaskFeelings();
+                if (feel != null && !feel.isBlank()) {
+                    sb.append("  感觉: ").append(feel).append("\n");
+                }
+                String text = t.getTaskText();
+                if (text != null && !text.isBlank()) {
+                    if (text.length() > 200) text = text.substring(0, 200) + "...";
+                    sb.append("  ").append(text.replace("\n", "\\n")).append("\n");
+                }
+                sb.append("\n");
+            }
         }
         return sb.toString();
     }
 
     @Getter
     AtomicInteger cognitiveHeat = new AtomicInteger(0); // 认知热度，模拟大脑疲劳度，数值越高代表越疲劳
+
+    // 认知消费者循环的全局轮次计数，用于基于认知周期的任务过期判断
+    private int consumerLoopCount = 0;
 
     private LLMAdapter littleLLM;
     private LLMAdapter largeLLM;
@@ -206,6 +332,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new SetSleepTimeTool());
         this.registerTool(new GetSleepTimeTool());
         this.registerTool(new GetTaskQueueTool(this));
+        this.registerTool(new AdjustTaskPriorityTool(this));
 
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -279,8 +406,30 @@ public class LivingLoop implements MosireAPI {
 
     @Override
     public void pushTask(DefaultAgentTaskUnit task) {
-        // PBQ 使用 offer 直接入队，自动触发排序
-        this.TaskQueue.offer(task);
+        task.setBornAtLoop(this.consumerLoopCount);
+
+        // 计算任务专属感觉维度快照，随任务队列展示给 LLM
+        FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
+        if (fdm != null) {
+            String taskText = task.getTaskText();
+            if (taskText != null && !taskText.isBlank()) {
+                List<DimensionScore> topFeelings = fdm.getTargetDimensions(taskText, true, ConfigsManager.FEELING_DIMENSION_COUNT);
+                if (topFeelings.isEmpty()) {
+                    task.setTaskFeelings("无共鸣");
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < topFeelings.size(); i++) {
+                        DimensionScore s = topFeelings.get(i);
+                        if (i > 0) sb.append(" ");
+                        String polarity = s.hitWeight >= 0 ? "+" : "-";
+                        sb.append(String.format("\"%s\"(%s,%.2f)", s.concept, polarity, s.InterestScore));
+                    }
+                    task.setTaskFeelings(sb.toString());
+                }
+            }
+        }
+
+        this.pendingQueue.offer(task);
         this.trimTaskQueue();
     }
 
@@ -298,51 +447,47 @@ public class LivingLoop implements MosireAPI {
     }
 
     private synchronized void trimTaskQueue() {
-        long now = System.currentTimeMillis();
-        long expirationMs = ConfigsManager.TASK_EXPIRATION_TIME_MS;
         int maxAmount = ConfigsManager.MAX_TASK_AMOUNT;
+        int maxCognitiveAge = ConfigsManager.MAX_TASK_COGNITIVE_AGE;
 
         while (true) {
-            int pendingCount = 0;
-            for (DefaultAgentTaskUnit t : TaskQueue) {
+            // 只统计真正未开始的任务（不含被抢占挂起的 inProgress 任务）
+            int trulyPending = 0;
+            for (DefaultAgentTaskUnit t : pendingQueue) {
                 if (!t.isInProgress()) {
-                    pendingCount++;
+                    trulyPending++;
                 }
             }
 
-            // 第一轮：删除已过期的挂起任务（执行中的不会被删除）
+            // 第一轮：删除认知年龄超限的任务（含被抢占挂起的）
             DefaultAgentTaskUnit expiredVictim = null;
-            if (expirationMs > 0) {
-                for (DefaultAgentTaskUnit t : TaskQueue) {
-                    if (t.isInProgress()) {
-                        continue;
-                    }
-                    long age = now - t.getCreateTime();
-                    if (age > expirationMs) {
+            if (maxCognitiveAge > 0) {
+                for (DefaultAgentTaskUnit t : pendingQueue) {
+                    int cognitiveAge = this.consumerLoopCount - t.getBornAtLoop();
+                    if (cognitiveAge >= maxCognitiveAge) {
                         expiredVictim = t;
                         break;
                     }
                 }
             }
             if (expiredVictim != null) {
-                TaskQueue.remove(expiredVictim);
-                // 【核心修改】：同时销毁过期废弃任务的上下文缓存，防止内存泄漏
+                pendingQueue.remove(expiredVictim);
                 LLManager.clearTaskCache(expiredVictim.getUUID());
-                long age = now - expiredVictim.getCreateTime();
-                log.info("[TaskQueue] 过期任务已删除及其缓存已释放: {} (创建后挂起 {}ms, 阈值 {}ms)",
-                        expiredVictim.getClass().getSimpleName(), age, expirationMs);
-                continue; // 继续循环检查是否还有其它过期任务
+                int cognitiveAge = this.consumerLoopCount - expiredVictim.getBornAtLoop();
+                log.info("[TaskQueue] 过期任务已删除及其缓存已释放: {} (认知年龄: {}轮, 阈值: {}轮)",
+                        expiredVictim.getClass().getSimpleName(), cognitiveAge, maxCognitiveAge);
+                continue;
             }
 
-            // 第二轮：pending 任务数仍在队列上限之上，删除最低优先级任务
-            if (pendingCount <= maxAmount) {
+            // 第二轮：真正未开始的任务数超上限，删除最低优先级的
+            if (trulyPending <= maxAmount) {
                 break;
             }
 
             DefaultAgentTaskUnit victim = null;
-            for (DefaultAgentTaskUnit t : TaskQueue) {
+            for (DefaultAgentTaskUnit t : pendingQueue) {
                 if (t.isInProgress()) {
-                    continue;
+                    continue; // 跳过被抢占挂起的任务，只淘汰从未开始过的
                 }
                 if (victim == null || t.getPriority() > victim.getPriority()) {
                     victim = t;
@@ -350,8 +495,7 @@ public class LivingLoop implements MosireAPI {
             }
 
             if (victim != null) {
-                TaskQueue.remove(victim);
-                // 【核心修改】：同时销毁被挤掉的积压任务的上下文缓存
+                pendingQueue.remove(victim);
                 LLManager.clearTaskCache(victim.getUUID());
                 log.info("[TaskQueue] 队列积压，已抛弃最低优先级的等待任务及释放缓存: {} (Priority: {})",
                         victim.getClass().getSimpleName(),
@@ -399,7 +543,7 @@ public class LivingLoop implements MosireAPI {
                 if (processedTaskCount.get() >= ConfigsManager.TASK_COUNT_FOR_REFLECTION && ConfigsManager.TASK_COUNT_FOR_REFLECTION > 1 ) {
                     processedTaskCount.set(0);
                     log.info("[System] 达到任务处理阈值，正在向潜意识抛入强制反思任务...");
-                    TaskQueue.offer(new UpdateThoughtsTask()); // 变更为 offer
+                    pendingQueue.offer(new UpdateThoughtsTask());
                     this.trimTaskQueue();
                 }
 
@@ -408,7 +552,7 @@ public class LivingLoop implements MosireAPI {
                 // 【定时计划任务】
                 if (this.scheduledTaskCounter >= ConfigsManager.SCHEDULE_CYCLING_TIME && ConfigsManager.SCHEDULE_CYCLING_TIME > 0) {
                     log.info("[System] 达到定时任务阈值，正在向队列抛入定时任务...");
-                    TaskQueue.offer(new ScheduledTask()); // 变更为 offer
+                    pendingQueue.offer(new ScheduledTask());
                     this.trimTaskQueue();
                     this.scheduledTaskCounter = 0;
                 }
@@ -427,18 +571,20 @@ public class LivingLoop implements MosireAPI {
 
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    // 使用 poll 拿取队列头部任务
-                    DefaultAgentTaskUnit task = TaskQueue.poll(1, TimeUnit.SECONDS);
-                    if (task == null) {
-                        continue;
+                    // 没有正在执行的任务时，从待处理队列拉取
+                    if (executingTask == null) {
+                        executingTask = pendingQueue.poll(1, TimeUnit.SECONDS);
+                        if (executingTask == null) {
+                            continue;
+                        }
                     }
 
                     // 粘性执行
-                    DefaultAgentTaskUnit stickyTask = task;
-                    while (stickyTask != null) {
+                    while (executingTask != null) {
+                        // 检查是否有更高优先级的任务插队
                         DefaultAgentTaskUnit preemptor = null;
-                        double currentPriority = stickyTask.getPriority();
-                        for (DefaultAgentTaskUnit t : TaskQueue) {
+                        double currentPriority = executingTask.getPriority();
+                        for (DefaultAgentTaskUnit t : pendingQueue) {
                             if (t.getPriority() < currentPriority) {
                                 preemptor = t;
                                 break;
@@ -446,15 +592,15 @@ public class LivingLoop implements MosireAPI {
                         }
                         if (preemptor != null) {
                             log.info("\n[执行总线] 更高优先级的任务插队，挂起当前任务: {} (Priority: {}) -> 优先执行: {} (Priority: {})",
-                                    stickyTask.getClass().getSimpleName(), stickyTask.getPriority(),
+                                    executingTask.getClass().getSimpleName(), executingTask.getPriority(),
                                     preemptor.getClass().getSimpleName(), preemptor.getPriority());
-                            TaskQueue.remove(preemptor);
-                            TaskQueue.offer(stickyTask);
-                            stickyTask = preemptor;
+                            pendingQueue.remove(preemptor);
+                            pendingQueue.offer(executingTask);
+                            executingTask = preemptor;
                             continue;
                         }
 
-                        log.info("\n[执行总线] 开始处理任务: {}", stickyTask.getClass().getSimpleName());
+                        log.info("\n[执行总线] 开始处理任务: {}", executingTask.getClass().getSimpleName());
 
                         ArrayNode toolsDefinitionArray = mapper.createArrayNode();
                         for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
@@ -463,21 +609,27 @@ public class LivingLoop implements MosireAPI {
                             }
                         }
 
-                        DefaultAgentTaskHandler handler = taskHandlerRegistry.get(stickyTask.getClass());
+                        DefaultAgentTaskHandler handler = taskHandlerRegistry.get(executingTask.getClass());
                         if (handler != null) {
-                            stickyTask = handler.handleTask(stickyTask, LivingLoop.this, toolsDefinitionArray);
-                            if (stickyTask != null) {
+                            DefaultAgentTaskUnit result = handler.handleTask(executingTask, LivingLoop.this, toolsDefinitionArray);
+                            if (result != null) {
+                                executingTask = result;
                                 processedTaskCount.incrementAndGet();
                                 continue;
                             }
                             processedTaskCount.incrementAndGet();
+                            executingTask = null;
                             break;
                         } else {
                             log.warn("[执行总线] 遇到未知的任务类型 [{}], 且没有挂载对应的 Handler，已跳过处理。",
-                                    stickyTask.getClass().getSimpleName());
+                                    executingTask.getClass().getSimpleName());
+                            executingTask = null;
                             break;
                         }
                     }
+
+                    // 每处理完一个任务（粘性执行退出），认知循环轮次+1，推进所有等待任务的老化
+                    consumerLoopCount++;
 
                 } catch (InterruptedException e) {
                     log.info("[EXEC] 消费者线程收到中断信号，即将退出。");

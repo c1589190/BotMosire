@@ -40,6 +40,7 @@ public class LLManager {
     private static class ContextCacheEntry {
         ArrayNode messages;
         AtomicInteger roundCount = new AtomicInteger(0);
+        volatile boolean wasContextCleared = true; // 首次启动视为上下文已清空，需注入记忆
         final Object lock = new Object();
     }
 
@@ -151,9 +152,16 @@ public class LLManager {
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
+                // 仅在上下文被清空后的首轮注入 current_memories，帮助 LLM 回忆历史
+                // 正常运行期间由 turnsAddition 承载任务内上下文
                 if (!dataModel.containsKey("current_memories")) {
-                    dataModel.put("current_memories",
-                            MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+                    if (GLOBAL_CACHE.wasContextCleared) {
+                        dataModel.put("current_memories",
+                                MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
+                        GLOBAL_CACHE.wasContextCleared = false;
+                    } else {
+                        dataModel.put("current_memories", java.util.Collections.emptyList());
+                    }
                 }
                 dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
                 dataModel.put("now_time", Utils.getNowPrecise());
@@ -206,11 +214,13 @@ public class LLManager {
                 log.warn("[LLManager] feedToolResult: 全局缓存为空，跳过压入");
                 return;
             }
+            // 清洗控制字符，防止污染 JSON（保留 \t \n \r 三个合法空白字符）
+            String sanitized = toolResult != null ? toolResult.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "") : "";
             ObjectNode toolMsg = jsonMapper.createObjectNode();
             toolMsg.put("role", "tool");
             toolMsg.put("tool_call_id", toolCallId);
             toolMsg.put("name", toolName);
-            toolMsg.put("content", toolResult);
+            toolMsg.put("content", sanitized);
             GLOBAL_CACHE.messages.add(toolMsg);
             log.info("[LLManager] feedToolResult -> 全局缓存压入工具结果: tool={}, callId={}, 消息总数: {}",
                     toolName, toolCallId, GLOBAL_CACHE.messages.size());
@@ -224,7 +234,8 @@ public class LLManager {
         if (size > MAX_CONTEXT_CACHE_ROUNDS) {
             GLOBAL_CACHE.messages = jsonMapper.createArrayNode();
             GLOBAL_CACHE.roundCount.set(0);
-            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已全部清空", size, MAX_CONTEXT_CACHE_ROUNDS);
+            GLOBAL_CACHE.wasContextCleared = true;
+            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已全部清空，标记需重新注入记忆", size, MAX_CONTEXT_CACHE_ROUNDS);
         }
     }
 

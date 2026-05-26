@@ -25,15 +25,13 @@ public class LLMAdapter {
 
     public LLMAdapter(LLMConfig config) {
         this.config = config;
-        // 重新配置 HTTP 客户端，将读取超时拉长到 5 分钟，防止带有深度思维链的模型被强制断线
-        // 连接池：keep-alive 30 秒后主动淘汰空闲连接（低于 LLM API 服务端的典型空闲超时 60s），
-        // 避免 OkHttp 复用已被服务端关闭的陈旧连接导致 Connection reset。
         this.client = new OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
+                .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.MINUTES)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .callTimeout(180, TimeUnit.SECONDS)
-                .connectionPool(new ConnectionPool(5, 30, TimeUnit.SECONDS))
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(10, TimeUnit.MINUTES)
+                .connectionPool(new ConnectionPool(5, 10, TimeUnit.SECONDS))
+                .retryOnConnectionFailure(true)
                 .build();
     }
 
@@ -52,6 +50,7 @@ public class LLMAdapter {
                 .url(url)
                 .header("Authorization", "Bearer " + config.getApiKey())
                 .header("Content-Type", "application/json")
+                .header("Connection", "close")
                 .post(RequestBody.create(payload.toString(), MediaType.get("application/json")))
                 .build();
 
@@ -278,12 +277,14 @@ public class LLMAdapter {
                 config.getApiBase() + "/chat/completions";
 
         String payloadStr = payload.toString();
+        log.info("Tool Calling 请求体大小: {} bytes ({} KB)", payloadStr.length(), String.format("%.1f", payloadStr.length() / 1024.0));
         log.debug("请求体: {} ", payloadStr);
 
         Request request = new Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer " + config.getApiKey())
                 .header("Content-Type", "application/json")
+                .header("Connection", "close")
                 .post(RequestBody.create(payloadStr, MediaType.get("application/json")))
                 .build();
 

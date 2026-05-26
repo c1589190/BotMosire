@@ -8,6 +8,7 @@ public interface DefaultAgentTaskUnit {
     String getTaskName();
 
     double getPriority();
+    void setPriority(double priority);
 
     // 记录当前执行到了第几轮
     int getCurrentTurn();
@@ -25,7 +26,19 @@ public interface DefaultAgentTaskUnit {
     String getInitialFeelings();
     void setInitialFeelings(String feelings);
 
-    // 任务创建时间戳（毫秒），用于判断过期
+    // 任务专属感觉维度，在 pushTask 时计算，随任务队列一起展示给 LLM
+    String getTaskFeelings();
+    void setTaskFeelings(String feelings);
+
+    // 任务创建时间戳（毫秒），保留兼容
     long getCreateTime();
+
+    // 任务被推入队列时的认知循环轮次，用于基于认知周期的过期判断
+    int getBornAtLoop();
+    void setBornAtLoop(int loop);
+
+    // 展示用编号，LLM 可据此引用特定任务
+    int getDisplayId();
+    void setDisplayId(int id);
 
 }
