@@ -40,7 +40,7 @@ public class LLManager {
     private static class ContextCacheEntry {
         ArrayNode messages;
         AtomicInteger roundCount = new AtomicInteger(0);
-        volatile boolean wasContextCleared = true; // 首次启动视为上下文已清空，需注入记忆
+        boolean wasContextCleared = true; // 首次启动视为上下文已清空，需注入记忆
         final Object lock = new Object();
     }
 
@@ -70,48 +70,6 @@ public class LLManager {
         return LLM_EXECUTOR;
     }
 
-    // ---------- 新增：异步执行，返回 Future ----------
-    public static CompletableFuture<CallResult> executeSceneAsync(
-            String userTemplate,
-            Map<String, Object> dataModel,
-            LLMAdapter llm,
-            ArrayNode tools) {
-
-        // 补全数据（渲染前的轻量操作在主调线程完成没问题）
-        // 全用 containsKey 检查，允许 Handler 在 prepareBaseData 时覆盖这些值
-        if (!dataModel.containsKey("current_memories")) {
-            dataModel.put("current_memories",
-                    MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
-        }
-        if (!dataModel.containsKey("now_time")) {
-            dataModel.put("now_time", Utils.getNowPrecise());
-        }
-        if (!dataModel.containsKey("current_thoughts")) {
-            dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
-        }
-        if (!dataModel.containsKey("tools_guide")) {
-            dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
-        }
-
-        String userPrompt = render(userTemplate, dataModel);
-        log.info("[LLManager Async] Prompt 渲染完毕，长度: {} chars", userPrompt.length());
-        log.trace("[LLManager Async] Prompt 全文: {}", userPrompt);
-
-        return CompletableFuture.supplyAsync(() -> {
-            if (tools == null) {
-                CallResult result = new CallResult();
-                result.setToolCall(false);
-                result.setContent(llm.generateStreamResponse(
-                        userPrompt,
-                        MDManager.read("prompts/CORE.md"),
-                        chunk -> {}));
-                result.setToolCalls(null);
-                return result;
-            }
-            return llm.generateResponseWithTools(userPrompt, MDManager.read("prompts/CORE.md"), tools);
-        }, LLM_EXECUTOR);
-    }
-
     /**
      * 同步封装：带超时的异步场景执行，方便快速替换原有的 executeScene 调用。
      * 超时或异常时返回一个内容为错误信息的 CallResult（toolCall=false）。
@@ -130,13 +88,9 @@ public class LLManager {
             LLMAdapter llm,
             ArrayNode tools) {
 
-        // 提前持有 future 引用，超时时可以 cancel 释放线程槽
-        // 注意：cancel(true) 只发出中断信号，对 OkHttp blocking call 不会立刻断开 socket，
-        // 必须配合 LLMConfig.readTimeoutSec 设置合理值，避免线程槽被独占到 socket 超时为止。
-        CompletableFuture<CallResult> future = executeSceneAsync(userTemplate, dataModel, llm, tools);
+        // 使用全局共享上下文缓存机制执行
+        CompletableFuture<CallResult> future = executeSceneAsyncWithCache(taskId, userTemplate, dataModel, llm, tools);
         try {
-            return executeSceneAsyncWithCache(taskId, userTemplate, dataModel, llm, tools)
-                    .get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
             return future.get(ConfigsManager.LLM_TIMEOUT_TIME, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
@@ -212,6 +166,7 @@ public class LLManager {
                     sysMsg.put("content", MDManager.read("prompts/CORE.md", ""));
                     GLOBAL_CACHE.messages.add(sysMsg);
                     GLOBAL_CACHE.roundCount.set(0);
+                    GLOBAL_CACHE.wasContextCleared = true;
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
@@ -302,11 +257,11 @@ public class LLManager {
         }
     }
 
-    public static void clearTaskCache(UUID taskId) {
-  //      synchronized (GLOBAL_CACHE.lock) {
-//            GLOBAL_CACHE.messages = null;
-  //         GLOBAL_CACHE.roundCount.set(0);
-    //        log.info("[LLManager] 🗑️ 全局共享上下文已被主动清空");
-//        }
+    public static void clearCache() {
+        synchronized (GLOBAL_CACHE.lock) {
+            GLOBAL_CACHE.messages = null;
+            GLOBAL_CACHE.roundCount.set(0);
+            log.info("[LLManager] 全局共享上下文已被主动清空");
+        }
     }
 }

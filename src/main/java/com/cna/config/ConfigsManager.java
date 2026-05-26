@@ -121,20 +121,6 @@ public class ConfigsManager {
                 .writeTimeoutSec(getInt("llm.gatekeeper.writeTimeoutSec", 30))
                 .build();
 
-        // 【新增】：战略规划者配置 (第0轮专用)
-        /*
-        PLANNER_CONFIG = LLMConfig.builder()
-                .apiBase(getString("llm.planner.apiBase", "https://api.siliconflow.cn/v1"))
-                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.planner.apiKey", ""))
-                .chatModel(getString("llm.planner.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
-                .temperature(getDouble("llm.planner.temperature", 0.5))
-                .frequencyPenalty(getDouble("llm.planner.frequencyPenalty", 0.2))
-                .presencePenalty(getDouble("llm.planner.presencePenalty", 0.2))
-                .enableCoT(getBoolean("llm.planner.enableCoT", true))
-                .build();
-
-         */
-
         BRAIN_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.brain.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.brain.apiKey", ""))
@@ -149,20 +135,6 @@ public class ConfigsManager {
                 .writeTimeoutSec(getInt("llm.brain.writeTimeoutSec", 30))
                 .build();
 
-        /*
-        ADVANCED_BRAIN_CONFIG = LLMConfig.builder()
-                .apiBase(getString("llm.advanced_brain.apiBase", "https://api.siliconflow.cn/v1"))
-                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.advanced_brain.apiKey", ""))
-                .chatModel(getString("llm.advanced_brain.chatModel", "Pro/deepseek-ai/DeepSeek-R1"))
-                .temperature(getDouble("llm.advanced_brain.temperature", 0.6))
-                .frequencyPenalty(getDouble("llm.advanced_brain.frequencyPenalty", 0.4))
-                .presencePenalty(getDouble("llm.advanced_brain.presencePenalty", 0.5))
-                .enableCoT(getBoolean("llm.advanced_brain.enableCoT", true))
-                .max_tokens(getInt("llm.advanced_brain.maxTokens", 16384))
-                .build();
-
-         */
-
         EMBEDDING_CONFIG = LLMConfig.builder()
                 .apiBase(getString("llm.embedding.apiBase", "https://api.siliconflow.cn/v1"))
                 .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.embedding.apiKey", ""))
@@ -172,19 +144,6 @@ public class ConfigsManager {
                 .readTimeoutSec(getInt("llm.embedding.readTimeoutSec", 30))
                 .writeTimeoutSec(getInt("llm.embedding.writeTimeoutSec", 30))
                 .build();
-
-        /*
-        SCHEDULER_CONFIG = LLMConfig.builder()
-                .apiBase(getString("llm.scheduler.apiBase", "https://api.siliconflow.cn/v1"))
-                .apiKey(getEnvOrProp("SILICONFLOW_API_KEY", "llm.scheduler.apiKey", ""))
-                .chatModel(getString("llm.scheduler.chatModel", "Pro/deepseek-ai/DeepSeek-V3.2"))
-                .temperature(getDouble("llm.scheduler.temperature", 0.4))
-                .frequencyPenalty(getDouble("llm.scheduler.frequencyPenalty", 0.4))
-                .presencePenalty(getDouble("llm.scheduler.presencePenalty", 0.5))
-                .enableCoT(getBoolean("llm.scheduler.enableCoT", true))
-                .build();
-
-         */
 
         VISION_MODEL = LLMConfig.builder()
                 .apiBase(getString("llm.vision.apiBase", "https://api.siliconflow.cn/v1"))

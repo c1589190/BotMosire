@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
@@ -19,16 +20,13 @@ import java.util.concurrent.CompletableFuture;
 @Slf4j
 public class FeelingDimensionManager {
 
+    @Getter
     private static volatile FeelingDimensionManager instance;
 
     public static synchronized void init(MemoryDB memoryDB) {
         if (instance == null) {
             instance = new FeelingDimensionManager(memoryDB);
         }
-    }
-
-    public static FeelingDimensionManager getInstance() {
-        return instance;
     }
 
     private static final ObjectMapper jsonMapper = new ObjectMapper();
@@ -42,6 +40,7 @@ public class FeelingDimensionManager {
     private static final double NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
     private static final double REPLACE_THRESHOLD = ConfigsManager.FD_REPLACE_THRESHOLD;
     private static final int HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
+    private static final double ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
 
     // 仅依赖该阈值计算基础感觉权重
     //private static final double BLUNT_WEIGHT = ConfigsManager.FD_BLUNT_WEIGHT;
@@ -49,9 +48,6 @@ public class FeelingDimensionManager {
     public FeelingDimensionManager(MemoryDB memoryDB) {
         this.memoryDB = memoryDB;
         this.embLLM = new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG);
-        this.NOVELTY_THRESHOLD = ConfigsManager.NOVELTY_THRESHOLD;
-        this.HABITUATION_LIMIT = ConfigsManager.FD_HABITUATION_LIMIT;
-        this.ALPHA = ConfigsManager.FD_QUALITY_WEIGHT;
     }
 
     // ==========================================
@@ -110,7 +106,7 @@ public class FeelingDimensionManager {
                             double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
                             memoryDB.replaceFeelingDimension(bestMatch.id, concept, conceptVector, newHitWeight);
 
-                            log.info("[Feeling-Replace] 概念 [{}] 与 [{}] 相似度 {:.3f} >= 替换阈值 {:.3f}，已覆盖旧词。Weight: {:.3f}->{:.3f}",
+                            log.info("[Feeling-Replace] 概念 [{}] 与 [{}] 相似度 {} >= 替换阈值 {}，已覆盖旧词。Weight: {}->{}",
                                     concept, bestMatch.concept, highestSim, REPLACE_THRESHOLD,
                                     bestMatch.hitWeight, newHitWeight);
                         } else if (bestMatch != null && highestSim >= NOVELTY_THRESHOLD) {
