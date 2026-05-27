@@ -6,7 +6,7 @@
 
     <groupId>com.cna</groupId>
     <artifactId>BotMosire</artifactId>
-    <version>Alpha26.2.4_TEST4</version>
+    <version>Alpha26.2.4_TEST5</version>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>

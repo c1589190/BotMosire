@@ -1,1 +1,1 @@
-若涉及的问题有关于如何修改工作目录下website中的网页源文件index.html，请先调用get_tool_usage_detail工具查询update_web_ui工具的使用指南，使用指南中包含了你应该如何修改、重构一个前后端运行正常的html网页；
+修改网页前先调用 tool_usage_reader 查询 update_web_ui 使用指南。

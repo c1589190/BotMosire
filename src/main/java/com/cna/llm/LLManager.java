@@ -4,6 +4,7 @@ import com.cna.Utils;
 import com.cna.config.ConfigsManager;
 import com.cna.db.MDManager;
 import com.cna.agent.MemoryManager;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -170,20 +171,25 @@ public class LLManager {
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
-                // 仅在上下文被清空后的首轮注入 current_memories，帮助 LLM 回忆历史
+                // 仅在上下文被清空后的首轮注入长期记忆和当前想法
                 // 正常运行期间由 GLOBAL_CACHE 承载任务内上下文
-                if (!dataModel.containsKey("current_memories")) {
-                    if (GLOBAL_CACHE.wasContextCleared) {
-                        dataModel.put("current_memories",
-                                MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE));
-                        GLOBAL_CACHE.wasContextCleared = false;
-                    } else {
-                        dataModel.put("current_memories", java.util.Collections.emptyList());
-                    }
+                boolean needInjection = GLOBAL_CACHE.wasContextCleared;
+                if (needInjection) {
+                    GLOBAL_CACHE.wasContextCleared = false;
                 }
-                dataModel.put("tools_guide", MDManager.read("prompts/toolsGuide.md", ""));
+
+                if (!dataModel.containsKey("current_memories")) {
+                    dataModel.put("current_memories",
+                            needInjection
+                                    ? MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE)
+                                    : java.util.Collections.emptyList());
+                }
+                dataModel.put("current_thoughts",
+                        needInjection ? MDManager.read("thoughts.md", "") : "");
+                dataModel.put("tools_guide",
+                        needInjection ? MDManager.read("prompts/toolsGuide.md", "") : "");
+
                 dataModel.put("now_time", Utils.getNowPrecise());
-                dataModel.put("current_thoughts", MDManager.read("thoughts.md", ""));
                 dataModel.put("pending_tasks_summary", livingLoop != null ? livingLoop.buildTaskQueueSummary() : "");
 
                 String userPrompt = render(userTemplate, dataModel);
@@ -253,10 +259,43 @@ public class LLManager {
     private static void truncateGlobalCacheIfNeeded() {
         int size = GLOBAL_CACHE.messages.size();
         if (size > MAX_CONTEXT_CACHE_ROUNDS) {
-            GLOBAL_CACHE.messages = jsonMapper.createArrayNode();
+            double ratio = ConfigsManager.CONTEXT_RETENTION_RATIO;
+
+            ArrayNode newMessages = jsonMapper.createArrayNode();
+            // 始终保留 system 消息
+            newMessages.add(GLOBAL_CACHE.messages.get(0));
+
+            if (ratio > 0) {
+                // ratio 控制摘要的总长度上限。ratio=0.3 → 3000字, ratio=1.0 → 10000字
+                int maxSummaryChars = (int) (ratio * 10000);
+                StringBuilder sb = new StringBuilder(Math.min(maxSummaryChars, 1024));
+                sb.append("[上下文回顾] 以下是你更早的内部活动记录（已压缩）：\n");
+                for (int i = 1; i < size && sb.length() < maxSummaryChars; i++) {
+                    JsonNode msg = GLOBAL_CACHE.messages.get(i);
+                    String role = msg.path("role").asText("");
+                    if (!"user".equals(role) && !"assistant".equals(role)) continue;
+                    String content = msg.path("content").asText("");
+                    if (content.isBlank()) continue;
+                    String shortContent = content.length() > 150
+                            ? content.substring(0, 150) + "…"
+                            : content;
+                    sb.append('[').append(role).append("] ").append(shortContent).append('\n');
+                }
+
+                if (sb.length() > 60) {
+                    ObjectNode ctxMsg = jsonMapper.createObjectNode();
+                    ctxMsg.put("role", "user");
+                    ctxMsg.put("content", sb.toString());
+                    newMessages.add(ctxMsg);
+                }
+            }
+            // ratio == 0 → 仅保留 system，不注入摘要
+
+            GLOBAL_CACHE.messages = newMessages;
             GLOBAL_CACHE.roundCount.set(0);
             GLOBAL_CACHE.wasContextCleared = true;
-            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已全部清空，标记需重新注入记忆", size, MAX_CONTEXT_CACHE_ROUNDS);
+            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已截断(ratio={}) → 新消息数 {}",
+                    size, MAX_CONTEXT_CACHE_ROUNDS, String.format("%.0f%%", ratio * 100), newMessages.size());
         }
     }
 
