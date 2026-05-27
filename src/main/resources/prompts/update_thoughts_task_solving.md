@@ -25,7 +25,7 @@ ${scheduled}
 调用reflective_memory_compaction工具意味着您已经完成了这项任务，请立刻在同一轮紧接着调用finish_task完成此项任务！
 若您发现在前几轮中已经调用过了reflective_memory_compaction工具，意味着您没有及时结束任务，请立刻重新调用finish_task及时结束任务！
 
-<#if current_memories?? || turnsAddition?has_content>
+<#if current_memories??>
 ---
 以下为系统注入的动态上下文信息，供你参考：
 
@@ -43,12 +43,4 @@ ${pending_tasks_summary}
 }
 </#if>
 
-<#if turnsAddition?has_content>
-本轮思考并不是第一轮，以下是你之前几轮的思考结果：{
-
-${turnsAddition}
-
-}
-请牢记前几轮工具调用为你带来的补充信息，并根据前文的规划确认您当前处于执行任务的哪一阶段；
-</#if>
 </#if>

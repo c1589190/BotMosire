@@ -12,7 +12,7 @@ ${taskText}
 
 }
 
-<#if current_thoughts?has_content || deep_memories?? || current_memories?? || turnsAddition?has_content>
+<#if current_thoughts?has_content || deep_memories?? || current_memories??>
 ---
 以下为系统注入的动态上下文信息，供你参考：
 
@@ -47,12 +47,4 @@ ${current_thoughts}
 }
 </#if>
 
-<#if turnsAddition?has_content>
-本轮思考并不是第一轮，以下是你之前几轮的思考结果：{
-
-${turnsAddition}
-
-}
-请牢记前几轮工具调用为你带来的补充信息；
-</#if>
 </#if>

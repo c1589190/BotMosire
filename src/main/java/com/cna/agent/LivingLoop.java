@@ -553,7 +553,7 @@ public class LivingLoop implements MosireAPI {
         // 线程 2：大脑皮层深度思考与动作执行 (消费者)
         // ==========================================
         executorService.submit(() -> {
-            log.info("[LivingLoop][EXEC] 大脑皮层任务消费线程已启动...");
+            log.info("[com.cna.agent.LivingLoop][EXEC] 大脑皮层任务消费线程已启动...");
             ObjectMapper mapper = new ObjectMapper();
 
             while (!Thread.currentThread().isInterrupted()) {
@@ -622,7 +622,7 @@ public class LivingLoop implements MosireAPI {
                     log.info("[EXEC] 消费者线程收到中断信号，即将退出。");
                     Thread.currentThread().interrupt();
                 } catch (Exception e) {
-                    log.error("[LivingLoop][EXEC] 任务处理循环异常：", e);
+                    log.error("[com.cna.agent.LivingLoop][EXEC] 任务处理循环异常：", e);
                 }
             }
         });
@@ -657,8 +657,8 @@ public class LivingLoop implements MosireAPI {
         //储存本轮任务处理中所有需要被短期记忆记录的东西
 
         if (turn == 1) {
-            // 【核心修改】：第1轮正常压入初始记忆或分析设定
-            turnData.put("turnsAddition", taskUnit.getTurnsAddition());
+            // turnsAddition 不再注入模板——GLOBAL_CACHE 中的 assistant/tool 消息已是完整历史
+            turnData.put("turnsAddition", "");
 
             if(lastSolvingTask != null){
                 //这说明这个任务插队了
@@ -676,7 +676,7 @@ public class LivingLoop implements MosireAPI {
                 result = LLManager.executeScene(currentTaskId, scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
             }
         } else {
-            // 【核心修改】：第2轮及以后，切断“上下文套娃”，把 turnsAddition 置空，让大模型完全依靠独立缓存追溯前情！
+            // 第2轮及以后：turnsAddition 不注入模板，上下文完全由 GLOBAL_CACHE 承载
             turnData.put("turnsAddition", "");
             result = LLManager.executeScene(currentTaskId, scenePrompts.getSolvingPrompt(), turnData, llm, toolsDefinitionArray);
             currentMemory.append("之前的 " + taskUnit.getTaskName() + " 正在进行第" + turn + "轮处理...\n");
@@ -700,9 +700,8 @@ public class LivingLoop implements MosireAPI {
             lastSolvingTask = null;
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
 
-            //通过尝试清空缓存来缓解
-            LLManager.clearCache();
-
+            // 主动销毁该任务由于网络异常半途而废的污染缓存
+            //LLManager.clearTaskCache(currentTaskId);
             return null;
         }
 
@@ -714,6 +713,8 @@ public class LivingLoop implements MosireAPI {
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
             lastSolvingTask = null;
 
+            // 【核心修改】：任务自然结束，清空该任务的专属上下文缓存
+            //LLManager.clearTaskCache(currentTaskId);
             return null;
         }
 

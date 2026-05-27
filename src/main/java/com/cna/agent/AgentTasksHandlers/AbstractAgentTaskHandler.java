@@ -22,7 +22,6 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
 
         Map<String, Object> baseData = new HashMap<>();
         baseData.put("taskText", task.getTaskText());
-        baseData.put("turnsAddition", task.getTurnsAddition());
         baseData.put("current_feelings", "");
 
         if (!prepareBaseData(task, baseData, engine)) {
