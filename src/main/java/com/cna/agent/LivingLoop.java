@@ -700,8 +700,8 @@ public class LivingLoop implements MosireAPI {
             lastSolvingTask = null;
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
 
-            // 主动销毁该任务由于网络异常半途而废的污染缓存
-            //LLManager.clearTaskCache(currentTaskId);
+            LLManager.clearCache();
+
             return null;
         }
 

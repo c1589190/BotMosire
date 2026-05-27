@@ -260,14 +260,11 @@ public class LLManager {
         }
     }
 
-    public static void clearTaskCache(UUID taskId) {
-        /*
+    public static void clearCache() {
         synchronized (GLOBAL_CACHE.lock) {
             GLOBAL_CACHE.messages = null;
             GLOBAL_CACHE.roundCount.set(0);
             log.info("[LLManager] 🗑️ 全局共享上下文已被主动清空");
         }
-
-         */
     }
 }
