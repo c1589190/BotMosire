@@ -16,7 +16,7 @@ ${taskText}
 你需要根据理论上的工作流程，与前几轮你自己对于这项任务的想法，灵活调用相关工具，推进任务流程；
 若您决定在当轮使用update_web_ui构建合适的返回请求体，那么说明任务已经可以结束了，请立刻紧接调用finish_task结束这个任务
 
-<#if current_thoughts?has_content || deep_memories?? || current_memories?? || turnsAddition?has_content>
+<#if current_thoughts?has_content || deep_memories?? || current_memories??>
 ---
 以下为系统注入的动态上下文信息，供你参考：
 
@@ -51,12 +51,4 @@ ${current_thoughts}
 }
 </#if>
 
-<#if turnsAddition?has_content>
-本轮思考并不是第一轮，以下是你之前几轮的思考结果：{
-
-${turnsAddition}
-
-}
-请牢记前几轮工具调用为你带来的补充信息，并根据前文的规划确认您当前处于执行任务的哪一阶段；
-</#if>
 </#if>

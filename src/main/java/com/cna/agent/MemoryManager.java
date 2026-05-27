@@ -3,6 +3,7 @@ package com.cna.agent;
 import com.cna.Utils;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
+import com.cna.db.FeelingDimensionManager;
 import com.cna.db.MDManager;
 import com.cna.db.MemoryDB;
 import com.cna.llm.CallResult;
@@ -61,9 +62,11 @@ public class MemoryManager {
     // 功能 1 & 3: 压入记忆 (非阻塞异步折叠)
     // ==========================================
     public void inputCurrentMemorys(List<String> memories) {
+        FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
+
         // 1. 瞬间把记忆落盘，绝不卡顿
         for (String mem : memories) {
-            db.insertCurrentMemory(mem);
+            db.insertCurrentMemory(appendFeelingTags(mem, fdm));
         }
 
         // 2. 检查是否溢出水位线
@@ -97,6 +100,48 @@ public class MemoryManager {
         List<String> a = new LinkedList<>();
         a.add(memory);
         this.inputCurrentMemorys(a);
+    }
+
+    /**
+     * 为单条记忆追加感觉维度标签和总好坏判断。
+     * 若感觉维度系统不可用，返回原始记忆不做修改。
+     */
+    private String appendFeelingTags(String memory, FeelingDimensionManager fdm) {
+        if (fdm == null) return memory;
+
+        try {
+            List<FeelingDimensionManager.DimensionScore> topDimensions =
+                    fdm.getTargetDimensions(memory, true, ConfigsManager.FEELING_DIMENSION_COUNT);
+
+            if (topDimensions.isEmpty()) return memory;
+
+            StringBuilder sb = new StringBuilder(memory);
+            sb.append(" [感觉: ");
+
+            double totalPolarity = 0.0;
+            for (int i = 0; i < topDimensions.size(); i++) {
+                FeelingDimensionManager.DimensionScore ds = topDimensions.get(i);
+                if (i > 0) sb.append(" ");
+                String polaritySign = ds.hitWeight >= 0 ? "+" : "-";
+                sb.append(String.format("\"%s\"(%s,%.2f)", ds.concept, polaritySign, ds.hitWeight));
+                // 加权总和 = hitWeight极性 * InterestScore(含新鲜度权重)
+                totalPolarity += ds.hitWeight * ds.InterestScore;
+            }
+            sb.append("]");
+
+            if (totalPolarity > 0) {
+                sb.append(" [总:好]");
+            } else if (totalPolarity < 0) {
+                sb.append(" [总:坏]");
+            } else {
+                sb.append(" [总:中性]");
+            }
+
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[MemoryManager] 感觉维度标记失败，回退为原始记忆", e);
+            return memory;
+        }
     }
 
     private void consolidateMemory() {

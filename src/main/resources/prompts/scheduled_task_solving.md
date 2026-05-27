@@ -11,7 +11,7 @@ ${scheduled}
 请在充分总结经验教训、提炼方法论的前提下，根据当前给出的所有信息，从系统提供的工具箱中选择合适的工具进行执行。
 在发现之前的思考轮次之中已经完成了定时任务标注的所有项目之后，及时调用finish_task结束任务，绝对不要重复做已经干过的事！
 
-<#if current_thoughts?has_content || current_memories?? || turnsAddition?has_content>
+<#if current_thoughts?has_content || current_memories??>
 ---
 以下为系统注入的动态上下文信息，供你参考：
 
@@ -37,12 +37,4 @@ ${current_thoughts}
 }
 </#if>
 
-<#if turnsAddition?has_content>
-本轮思考并不是第一轮，以下是你之前几轮的思考结果：{
-
-${turnsAddition}
-
-}
-请牢记前几轮工具调用为你带来的补充信息；
-</#if>
 </#if>

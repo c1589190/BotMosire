@@ -171,7 +171,7 @@ public class LLManager {
                 }
 
                 // 仅在上下文被清空后的首轮注入 current_memories，帮助 LLM 回忆历史
-                // 正常运行期间由 turnsAddition 承载任务内上下文
+                // 正常运行期间由 GLOBAL_CACHE 承载任务内上下文
                 if (!dataModel.containsKey("current_memories")) {
                     if (GLOBAL_CACHE.wasContextCleared) {
                         dataModel.put("current_memories",
@@ -234,11 +234,14 @@ public class LLManager {
             }
             // 清洗控制字符，防止污染 JSON（保留 \t \n \r 三个合法空白字符）
             String sanitized = toolResult != null ? toolResult.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "") : "";
+            // 细化格式：让 LLM 仅从缓存就能看到完整的工具调用上下文（工具名 + 结果）,
+            // 不再依赖模板层 turnsAddition 的冗余文本摘要
+            String enriched = "[" + toolName + "]\n" + (sanitized.isEmpty() ? "(无返回内容)" : sanitized);
             ObjectNode toolMsg = jsonMapper.createObjectNode();
             toolMsg.put("role", "tool");
             toolMsg.put("tool_call_id", toolCallId);
             toolMsg.put("name", toolName);
-            toolMsg.put("content", sanitized);
+            toolMsg.put("content", enriched);
             GLOBAL_CACHE.messages.add(toolMsg);
             log.info("[LLManager] feedToolResult -> 全局缓存压入工具结果: tool={}, callId={}, 消息总数: {}",
                     toolName, toolCallId, GLOBAL_CACHE.messages.size());
