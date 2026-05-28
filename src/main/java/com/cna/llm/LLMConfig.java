@@ -25,6 +25,9 @@ public class LLMConfig {
     // 思维链推理力度 (deepseek: "high" / "medium" / "low")
     @Builder.Default private String reasoningEffort = "high";
 
+    // 是否启用流式输出（SSE），默认开启
+    @Builder.Default private boolean stream = true;
+
     // HTTP 超時設定（秒）：不同模型需要不同的 timeout，避免一个慢模型卡死整个线程池
     @Builder.Default private int connectTimeoutSec = 30;
     @Builder.Default private int readTimeoutSec    = 300;

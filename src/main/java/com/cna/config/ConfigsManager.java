@@ -131,6 +131,7 @@ public class ConfigsManager {
                 .presencePenalty(getDouble("llm.brain.presencePenalty", 0.5))
                 .enableCoT(getBoolean("llm.brain.enableCoT", false))
                 .max_tokens(getInt("llm.brain.maxTokens", 65535))
+                .stream(getBoolean("llm.brain.stream", true))
                 .connectTimeoutSec(getInt("llm.brain.connectTimeoutSec", 30))
                 .readTimeoutSec(getInt("llm.brain.readTimeoutSec", 180))
                 .writeTimeoutSec(getInt("llm.brain.writeTimeoutSec", 30))

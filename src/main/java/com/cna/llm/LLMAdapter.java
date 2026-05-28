@@ -13,6 +13,8 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -269,7 +271,17 @@ public class LLMAdapter {
      */
 
     /**
-     * 对接文本模型 (非流式 Tool Calling 专用) - 完整 messages 版本
+     * 对接文本模型 (Tool Calling 专用) - 完整 messages 版本（无回调，兼容旧调用）
+     */
+    public CallResult generateResponseWithTools(ArrayNode messages,
+                                                ArrayNode tools) {
+        return generateResponseWithTools(messages, tools, null);
+    }
+
+    /**
+     * 对接文本模型 (Tool Calling 专用) - 完整 messages 版本，支持流式回调。
+     * 当 config.stream=true 时使用 SSE 流式请求，实时回调 chunkCallback；
+     * 当 config.stream=false 时使用非流式请求。
      * 接收预先构建好的 messages 数组（可包含多轮历史），直接发送给 API。
      * 返回的 CallResult.contextMessages 包含本轮完整上下文，供 LLManager 缓存复用。
      * - 强制清洗 SSE 前缀与非法尾缀；
@@ -278,7 +290,12 @@ public class LLMAdapter {
      * - 工具调用结果的闭合性由此方法完全保证，上层不再需要做额外清洗。
      */
     public CallResult generateResponseWithTools(ArrayNode messages,
-                                                ArrayNode tools) {
+                                                ArrayNode tools,
+                                                Consumer<String> chunkCallback) {
+        if (config.isStream()) {
+            return generateResponseWithToolsStreaming(messages, tools, chunkCallback);
+        }
+
         // 深拷贝 messages，避免污染调用方缓存的原始引用
         ArrayNode finalMessages = messages.deepCopy();
 
@@ -476,6 +493,222 @@ public class LLMAdapter {
             } catch (IOException e) {
                 long elapsed = System.currentTimeMillis() - startTime;
                 log.error("Tool Calling 网络 I/O 异常 ({}ms)", elapsed, e);
+                result.setContent("网络异常: " + e.getMessage());
+                break;
+            }
+        }
+
+        if (!success && result.getContent() == null) {
+            result.setContent("网络异常: 所有重试均失败");
+        }
+
+        return result;
+    }
+
+    /**
+     * SSE 流式 Tool Calling —— 实时回调 chunkCallback，同时正确累积 tool_calls 增量。
+     */
+    private CallResult generateResponseWithToolsStreaming(ArrayNode messages, ArrayNode tools,
+                                                          Consumer<String> chunkCallback) {
+        ArrayNode finalMessages = messages.deepCopy();
+
+        ObjectNode payload = jsonMapper.createObjectNode();
+        payload.put("model", config.getChatModel());
+        payload.put("stream", true);
+        payload.put("temperature", config.getTemperature());
+        payload.put("max_tokens", config.getMax_tokens());
+        if (config.getFrequencyPenalty() != 0.0) payload.put("frequency_penalty", config.getFrequencyPenalty());
+        if (config.getPresencePenalty() != 0.0) payload.put("presence_penalty", config.getPresencePenalty());
+        if (config.isEnableCoT()) {
+            ObjectNode thinking = jsonMapper.createObjectNode();
+            thinking.put("type", "enabled");
+            payload.set("thinking", thinking);
+            payload.put("reasoning_effort", config.getReasoningEffort());
+        }
+
+        if (tools != null && !tools.isEmpty()) {
+            payload.set("tools", tools);
+            payload.put("tool_choice", "auto");
+        }
+
+        payload.set("messages", finalMessages);
+
+        String url = config.getApiBase().endsWith("/") ?
+                config.getApiBase() + "chat/completions" :
+                config.getApiBase() + "/chat/completions";
+
+        String payloadStr = payload.toString();
+        log.info("Tool Calling 流式请求体大小: {} bytes ({} KB)", payloadStr.length(), String.format("%.1f", payloadStr.length() / 1024.0));
+        log.debug("请求体: {} ", payloadStr);
+
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Content-Type", "application/json")
+                .post(RequestBody.create(payloadStr, MediaType.get("application/json")))
+                .build();
+
+        CallResult result = new CallResult();
+
+        int maxRetries = 2;
+        boolean success = false;
+
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (attempt > 0) {
+                log.warn("Tool Calling 流式第 {} 次重试...", attempt);
+                client.connectionPool().evictAll();
+                try { Thread.sleep(1000L * attempt); } catch (InterruptedException ignored) {}
+            }
+
+            long startTime = System.currentTimeMillis();
+            try (Response response = executeWithRetry(request, 2)) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                log.info("Tool Calling 流式收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
+
+                if (!response.isSuccessful() || response.body() == null) {
+                    log.error("流式请求失败，状态码: {}", response.code());
+                    result.setContent("计算资源请求失败: " + response.code());
+                    return result;
+                }
+
+                InputStream inputStream = response.body().byteStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+
+                StringBuilder fullContent = new StringBuilder();
+                StringBuilder fullReasoning = new StringBuilder();
+                Map<Integer, String> tcIds = new LinkedHashMap<>();
+                Map<Integer, String> tcNames = new LinkedHashMap<>();
+                Map<Integer, StringBuilder> tcArgs = new LinkedHashMap<>();
+                String finishReason = null;
+
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.trim().isEmpty()) continue;
+                    if (line.equals("data: [DONE]")) break;
+                    if (!line.startsWith("data: ")) continue;
+
+                    String jsonChunk = line.substring(6);
+                    try {
+                        JsonNode chunkNode = jsonMapper.readTree(jsonChunk);
+                        JsonNode choicesNode = chunkNode.path("choices");
+                        if (choicesNode.isMissingNode() || !choicesNode.isArray() || choicesNode.isEmpty()) continue;
+
+                        JsonNode choiceNode = choicesNode.get(0);
+                        JsonNode deltaNode = choiceNode.path("delta");
+
+                        String fr = choiceNode.path("finish_reason").asText();
+                        if (!fr.isEmpty()) finishReason = fr;
+
+                        JsonNode reasoningNode = deltaNode.path("reasoning_content");
+                        if (!reasoningNode.isMissingNode() && !reasoningNode.isNull()) {
+                            String r = reasoningNode.asText();
+                            if (!r.isEmpty()) {
+                                fullReasoning.append(r);
+                                if (chunkCallback != null) chunkCallback.accept(r);
+                            }
+                        }
+
+                        JsonNode contentNode = deltaNode.path("content");
+                        if (!contentNode.isMissingNode() && !contentNode.isNull()) {
+                            String c = contentNode.asText();
+                            if (!c.isEmpty()) {
+                                fullContent.append(c);
+                                if (chunkCallback != null) chunkCallback.accept(c);
+                            }
+                        }
+
+                        JsonNode tcNode = deltaNode.path("tool_calls");
+                        if (!tcNode.isMissingNode() && tcNode.isArray()) {
+                            // 某些 API 的后继 chunk 可能不带 index，用 lastIdx 兜底
+                            int lastIdx = tcIds.isEmpty() ? 0 : tcIds.keySet().stream().max(Integer::compareTo).orElse(0);
+                            for (JsonNode tc : tcNode) {
+                                int idx = tc.path("index").asInt(-1);
+                                if (idx < 0) {
+                                    if (tc.has("id") || tc.has("function")) {
+                                        idx = lastIdx;
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                                lastIdx = idx;
+
+                                String id = tc.path("id").asText(null);
+                                if (id != null) tcIds.put(idx, id);
+
+                                JsonNode funcNode = tc.path("function");
+                                String fname = funcNode.path("name").asText(null);
+                                if (fname != null) tcNames.put(idx, fname);
+
+                                String args = funcNode.path("arguments").asText(null);
+                                if (args != null && !args.isEmpty()) {
+                                    tcArgs.computeIfAbsent(idx, k -> new StringBuilder()).append(args);
+                                }
+                            }
+                        }
+                    } catch (Exception parseEx) {
+                        log.warn("流式 Tool Calling 无法解析的数据块: {}", jsonChunk);
+                    }
+                }
+
+                result.setReasoningContent(fullReasoning.length() > 0 ? fullReasoning.toString() : null);
+
+                if (!fullContent.isEmpty()) {
+                    result.setContent(fullContent.toString());
+                } else {
+                    result.setContent(null);
+                }
+
+                if (!tcIds.isEmpty()) {
+                    ArrayNode toolCallsArray = jsonMapper.createArrayNode();
+                    for (Map.Entry<Integer, String> entry : tcIds.entrySet()) {
+                        int idx = entry.getKey();
+                        ObjectNode tc = jsonMapper.createObjectNode();
+                        tc.put("id", entry.getValue());
+                        tc.put("type", "function");
+                        ObjectNode func = tc.putObject("function");
+                        func.put("name", tcNames.getOrDefault(idx, ""));
+                        String args = tcArgs.containsKey(idx) ? tcArgs.get(idx).toString() : "{}";
+                        func.put("arguments", args);
+                        toolCallsArray.add(tc);
+                    }
+                    result.setToolCall(true);
+                    result.setToolCalls(toolCallsArray);
+                } else if ("tool_calls".equals(finishReason)) {
+                    log.warn("流式 finish_reason=tool_calls 但未收到 tool_calls 内容");
+                    result.setToolCall(false);
+                    result.setToolCalls(null);
+                } else {
+                    result.setToolCall(false);
+                    result.setToolCalls(null);
+                }
+
+                ObjectNode assistantMsg = jsonMapper.createObjectNode();
+                assistantMsg.put("role", "assistant");
+                if (result.getContent() != null) {
+                    assistantMsg.put("content", result.getContent());
+                }
+                if (result.getReasoningContent() != null) {
+                    assistantMsg.put("reasoning_content", result.getReasoningContent());
+                }
+                if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().size() > 0) {
+                    assistantMsg.set("tool_calls", result.getToolCalls());
+                }
+                finalMessages.add(assistantMsg);
+                result.setContextMessages(finalMessages);
+                success = true;
+                break;
+
+            } catch (java.net.SocketTimeoutException e) {
+                log.error("Tool Calling 流式请求超时");
+                result.setContent("请求超时，请稍后重试或缩短上下文");
+                break;
+            } catch (java.net.SocketException e) {
+                log.error("Tool Calling 流式连接被重置，attempt={}/{}", attempt + 1, maxRetries + 1, e);
+                if (attempt >= maxRetries) {
+                    result.setContent("网络异常 (连接重置，已重试" + maxRetries + "次): " + e.getMessage());
+                }
+            } catch (IOException e) {
+                log.error("Tool Calling 流式网络 I/O 异常", e);
                 result.setContent("网络异常: " + e.getMessage());
                 break;
             }
