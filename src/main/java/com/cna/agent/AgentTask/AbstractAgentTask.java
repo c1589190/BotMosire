@@ -30,6 +30,9 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     // 展示用编号，LLM 可据此引用特定任务，-1 表示未分配
     protected int displayId = -1;
 
+    // 本任务已激活的工具分组。仅被持有本任务的消费者线程访问，无需同步。
+    protected java.util.Set<String> activatedToolGroups = new java.util.HashSet<>();
+
     public AbstractAgentTask() {
         this.uuid = UUID.randomUUID();
         this.createTime = System.currentTimeMillis();
@@ -123,6 +126,16 @@ public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
     @Override
     public void setDisplayId(int id) {
         this.displayId = id;
+    }
+
+    @Override
+    public java.util.Set<String> getActivatedToolGroups() {
+        return this.activatedToolGroups;
+    }
+
+    @Override
+    public void setActivatedToolGroups(java.util.Set<String> groups) {
+        this.activatedToolGroups = groups;
     }
 
     // 注意：getTaskText() 保持抽象，强制要求具体的子类去实现它

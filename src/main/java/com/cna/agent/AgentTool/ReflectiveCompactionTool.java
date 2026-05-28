@@ -95,6 +95,6 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
 
     @Override
     public boolean isAutoLoad(){
-        return false;
+        return true;
     }
 }

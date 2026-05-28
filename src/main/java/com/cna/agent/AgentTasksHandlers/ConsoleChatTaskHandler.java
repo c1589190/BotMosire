@@ -7,6 +7,7 @@ import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import java.util.Map;
@@ -20,12 +21,19 @@ public class ConsoleChatTaskHandler extends AbstractAgentTaskHandler {
 
     @Override
     protected void appendCustomTools(ArrayNode toolsDefinitionArray) {
-        // 子类专属工具
+        String targetName = "reflective_memory_compaction";
+        for (JsonNode node : toolsDefinitionArray) {
+            if (targetName.equals(node.path("function").path("name").asText())) {
+                return;
+            }
+        }
         toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
     }
 
     @Override
     protected boolean prepareBaseData(DefaultAgentTaskUnit task, Map<String, Object> baseData, LivingLoop engine) {
+        task.getActivatedToolGroups().add("introspect");
+
         // 自动继承了 taskText，只需要加专属的 deep_memories
         baseData.put("deep_memories", LLManager.getDeepMemories(task.getTaskText(), new LLMAdapter(ConfigsManager.EMBEDDING_CONFIG), ConfigsManager.MEMORY_DEPTH));
         return true; // 允许执行

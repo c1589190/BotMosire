@@ -29,7 +29,19 @@ public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
 
     @Override
     public DefaultAgentTaskUnit handleTask(DefaultAgentTaskUnit task, LivingLoop engine, ArrayNode toolsDefinitionArray) {
-        toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
+        // 首轮确保 ReflectiveCompactionTool 可用；后续轮次由分组系统自动注入
+        task.getActivatedToolGroups().add("introspect");
+        String targetName = "reflective_memory_compaction";
+        boolean alreadyPresent = false;
+        for (com.fasterxml.jackson.databind.JsonNode node : toolsDefinitionArray) {
+            if (targetName.equals(node.path("function").path("name").asText())) {
+                alreadyPresent = true;
+                break;
+            }
+        }
+        if (!alreadyPresent) {
+            toolsDefinitionArray.add(new ReflectiveCompactionTool().getToolDefinition());
+        }
 
         UpdateThoughtsTask thoughtsTask = (UpdateThoughtsTask) task;
 

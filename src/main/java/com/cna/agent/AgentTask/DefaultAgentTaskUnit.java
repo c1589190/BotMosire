@@ -41,4 +41,13 @@ public interface DefaultAgentTaskUnit {
     int getDisplayId();
     void setDisplayId(int id);
 
+    // 本任务已激活的工具分组集合（LLM 通过 manage_tool_groups 动态控制）
+    // 任务销毁时自动释放，无需手动清理
+    default java.util.Set<String> getActivatedToolGroups() {
+        return java.util.Collections.emptySet();
+    }
+
+    default void setActivatedToolGroups(java.util.Set<String> groups) {
+        // 默认空实现，子类可覆盖
+    }
 }

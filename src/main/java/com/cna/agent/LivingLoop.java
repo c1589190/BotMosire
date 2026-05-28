@@ -14,6 +14,7 @@ import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
+import com.cna.config.ToolPromptsManager;
 import com.cna.db.FeelingDimensionManager;
 import com.cna.db.FeelingDimensionManager.DimensionScore;
 import com.cna.llm.CallResult;
@@ -320,7 +321,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new GetSleepTimeTool());
         this.registerTool(new GetTaskQueueTool(this));
         this.registerTool(new AdjustTaskPriorityTool(this));
-
+        this.registerTool(new ManageToolGroups(this.largeLLMToolbox));
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
 
@@ -590,9 +591,21 @@ public class LivingLoop implements MosireAPI {
                         log.info("\n[执行总线] 开始处理任务: {}", executingTask.getClass().getSimpleName());
 
                         ArrayNode toolsDefinitionArray = mapper.createArrayNode();
+                        Set<String> addedToolNames = new HashSet<>();
+                        Set<String> activatedGroups = executingTask.getActivatedToolGroups();
+
                         for (DefaultAgentToolUnit tool : new ArrayList<>(largeLLMToolbox.values())) {
-                            if (tool.isAutoLoad()) {
-                                toolsDefinitionArray.add(tool.getToolDefinition());
+                            if (!tool.isAutoLoad()) {
+                                continue;
+                            }
+                            String className = tool.getClass().getSimpleName();
+                            String toolGroup = ToolPromptsManager.getToolGroup(className);
+                            boolean isDefault = ToolPromptsManager.isDefaultGroup(className);
+
+                            if (isDefault || (toolGroup != null && activatedGroups.contains(toolGroup))) {
+                                if (addedToolNames.add(tool.getName())) {
+                                    toolsDefinitionArray.add(tool.getToolDefinition());
+                                }
                             }
                         }
 
@@ -748,6 +761,20 @@ public class LivingLoop implements MosireAPI {
                     }
                     String execResult = targetTool.execute(argsNode);
                     log.info("[EXEC-Engine] 动作反馈: {}", execResult);
+
+                    // 工具组激活/注销（线程安全：直接从 argsNode 读取，不依赖工具实例状态）
+                    if ("manage_tool_groups".equals(functionName)) {
+                        String action = argsNode.path("action").asText("");
+                        String group = argsNode.path("group").asText("");
+                        Set<String> activated = taskUnit.getActivatedToolGroups();
+                        if ("activate".equals(action) && !group.isEmpty()) {
+                            activated.add(group);
+                            log.info("[EXEC-Engine] 任务 {} 激活工具组: {} (当前已激活: {})", currentTaskId, group, activated);
+                        } else if ("deactivate".equals(action) && !group.isEmpty()) {
+                            activated.remove(group);
+                            log.info("[EXEC-Engine] 任务 {} 注销工具组: {} (当前已激活: {})", currentTaskId, group, activated);
+                        }
+                    }
 
                     toolResults.append("调用了工具 [").append(functionName).append("], 返回了 [").append(execResult).append("];\n");
 

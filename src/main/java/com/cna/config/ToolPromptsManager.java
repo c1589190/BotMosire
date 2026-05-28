@@ -57,4 +57,24 @@ public class ToolPromptsManager {
         // ✅ 直接从静态配置中获取文本
         return PROMPTS_PATH_CACHE.getProperty(this.simpleClassName + "." + key, "");
     }
+
+    // ========== 工具分组查询（静态方法，线程安全：只读 PROMPTS_PATH_CACHE） ==========
+
+    /**
+     * 查询指定工具所属的分组名。
+     * @param simpleClassName 工具的简单类名（如 "SendChatMessage"）
+     * @return 分组名，未配置则返回 null
+     */
+    public static String getToolGroup(String simpleClassName) {
+        return PROMPTS_PATH_CACHE.getProperty(simpleClassName + ".ToolGroup", null);
+    }
+
+    /**
+     * 查询指定工具是否标记为默认注入（始终发送给 LLM）。
+     * @param simpleClassName 工具的简单类名
+     * @return true 表示该工具始终注入，无需 LLM 手动激活
+     */
+    public static boolean isDefaultGroup(String simpleClassName) {
+        return "true".equalsIgnoreCase(PROMPTS_PATH_CACHE.getProperty(simpleClassName + ".ToolGroupDefault", "false"));
+    }
 }
