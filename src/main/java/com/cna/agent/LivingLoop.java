@@ -742,12 +742,6 @@ public class LivingLoop implements MosireAPI {
 
             log.info("[EXEC-Engine] 决定采取动作: [{}]", functionName);
 
-            if ("switch_to_advanced_model".equals(functionName)) {
-                log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
-                toolResults.append("（调用了工具switch_to_advanced_model,切换到了更高级的大模型;）\n");
-                continue;
-            }
-
             if ("finish_task".equals(functionName)) {
                 hasFinishTask = true;
             }

@@ -171,6 +171,10 @@ public class LLManager {
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
+                // 在回合开始的干净边界做截断：此刻缓存必为完整的 assistant+tool 配对，
+                // 截断不会留下孤儿 tool 消息（修复 mid-round 截断导致的 API 400）
+                truncateGlobalCacheIfNeeded();
+
                 // 仅在上下文被清空后的首轮注入长期记忆和当前想法
                 // 正常运行期间由 GLOBAL_CACHE 承载任务内上下文
                 boolean needInjection = GLOBAL_CACHE.wasContextCleared;
@@ -221,8 +225,7 @@ public class LLManager {
                     log.info("[LLManager] 全局第 {} 轮思考完成，上下文消息总数: {}",
                             GLOBAL_CACHE.roundCount.get(), GLOBAL_CACHE.messages.size());
 
-                    // 截断检查
-                    truncateGlobalCacheIfNeeded();
+                    // 截断改在下一回合开头进行（保证 assistant+tool 配对完整，避免孤儿 tool 消息）
                 } else {
                     log.error("[LLManager] 全局上下文 LLM 返回 null，缓存不更新");
                     return errorResult("LLM 返回空结果");
@@ -252,7 +255,8 @@ public class LLManager {
             log.info("[LLManager] feedToolResult -> 全局缓存压入工具结果: tool={}, callId={}, 消息总数: {}",
                     toolName, toolCallId, GLOBAL_CACHE.messages.size());
 
-            truncateGlobalCacheIfNeeded();
+            // 不在此处截断：回合中途截断会删掉 assistant 却留下孤儿 tool 消息 → API 400。
+            // 截断统一在下一回合 executeSceneAsyncWithCache 开头进行。
         }
     }
 
