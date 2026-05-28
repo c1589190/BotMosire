@@ -733,6 +733,7 @@ public class LivingLoop implements MosireAPI {
 
 
         StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
+        boolean hasFinishTask = false;
 
         for (JsonNode toolCall : result.getToolCalls()) {
             String functionName = toolCall.path("function").path("name").asText();
@@ -745,6 +746,10 @@ public class LivingLoop implements MosireAPI {
                 log.info("[EXEC-Engine] 收到升维请求，下一轮思考将切换至高级大模型。");
                 toolResults.append("（调用了工具switch_to_advanced_model,切换到了更高级的大模型;）\n");
                 continue;
+            }
+
+            if ("finish_task".equals(functionName)) {
+                hasFinishTask = true;
             }
 
             DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
@@ -797,18 +802,17 @@ public class LivingLoop implements MosireAPI {
                 // 【核心修改】：工具不存在时压入缓存反馈
                 LLManager.feedToolResult(currentTaskId, toolCallId, functionName, notFoundResult);
             }
+        }
 
-            if ("finish_task".equals(functionName)) {
-                log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
-                lastSolvingTask = null;
+        if (hasFinishTask) {
+            log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
+            lastSolvingTask = null;
 
-                MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
 
-                // 【核心修改】：主动销毁该任务完成后的上下文缓存
-                //LLManager.clearTaskCache(currentTaskId);
-                return null; // 直接终结任务
-            }
-
+            // 【核心修改】：主动销毁该任务完成后的上下文缓存
+            //LLManager.clearTaskCache(currentTaskId);
+            return null; // 直接终结任务
         }
 
         // 推进轮数，并检查最大循环限制
