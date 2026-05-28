@@ -370,8 +370,9 @@ public class LLMAdapter {
                 // ---------- SSE 多段聚合：即使 stream=false，某些模型仍可能返回多段 data chunk ----------
                 String cleanedBody = extractFirstValidChunk(responseBody.trim());
                 if (cleanedBody == null || cleanedBody.isEmpty()) {
-                    log.error("无法从 SSE 响应中提取有效 JSON 数据: {}", responseBody);
-                    result.setContent("响应格式异常：无有效数据");
+                    log.error("无法从 SSE 响应中提取有效 JSON 数据。该 API 可能仅支持流式 (stream=true)，当前使用非流式模式。" +
+                            " 响应前 500 字符: {}", responseBody.length() > 500 ? responseBody.substring(0, 500) : responseBody);
+                    result.setContent("响应格式异常：该模型 API 可能不支持非流式调用，请将 llm.brain.stream 设为 true");
                     return result;
                 }
 
@@ -633,11 +634,11 @@ public class LLMAdapter {
                                 lastIdx = idx;
 
                                 String id = tc.path("id").asText(null);
-                                if (id != null) tcIds.put(idx, id);
+                                if (id != null && !id.isEmpty()) tcIds.put(idx, id);
 
                                 JsonNode funcNode = tc.path("function");
                                 String fname = funcNode.path("name").asText(null);
-                                if (fname != null) tcNames.put(idx, fname);
+                                if (fname != null && !fname.isEmpty()) tcNames.put(idx, fname);
 
                                 String args = funcNode.path("arguments").asText(null);
                                 if (args != null && !args.isEmpty()) {
