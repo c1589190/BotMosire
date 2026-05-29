@@ -32,6 +32,7 @@ public class FeelingResonanceAnalyzer {
     private final int expandLayers;
     private final double inflectionSigma;
     private final double dissonanceMinGap;
+    private final double dissonanceAbsoluteThreshold;
     private final int deepMemoryCount;
 
     public FeelingResonanceAnalyzer(FeelingDimensionManager fdm, FeelingHypergraphManager hgm, MemoryManager mm) {
@@ -42,6 +43,7 @@ public class FeelingResonanceAnalyzer {
         this.expandLayers = ConfigsManager.FEELING_HYPERGRAPH_EXPAND_LAYERS;
         this.inflectionSigma = ConfigsManager.FEELING_RESONANCE_INFLECTION_SIGMA;
         this.dissonanceMinGap = ConfigsManager.FEELING_RESONANCE_DISSONANCE_MIN_GAP;
+        this.dissonanceAbsoluteThreshold = ConfigsManager.FEELING_RESONANCE_DISSONANCE_ABSOLUTE_THRESHOLD;
         this.deepMemoryCount = ConfigsManager.FEELING_RESONANCE_DEEP_MEMORY_COUNT;
     }
 
@@ -194,23 +196,24 @@ public class FeelingResonanceAnalyzer {
     // =====================================================
 
     /**
-     * 动态拐点检测算法。
+     * 动态拐点检测算法（双轨制）。
      * 输入已按相似度降序排列的列表，找第一个"陡降"位置。
      *
      * 算法：
-     * - 小样本（<4）：用绝对阈值 0.25，避免统计方法在小样本下失效
-     * - 大样本（≥4）：计算相邻差值的均值+sigma*std 作为动态阈值
-     * - 若所有差值都平稳或低于 minGap，拐点设在末尾（全部不违和）
+     * - 小样本（<4）：直接用绝对阈值，避免统计方法在小样本下失效
+     * - 大样本（≥4）：先尝试均值+sigma*std 动态拐点检测
+     * - 无拐点时 fallback 到绝对阈值：相似度低于阈值的第一个位置即为违和分界线
+     *   这解决了"平滑渐变下降"场景下全部被判为 consonant 的盲区
      */
     int detectInflection(List<DimensionSimilarity> sorted) {
         if (sorted.size() < 2) return sorted.size();
 
-        // 小样本 fallback：统计阈值不可靠，直接用绝对阈值
+        // 小样本：统计阈值不可靠，直接用绝对阈值
         if (sorted.size() < 4) {
             for (int i = 0; i < sorted.size(); i++) {
-                if (sorted.get(i).similarity < 0.25) {
-                    log.debug("[Inflection] 小样本拐点位于 index={}, sim={:.4f} < 0.25",
-                            i, sorted.get(i).similarity);
+                if (sorted.get(i).similarity < dissonanceAbsoluteThreshold) {
+                    log.debug("[Inflection] 小样本拐点位于 index={}, sim={:.4f} < {}",
+                            i, sorted.get(i).similarity, dissonanceAbsoluteThreshold);
                     return i;
                 }
             }
@@ -230,7 +233,7 @@ public class FeelingResonanceAnalyzer {
 
         double threshold = mean + inflectionSigma * std;
 
-        // 找第一个超过阈值且不低于 minGap 的位置
+        // 找第一个超过阈值且不低于 minGap 的位置（陡峭断崖）
         for (int i = 0; i < gaps.length; i++) {
             if (gaps[i] >= threshold && gaps[i] >= dissonanceMinGap) {
                 log.debug("[Inflection] 拐点位于 index={}, gap={:.4f}, threshold={:.4f}",
@@ -239,7 +242,19 @@ public class FeelingResonanceAnalyzer {
             }
         }
 
-        // 无拐点 → 全部不违和
+        // ★ 关键修复：无陡峭断崖时，fallback 到绝对阈值
+        // 解决"相似度平滑下降但首尾差距巨大"的场景
+        // 例如 [0.90, 0.85, 0.80, 0.75, 0.70, 0.45, 0.40]
+        // gaps 全是 ~0.05，无统计拐点，但 0.40 明显违和
+        for (int i = 0; i < sorted.size(); i++) {
+            if (sorted.get(i).similarity < dissonanceAbsoluteThreshold) {
+                log.debug("[Inflection] 无拐点，绝对阈值 fallback 位于 index={}, sim={:.4f} < {}",
+                        i, sorted.get(i).similarity, dissonanceAbsoluteThreshold);
+                return i;
+            }
+        }
+
+        // 全都在阈值之上 → 全部不违和
         return sorted.size();
     }
 
