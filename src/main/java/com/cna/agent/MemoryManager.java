@@ -62,35 +62,34 @@ public class MemoryManager {
     // 功能 1 & 3: 压入记忆 (非阻塞异步折叠)
     // ==========================================
     public void inputCurrentMemorys(List<String> memories) {
+        inputCurrentMemorys(memories, List.of());
+    }
+
+    public void inputCurrentMemorys(List<String> memories, List<String> sources) {
         FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
 
         // 1. 瞬间把记忆落盘，绝不卡顿
         for (String mem : memories) {
-            db.insertCurrentMemory(appendFeelingTags(mem, fdm));
+            db.insertCurrentMemory(appendFeelingTags(mem, fdm), sources);
         }
 
         // 2. 检查是否溢出水位线
         int currentSize = db.getCurrentMemoryCount();
         if (currentSize > (EMB_MEMORY_SIZE + CURRENT_MEMORYS_MAXSIZE)) {
-
             // 3. 【核心异步发射】：试图获取潜意识锁
             if (isConsolidating.compareAndSet(false, true)) {
                 log.info("[MemoryManager] 记忆水位超标 ({}), 唤醒潜意识，在后台开始折叠...", currentSize);
-
-                // 把沉重的总结和向量计算直接扔给后台线程，主线程瞬间 return，继续干活！
                 subconsciousExecutor.submit(() -> {
                     try {
                         consolidateMemory();
                     } catch (Exception e) {
                         log.error("[MemoryManager] 潜意识记忆折叠发生异常", e);
                     } finally {
-                        // 无论成功失败，折叠完必须释放锁，允许下次折叠
                         isConsolidating.set(false);
                         log.info("[MemoryManager] 潜意识折叠完毕，锁已释放。");
                     }
                 });
             } else {
-                // 如果锁被占了（正在折叠），就静悄悄地跳过，反正记忆已经存进 db 了，等下次再折
                 log.debug("[MemoryManager] 潜意识正在忙碌，跳过本次折叠触发。");
             }
         }
@@ -100,6 +99,12 @@ public class MemoryManager {
         List<String> a = new LinkedList<>();
         a.add(memory);
         this.inputCurrentMemorys(a);
+    }
+
+    public void inputCurrentMemory(String memory, List<String> sources){
+        List<String> a = new LinkedList<>();
+        a.add(memory);
+        this.inputCurrentMemorys(a, sources);
     }
 
     /**
@@ -145,12 +150,17 @@ public class MemoryManager {
     }
 
     private void consolidateMemory() {
-        List<String> oldMemories = db.popOldestCurrentMemories(EMB_MEMORY_SIZE);
+        List<MemoryDB.CurrentMemoryEntry> oldMemories = db.popOldestCurrentMemories(EMB_MEMORY_SIZE);
         if (oldMemories.isEmpty()) return;
 
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < oldMemories.size(); i++) {
-            sb.append("[").append(i).append("] ").append(oldMemories.get(i)).append("\n");
+            MemoryDB.CurrentMemoryEntry entry = oldMemories.get(i);
+            sb.append("[").append(i).append("] ").append(entry.content);
+            if (entry.sources != null && !entry.sources.isEmpty()) {
+                sb.append(" [来源: ").append(String.join(", ", entry.sources)).append("]");
+            }
+            sb.append("\n");
         }
 
         Map<String, Object> data = new HashMap<>();
@@ -209,14 +219,31 @@ public class MemoryManager {
                     log.info("[MemoryManager] LLM 使用 Tool 成功返回了 {} 条记忆", pointsNode.size());
 
                     for (JsonNode pointNode : pointsNode) {
-                        String point = pointNode.asText();
+                        String point;
+                        List<String> pointSources = new ArrayList<>();
+
+                        if (pointNode.isObject()) {
+                            // 新格式: { content: "...", sources: [...] }
+                            point = pointNode.path("content").asText();
+                            JsonNode srcNode = pointNode.path("sources");
+                            if (srcNode.isArray()) {
+                                for (JsonNode s : srcNode) {
+                                    String src = s.asText();
+                                    if (src != null && !src.isBlank()) pointSources.add(src);
+                                }
+                            }
+                        } else {
+                            // 兼容旧格式: 纯字符串
+                            point = pointNode.asText();
+                        }
+
                         if (point.isBlank()) continue;
 
                         // 向量化并入库
                         double[] vector = LLManager.getTextVector(point, embLLM);
                         if (vector != null && vector.length > 0) {
-                            db.insertDeepMemory(vector, point);
-                            log.debug("[MemoryManager] 深度记忆存入：{}", point);
+                            db.insertDeepMemory(vector, point, pointSources);
+                            log.debug("[MemoryManager] 深度记忆存入：{} (来源: {})", point, pointSources);
                         }
                     }
                 } else {
@@ -234,26 +261,58 @@ public class MemoryManager {
     // 功能 2: 获取短期记忆
     // ==========================================
     public List<String> getCurrentMemorys(int n) {
-        return db.getLatestCurrentMemories(n);
+        return db.getLatestCurrentMemoryContents(n);
     }
 
-    public List<String> getDeepMemorys(double[] queryVector, int n) {
+    /** 带 ID 和来源的深度记忆条目，供 Prompt 注入和来源追溯使用 */
+    public record DeepMemoryResult(int id, String content, java.util.List<String> sources) {
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("[DM-").append(id).append("] ").append(content);
+            if (sources != null && !sources.isEmpty()) {
+                sb.append(" (来源: ").append(String.join(", ", sources)).append(")");
+            }
+            return sb.toString();
+        }
+
+        /** 仅含 ID 和内容，不含来源标注（用于 Prompt 注入，LLM 通过 DM-N 引用） */
+        public String toPromptLine() {
+            return "[DM-" + id + "] " + content;
+        }
+    }
+
+    /**
+     * 纯语义向量召回（无来源过滤），返回带 ID 的结果。
+     */
+    public List<DeepMemoryResult> getDeepMemoryResults(double[] queryVector, int n) {
+        return getDeepMemoryResults(queryVector, n, null);
+    }
+
+    /**
+     * 来源感知的向量召回：匹配 sourceFilter 的条目获得 boost (×1.5)。
+     * @param queryVector 查询向量
+     * @param n Top-N
+     * @param sourceFilter 来源过滤列表，为 null 或空则不做来源 boost
+     */
+    public List<DeepMemoryResult> getDeepMemoryResults(double[] queryVector, int n, List<String> sourceFilter) {
         List<MemoryDB.DeepMemoryEntry> allMemories = db.getAllDeepMemories();
 
-        // 增加调试日志：看看数据库到底吐出来几条
-        log.info("[MemoryManager] 深度记忆库原始数据量: {}, 准备召回 Top: {}", allMemories.size(), n);
+        log.info("[MemoryManager] 深度记忆库原始数据量: {}, 准备召回 Top: {}, sourceFilter: {}",
+                allMemories.size(), n, sourceFilter);
 
         if (allMemories.isEmpty()) {
             log.warn("[MemoryManager] 警告：深度记忆库目前是空的。");
             return new ArrayList<>();
         }
 
+        boolean hasFilter = sourceFilter != null && !sourceFilter.isEmpty();
+
         PriorityQueue<SimilarityRecord> pq = new PriorityQueue<>(
                 (a, b) -> Double.compare(b.similarity, a.similarity)
         );
 
         for (MemoryDB.DeepMemoryEntry entry : allMemories) {
-            // 检查向量维度是否一致
             if (entry.vector == null || entry.vector.length != queryVector.length) {
                 log.error("[MemoryManager] 维度不匹配！库内维度: {}, 查询维度: {}",
                         (entry.vector != null ? entry.vector.length : "null"), queryVector.length);
@@ -261,16 +320,25 @@ public class MemoryManager {
             }
 
             double sim = cosineSimilarity(queryVector, entry.vector);
-            pq.offer(new SimilarityRecord(entry.content, sim));
+
+            // 来源 boost: 匹配则 ×1.5
+            if (hasFilter && entry.sources != null) {
+                for (String filterSrc : sourceFilter) {
+                    if (entry.sources.contains(filterSrc)) {
+                        sim *= 1.5;
+                        break; // 任一来源匹配即 boost，不重复乘
+                    }
+                }
+            }
+
+            pq.offer(new SimilarityRecord(entry.id, entry.content, entry.sources, sim));
         }
 
-        List<String> result = new ArrayList<>();
-        // 这里确保即使 pq 里的数量不足 n，也会返回全部
+        List<DeepMemoryResult> result = new ArrayList<>();
         while (!pq.isEmpty() && result.size() < n) {
             SimilarityRecord record = pq.poll();
-            // 建议增加一个极低的相似度过滤（可选），防止完全无关的内容干扰模型
             if (record.similarity > 0.1) {
-                result.add(record.content);
+                result.add(new DeepMemoryResult(record.id, record.content, record.sources));
             }
         }
 
@@ -278,12 +346,40 @@ public class MemoryManager {
         return result;
     }
 
+    /**
+     * 兼容旧接口：仅返回内容字符串列表（无 ID、无来源）。
+     */
+    @Deprecated
+    public List<String> getDeepMemorys(double[] queryVector, int n) {
+        List<DeepMemoryResult> results = getDeepMemoryResults(queryVector, n, null);
+        List<String> contents = new ArrayList<>();
+        for (DeepMemoryResult r : results) {
+            contents.add(r.content);
+        }
+        return contents;
+    }
+
+    /**
+     * 带来源过滤的旧接口兼容。
+     */
+    public List<String> getDeepMemorys(double[] queryVector, int n, List<String> sourceFilter) {
+        List<DeepMemoryResult> results = getDeepMemoryResults(queryVector, n, sourceFilter);
+        List<String> contents = new ArrayList<>();
+        for (DeepMemoryResult r : results) {
+            contents.add(r.content);
+        }
+        return contents;
+    }
+
     // ==========================================
     // 功能 5: 文本直搜深度记忆 (桥接方法供 Tool 调用)
     // ==========================================
     public List<String> searchDeepMemoryByText(String queryText, int n) {
+        return searchDeepMemoryByText(queryText, n, null);
+    }
+
+    public List<String> searchDeepMemoryByText(String queryText, int n, List<String> sourceFilter) {
         log.info("[MemoryManager] 正在将查询词向量化: {}", queryText);
-        // 调用 Embedding 模型将搜索词转化为向量
         double[] queryVector = LLManager.getTextVector(queryText, embLLM);
 
         if (queryVector == null || queryVector.length == 0) {
@@ -291,8 +387,31 @@ public class MemoryManager {
             return new ArrayList<>();
         }
 
-        // 调用你已有的向量召回方法
-        return getDeepMemorys(queryVector, n);
+        return getDeepMemorys(queryVector, n, sourceFilter);
+    }
+
+    /** 返回带 ID 的结果列表（供 LLManager 格式化注入 Prompt） */
+    public List<DeepMemoryResult> searchDeepMemoryResultsByText(String queryText, int n, List<String> sourceFilter) {
+        log.info("[MemoryManager] 正在将查询词向量化: {}", queryText);
+        double[] queryVector = LLManager.getTextVector(queryText, embLLM);
+
+        if (queryVector == null || queryVector.length == 0) {
+            log.error("[MemoryManager] 查询词向量化失败！");
+            return new ArrayList<>();
+        }
+
+        return getDeepMemoryResults(queryVector, n, sourceFilter);
+    }
+
+    /**
+     * 将任务来源信息追加到指定深度记忆中（LLM 标记为"有用"的记忆）。
+     */
+    public void enrichDeepMemorySources(List<Integer> ids, List<String> taskSources) {
+        if (ids == null || ids.isEmpty() || taskSources == null || taskSources.isEmpty()) return;
+        for (int id : ids) {
+            db.enrichDeepMemorySources(id, taskSources);
+        }
+        log.info("[MemoryManager] 已为 {} 条深度记忆追加来源 {}", ids.size(), taskSources);
     }
 
     // 余弦相似度数学计算
@@ -320,10 +439,14 @@ public class MemoryManager {
     }
 
     private static class SimilarityRecord {
+        int id;
         String content;
+        List<String> sources;
         double similarity;
-        SimilarityRecord(String content, double similarity) {
+        SimilarityRecord(int id, String content, List<String> sources, double similarity) {
+            this.id = id;
             this.content = content;
+            this.sources = sources;
             this.similarity = similarity;
         }
     }
@@ -458,18 +581,44 @@ public class MemoryManager {
 
         ObjectNode function = mapper.createObjectNode();
         function.put("name", "save_memory_points");
-        function.put("description", "将提炼后的多个独立记忆点保存到长期记忆库");
+        function.put("description", "将提炼后的多个独立记忆点保存到长期记忆库，每个记忆点需标注来源");
 
         // 定义 parameters 的 JSON Schema
         ObjectNode parameters = mapper.createObjectNode();
         parameters.put("type", "object");
 
         ObjectNode properties = mapper.createObjectNode();
+
+        // points: array of objects { content: string, sources: string[] }
         ObjectNode points = mapper.createObjectNode();
         points.put("type", "array");
-        points.put("description", "提炼出的独立记忆点列表");
+        points.put("description", "提炼出的独立记忆点列表，每项为对象");
+
         ObjectNode items = mapper.createObjectNode();
-        items.put("type", "string");
+        items.put("type", "object");
+
+        ObjectNode itemProps = mapper.createObjectNode();
+
+        ObjectNode contentProp = mapper.createObjectNode();
+        contentProp.put("type", "string");
+        contentProp.put("description", "提炼出的独立记忆点文本");
+        itemProps.set("content", contentProp);
+
+        ObjectNode sourcesProp = mapper.createObjectNode();
+        sourcesProp.put("type", "array");
+        sourcesProp.put("description", "该记忆点的来源标识符列表（如 qqid:xxx, qq_group:xxx, webaddress_xxx, system:internal）。无法确定时填 [\"unknown\"]，不能为空数组");
+        ObjectNode sourcesItems = mapper.createObjectNode();
+        sourcesItems.put("type", "string");
+        sourcesProp.set("items", sourcesItems);
+        itemProps.set("sources", sourcesProp);
+
+        items.set("properties", itemProps);
+
+        ArrayNode itemRequired = mapper.createArrayNode();
+        itemRequired.add("content");
+        itemRequired.add("sources");
+        items.set("required", itemRequired);
+
         points.set("items", items);
 
         properties.set("points", points);

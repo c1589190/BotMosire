@@ -4,6 +4,10 @@ import com.cna.Utils;
 import com.cna.config.ToolPromptsManager;
 import com.cna.db.FeelingDimensionManager;
 import com.cna.db.MDManager;
+import com.cna.agent.FeelingDissonanceResolver;
+import com.cna.agent.FeelingResonanceAnalyzer;
+import com.cna.agent.MemoryManager;
+import com.cna.db.MemoryDB;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -17,6 +21,17 @@ import java.util.List;
 public class FinishTask implements DefaultAgentToolUnit {
 
     private static final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * 当前正在执行的任务的来源标识符，由 LivingLoop 在工具执行前注入。
+     */
+    public static final ThreadLocal<List<String>> CURRENT_TASK_SOURCES = new ThreadLocal<>();
+
+    /**
+     * 当前任务的谐振分析结果，由 prepareBaseData 注入，供 finish_task 违和结算使用。
+     */
+    public static final ThreadLocal<com.cna.agent.FeelingResonanceAnalyzer.ResonanceAnalysisResult>
+            CURRENT_RESONANCE_RESULT = new ThreadLocal<>();
 
     @Override
     public String getName() {
@@ -33,7 +48,7 @@ public class FinishTask implements DefaultAgentToolUnit {
         ObjectNode function = toolDef.putObject("function");
         function.put("name", getName());
         function.put("description",
-                p.getToolDescription());
+                p.getToolDescription() + "。当本轮使用了 query_deep_memory 并找到了有帮助的记忆时，请在 useful_memory_ids 中列出那些 [DM-N] 编号，系统会将其与当前任务来源关联，方便未来更好地定位这些记忆。");
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -67,6 +82,31 @@ public class FinishTask implements DefaultAgentToolUnit {
         itemRequired.add("name");
         itemRequired.add("is_positive");
 
+        // 有用的深层记忆 ID 列表
+        ObjectNode usefulIdsProp = properties.putObject("useful_memory_ids");
+        usefulIdsProp.put("type", "array");
+        usefulIdsProp.put("description", "可选：本轮对话中觉得有用、帮你更好理解/回复的深度记忆编号列表（即 [DM-N] 中的 N），填写整数。如果没有用到深层记忆或不觉得有帮助，传空数组 []");
+        ObjectNode idItems = usefulIdsProp.putObject("items");
+        idItems.put("type", "integer");
+
+        // 违和感更新
+        ObjectNode dissonanceProp = properties.putObject("dissonance_updates");
+        dissonanceProp.put("type", "array");
+        dissonanceProp.put("description", "可选：对违和感觉的分析更新列表。每项包含 dim_id(维度ID)、new_notes(追加的分析)、resolved(是否已解决)、resolution_concept(解决后新建的概念)、is_positive(新概念极性)");
+        ObjectNode dissItems = dissonanceProp.putObject("items");
+        dissItems.put("type", "object");
+        ObjectNode dissItemProps = dissItems.putObject("properties");
+        ObjectNode dimIdProp = dissItemProps.putObject("dim_id");
+        dimIdProp.put("type", "integer");
+        ObjectNode notesProp = dissItemProps.putObject("new_notes");
+        notesProp.put("type", "string");
+        ObjectNode resolvedProp = dissItemProps.putObject("resolved");
+        resolvedProp.put("type", "boolean");
+        ObjectNode conceptProp = dissItemProps.putObject("resolution_concept");
+        conceptProp.put("type", "string");
+        ObjectNode posProp = dissItemProps.putObject("is_positive");
+        posProp.put("type", "boolean");
+
         ArrayNode required = params.putArray("required");
         required.add("summary");
         required.add("concepts");
@@ -87,6 +127,8 @@ public class FinishTask implements DefaultAgentToolUnit {
             FeelingDimensionManager fdManager = FeelingDimensionManager.getInstance();
             if (fdManager == null) {
                 log.warn("[FinishTask] FeelingDimensionManager 未初始化，概念反馈丢失");
+                // 仍然处理 useful_memory_ids
+                processUsefulMemoryIds(arguments);
                 return "任务已完成。总结：" + summary;
             }
 
@@ -120,10 +162,111 @@ public class FinishTask implements DefaultAgentToolUnit {
             String contentToAppend = String.format("\n\n### [%s]\n%s", Utils.getNowPrecise(), summary);
             MDManager.appendAsync("thoughts.md", contentToAppend);
 
-            return "任务已完成并提交反馈。总结：" + summary;
+            // 处理 LLM 标记为"有用"的深度记忆
+            int enrichedCount = processUsefulMemoryIds(arguments);
+
+            // 【新增】处理违和感更新
+            String dissonanceResult = processDissonanceUpdates(arguments);
+
+            StringBuilder resultMsg = new StringBuilder("任务已完成并提交反馈。总结：" + summary);
+            if (enrichedCount > 0) {
+                resultMsg.append("，已将 ").append(enrichedCount).append(" 条深度记忆与当前来源关联。");
+            }
+            if (!dissonanceResult.isEmpty()) {
+                resultMsg.append(" ").append(dissonanceResult);
+            }
+            return resultMsg.toString();
         } catch (Exception e) {
             log.error("[FinishTask] 执行异常", e);
             return "任务完成，但反馈记录失败：" + e.getMessage();
+        }
+    }
+
+    /**
+     * 解析 useful_memory_ids 参数，并调用 MemoryManager 将当前任务来源追加到对应深度记忆中。
+     * @return 成功关联的记忆条数
+     */
+    private int processUsefulMemoryIds(JsonNode arguments) {
+        try {
+            JsonNode idsNode = arguments.path("useful_memory_ids");
+            if (idsNode.isMissingNode() || !idsNode.isArray() || idsNode.isEmpty()) {
+                return 0;
+            }
+
+            List<Integer> ids = new ArrayList<>();
+            for (JsonNode n : idsNode) {
+                if (n.isInt()) {
+                    ids.add(n.asInt());
+                }
+            }
+
+            if (ids.isEmpty()) return 0;
+
+            List<String> taskSources = CURRENT_TASK_SOURCES.get();
+            if (taskSources == null || taskSources.isEmpty()) {
+                log.info("[FinishTask] LLM 标记了 {} 条有用记忆 {}，但当前任务无来源信息可追加", ids.size(), ids);
+                return 0;
+            }
+
+            MemoryManager.getInstance().enrichDeepMemorySources(ids, taskSources);
+            log.info("[FinishTask] LLM 标记了 {} 条有用记忆 {}，已追加来源 {}", ids.size(), ids, taskSources);
+            return ids.size();
+        } catch (Exception e) {
+            log.error("[FinishTask] 处理 useful_memory_ids 失败", e);
+            return 0;
+        }
+    }
+
+    /**
+     * 解析 dissonance_updates 参数，调用 FeelingDissonanceResolver 结算违和。
+     */
+    private String processDissonanceUpdates(JsonNode arguments) {
+        try {
+            JsonNode dissNode = arguments.path("dissonance_updates");
+            if (dissNode.isMissingNode() || !dissNode.isArray() || dissNode.isEmpty()) {
+                return "";
+            }
+
+            List<FeelingDissonanceResolver.DissonanceUpdate> updates = new ArrayList<>();
+            for (JsonNode item : dissNode) {
+                int dimId = item.path("dim_id").asInt(-1);
+                if (dimId < 0) continue;
+                String newNotes = item.path("new_notes").asText("");
+                boolean resolved = item.path("resolved").asBoolean(false);
+                String resolutionConcept = item.path("resolution_concept").asText("");
+                boolean isPositive = item.path("is_positive").asBoolean(true);
+                updates.add(new FeelingDissonanceResolver.DissonanceUpdate(
+                        dimId, newNotes, resolved, resolutionConcept, isPositive));
+            }
+
+            if (updates.isEmpty()) return "";
+
+            // 获取谐振分析结果中的不违和维度
+            com.cna.agent.FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance =
+                    CURRENT_RESONANCE_RESULT.get();
+            List<Integer> consonantDimIds = new java.util.ArrayList<>();
+            java.util.Set<Integer> allInvolved = new java.util.LinkedHashSet<>();
+            if (resonance != null && resonance.groups != null) {
+                for (var g : resonance.groups) {
+                    for (var m : g.getConsonant()) consonantDimIds.add(m.dimId);
+                }
+                allInvolved = resonance.allInvolvedDimIds;
+            }
+
+            com.cna.db.FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
+            com.cna.db.FeelingHypergraphManager hgm = com.cna.db.FeelingHypergraphManager.getInstance();
+            MemoryDB db = new MemoryDB();
+            FeelingDissonanceResolver resolver = new FeelingDissonanceResolver(
+                    fdm, hgm, db,
+                    new com.cna.llm.LLMAdapter(com.cna.config.ConfigsManager.EMBEDDING_CONFIG));
+
+            String result = resolver.processDissonanceUpdates(updates, consonantDimIds, allInvolved);
+            db.shutdown(); // 释放临时连接
+            log.info("[FinishTask] {}", result);
+            return result;
+        } catch (Exception e) {
+            log.error("[FinishTask] 处理 dissonance_updates 失败", e);
+            return "";
         }
     }
 

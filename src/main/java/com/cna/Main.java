@@ -52,6 +52,7 @@ public class Main {
 
         // 必须在 ConfigsLoader.loadAll() 之后初始化，否则 EMBEDDING_CONFIG / DB_URL 还是 null
         FeelingDimensionManager.init(new MemoryDB());
+        com.cna.db.FeelingHypergraphManager.init(new com.cna.db.MemoryDB());
 
         workspaceManager.initWebsite(); // 确保 website 目录和初始 index.html 存在
         // 去掉了你多敲的那个点，并保存了实例

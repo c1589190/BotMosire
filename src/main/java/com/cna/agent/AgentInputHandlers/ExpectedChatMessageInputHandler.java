@@ -58,7 +58,7 @@ public class ExpectedChatMessageInputHandler extends ChatMessageInputHandler {
 
                 List<String> l = new LinkedList<>();
                 l.add("主动等待的目标 [ " + senderRole + " ] 终于发消息了: [ " + text + " ]，预定任务开始催熟。");
-                MemoryManager.getInstance().inputCurrentMemorys(l);
+                MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(chatInput));
             } else {
                 normalInputs.add(chatInput);
             }

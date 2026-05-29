@@ -69,13 +69,51 @@ public class MemoryDB {
                 "hit_weight REAL DEFAULT 1.0, " +
                 "trigger_count INTEGER DEFAULT 0)";
 
+        // 感觉超图边表
+        String createHypergraphSql = "CREATE TABLE IF NOT EXISTS Feeling_Hypergraph (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                "source_dim_id INTEGER NOT NULL, " +
+                "target_dim_id INTEGER NOT NULL, " +
+                "weight REAL DEFAULT 1.0, " +
+                "relation_type TEXT DEFAULT 'associated', " +
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
+                "UNIQUE(source_dim_id, target_dim_id))";
+
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute(createCurrentSql);
             stmt.execute(createDeepSql);
             stmt.execute(createFeelingSql);
+            stmt.execute(createHypergraphSql);
         } catch (SQLException e) {
             log.error("初始化记忆数据库失败", e);
+        }
+
+        // 【保险措施】: 为已有但缺列的表追加列（既往不咎）
+        ensureColumn("Current_Memorys", "sources", "TEXT DEFAULT '[]'");
+        ensureColumn("Deep_Memorys", "sources", "TEXT DEFAULT '[]'");
+        ensureColumn("Feeling_Dimensions", "status", "TEXT DEFAULT 'stable'");
+        ensureColumn("Feeling_Dimensions", "llm_notes", "TEXT DEFAULT ''");
+    }
+
+    /**
+     * 【保险措施】检测表中是否已有某列，没有则 ALTER TABLE ADD COLUMN。
+     * 适用于所有表的增量迁移，旧数据自动填充 DEFAULT 值。
+     */
+    private void ensureColumn(String table, String column, String definition) {
+        try (Connection conn = dataSource.getConnection()) {
+            java.sql.DatabaseMetaData meta = conn.getMetaData();
+            try (java.sql.ResultSet rs = meta.getColumns(null, null, table, column)) {
+                if (!rs.next()) {
+                    String sql = "ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition;
+                    try (Statement stmt = conn.createStatement()) {
+                        stmt.execute(sql);
+                        log.info("[MemoryDB] 表 {} 已追加列 {} (定义: {})", table, column, definition);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryDB] 检测/追加列 {}.{} 失败（可能已存在或权限不足）: {}", table, column, e.getMessage());
         }
     }
 
@@ -84,12 +122,17 @@ public class MemoryDB {
     // ==========================================
 
     public void insertCurrentMemory(String content) {
-        String sql = "INSERT INTO Current_Memorys (content) VALUES (?)";
+        insertCurrentMemory(content, java.util.List.of());
+    }
+
+    public void insertCurrentMemory(String content, java.util.List<String> sources) {
+        String sql = "INSERT INTO Current_Memorys (content, sources) VALUES (?, ?)";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, content);
+            pstmt.setString(2, mapper.writeValueAsString(sources != null ? sources : java.util.List.of()));
             pstmt.executeUpdate();
-        } catch (SQLException e) {
+        } catch (SQLException | JsonProcessingException e) {
             log.error("插入短期记忆失败", e);
         }
     }
@@ -106,15 +149,31 @@ public class MemoryDB {
         return 0;
     }
 
-    public List<String> getLatestCurrentMemories(int n) {
-        List<String> result = new ArrayList<>();
-        String sql = "SELECT content FROM Current_Memorys ORDER BY id DESC LIMIT ?";
+    public static class CurrentMemoryEntry {
+        public final int id;
+        public final String content;
+        public final java.util.List<String> sources;
+
+        public CurrentMemoryEntry(int id, String content, java.util.List<String> sources) {
+            this.id = id;
+            this.content = content;
+            this.sources = sources;
+        }
+    }
+
+    public List<CurrentMemoryEntry> getLatestCurrentMemories(int n) {
+        List<CurrentMemoryEntry> result = new ArrayList<>();
+        String sql = "SELECT id, content, sources FROM Current_Memorys ORDER BY id DESC LIMIT ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, n);
             ResultSet rs = pstmt.executeQuery();
             while (rs.next()) {
-                result.add(0, rs.getString("content"));
+                result.add(0, new CurrentMemoryEntry(
+                        rs.getInt("id"),
+                        rs.getString("content"),
+                        parseSources(rs.getString("sources"))
+                ));
             }
         } catch (SQLException e) {
             log.error("获取最新短期记忆失败", e);
@@ -122,18 +181,34 @@ public class MemoryDB {
         return result;
     }
 
-    public List<String> popOldestCurrentMemories(int n) {
+    /**
+     * 兼容旧调用：只返回内容字符串列表
+     */
+    public List<String> getLatestCurrentMemoryContents(int n) {
         List<String> result = new ArrayList<>();
+        for (CurrentMemoryEntry e : getLatestCurrentMemories(n)) {
+            result.add(e.content);
+        }
+        return result;
+    }
+
+    public List<CurrentMemoryEntry> popOldestCurrentMemories(int n) {
+        List<CurrentMemoryEntry> result = new ArrayList<>();
         List<Integer> idsToDelete = new ArrayList<>();
-        String selectSql = "SELECT id, content FROM Current_Memorys ORDER BY id ASC LIMIT ?";
+        String selectSql = "SELECT id, content, sources FROM Current_Memorys ORDER BY id ASC LIMIT ?";
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement selectStmt = conn.prepareStatement(selectSql)) {
             selectStmt.setInt(1, n);
             ResultSet rs = selectStmt.executeQuery();
             while (rs.next()) {
-                idsToDelete.add(rs.getInt("id"));
-                result.add(rs.getString("content"));
+                int id = rs.getInt("id");
+                idsToDelete.add(id);
+                result.add(new CurrentMemoryEntry(
+                        id,
+                        rs.getString("content"),
+                        parseSources(rs.getString("sources"))
+                ));
             }
 
             if (!idsToDelete.isEmpty()) {
@@ -160,11 +235,16 @@ public class MemoryDB {
     }
 
     public void insertDeepMemory(double[] vector, String content) {
-        String sql = "INSERT INTO Deep_Memorys (vector_json, content) VALUES (?, ?)";
+        insertDeepMemory(vector, content, java.util.List.of());
+    }
+
+    public void insertDeepMemory(double[] vector, String content, java.util.List<String> sources) {
+        String sql = "INSERT INTO Deep_Memorys (vector_json, content, sources) VALUES (?, ?, ?)";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, mapper.writeValueAsString(vector));
             pstmt.setString(2, content);
+            pstmt.setString(3, mapper.writeValueAsString(sources != null ? sources : java.util.List.of()));
             pstmt.executeUpdate();
         } catch (SQLException | JsonProcessingException e) {
             log.error("插入长期深度记忆失败", e);
@@ -173,7 +253,7 @@ public class MemoryDB {
 
     public List<DeepMemoryEntry> getAllDeepMemories() {
         List<DeepMemoryEntry> result = new ArrayList<>();
-        String sql = "SELECT id, vector_json, content FROM Deep_Memorys";
+        String sql = "SELECT id, vector_json, content, sources FROM Deep_Memorys";
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -181,7 +261,8 @@ public class MemoryDB {
                 int id = rs.getInt("id");
                 String content = rs.getString("content");
                 double[] vector = mapper.readValue(rs.getString("vector_json"), double[].class);
-                result.add(new DeepMemoryEntry(id, vector, content));
+                java.util.List<String> sources = parseSources(rs.getString("sources"));
+                result.add(new DeepMemoryEntry(id, vector, content, sources));
             }
         } catch (Exception e) {
             log.error("获取全量深度记忆失败", e);
@@ -193,11 +274,68 @@ public class MemoryDB {
         public final int id;
         public final double[] vector;
         public final String content;
+        public final java.util.List<String> sources;
 
-        public DeepMemoryEntry(int id, double[] vector, String content) {
+        public DeepMemoryEntry(int id, double[] vector, String content, java.util.List<String> sources) {
             this.id = id;
             this.vector = vector;
             this.content = content;
+            this.sources = sources;
+        }
+    }
+
+    /**
+     * 解析 sources JSON 字符串为 List，容错处理旧数据中的 null / 空串 / 解析异常。
+     */
+    private java.util.List<String> parseSources(String sourcesJson) {
+        if (sourcesJson == null || sourcesJson.isBlank()) {
+            return new ArrayList<>();
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.List<String> list = mapper.readValue(sourcesJson, java.util.List.class);
+            return list != null ? list : new ArrayList<>();
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 将新的来源标识符合并到指定深度记忆的 sources 中（去重追加）。
+     * @param id 深度记忆 ID
+     * @param newSources 要追加的来源列表
+     */
+    public void enrichDeepMemorySources(int id, java.util.List<String> newSources) {
+        if (newSources == null || newSources.isEmpty()) return;
+
+        // 先读取当前 sources
+        String selectSql = "SELECT sources FROM Deep_Memorys WHERE id = ?";
+        String updateSql = "UPDATE Deep_Memorys SET sources = ? WHERE id = ?";
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement selectStmt = conn.prepareStatement(selectSql)) {
+            selectStmt.setInt(1, id);
+            ResultSet rs = selectStmt.executeQuery();
+            if (rs.next()) {
+                java.util.List<String> existing = parseSources(rs.getString("sources"));
+                boolean changed = false;
+                for (String s : newSources) {
+                    if (s != null && !s.isBlank() && !existing.contains(s)) {
+                        existing.add(s);
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                        updateStmt.setString(1, mapper.writeValueAsString(existing));
+                        updateStmt.setInt(2, id);
+                        updateStmt.executeUpdate();
+                        log.info("[MemoryDB] 深度记忆 id={} 来源已丰富: {}", id, existing);
+                    }
+                }
+            }
+        } catch (SQLException | JsonProcessingException e) {
+            log.error("丰富深度记忆来源失败 id={}", id, e);
         }
     }
 
@@ -211,14 +349,26 @@ public class MemoryDB {
         public final double[] vector;
         public final double hitWeight;   // 留作他用的额外乘区/标记
         public final int triggerCount;   // 现在的绝对主力：充当 active_count
+        public final String status;      // stable / dissonant / resolving
+        public final String llmNotes;    // LLM 迭代分析记录
 
         public FeelingDimension(int id, String concept, double[] vector, double hitWeight, int triggerCount) {
+            this(id, concept, vector, hitWeight, triggerCount, "stable", "");
+        }
+
+        public FeelingDimension(int id, String concept, double[] vector, double hitWeight, int triggerCount,
+                                String status, String llmNotes) {
             this.id = id;
             this.concept = concept;
             this.vector = vector;
             this.hitWeight = hitWeight;
             this.triggerCount = triggerCount;
+            this.status = status != null ? status : "stable";
+            this.llmNotes = llmNotes != null ? llmNotes : "";
         }
+
+        /** 是否为违和感（未解决） */
+        public boolean isDissonant() { return "dissonant".equals(status); }
     }
 
     /**
@@ -286,7 +436,7 @@ public class MemoryDB {
      */
     public List<FeelingDimension> getAllFeelingDimensionsSafe(java.util.function.Function<String, double[]> embedder) {
         List<FeelingDimension> result = new ArrayList<>();
-        String selectSql = "SELECT id, concept, vector_json, hit_weight, trigger_count FROM Feeling_Dimensions";
+        String selectSql = "SELECT id, concept, vector_json, hit_weight, trigger_count, status, llm_notes FROM Feeling_Dimensions";
         int expectedDim = -1;
 
         try (Connection conn = dataSource.getConnection();
@@ -299,6 +449,8 @@ public class MemoryDB {
                 String vectorJson = rs.getString("vector_json");
                 double hitWeight = rs.getDouble("hit_weight");
                 int triggerCount = rs.getInt("trigger_count");
+                String status = rs.getString("status");
+                String llmNotes = rs.getString("llm_notes");
                 double[] vector = null;
 
                 // 1. 尝试解析已有向量
@@ -360,7 +512,7 @@ public class MemoryDB {
                 }
 
                 // 3. 现在 vector 一定非 null，加入结果集
-                result.add(new FeelingDimension(id, concept, vector, hitWeight, triggerCount));
+                result.add(new FeelingDimension(id, concept, vector, hitWeight, triggerCount, status, llmNotes));
             }
         } catch (SQLException e) {
             log.error("[MemoryDB] 获取感觉维度时发生数据库错误", e);
@@ -387,7 +539,7 @@ public class MemoryDB {
     @Deprecated
     public List<FeelingDimension> getAllFeelingDimensions() {
         List<FeelingDimension> result = new ArrayList<>();
-        String sql = "SELECT id, concept, vector_json, hit_weight, trigger_count FROM Feeling_Dimensions";
+        String sql = "SELECT id, concept, vector_json, hit_weight, trigger_count, status, llm_notes FROM Feeling_Dimensions";
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -398,7 +550,9 @@ public class MemoryDB {
                         rs.getString("concept"),
                         vector,
                         rs.getDouble("hit_weight"),
-                        rs.getInt("trigger_count")
+                        rs.getInt("trigger_count"),
+                        rs.getString("status"),
+                        rs.getString("llm_notes")
                 ));
             }
         } catch (Exception e) {
@@ -447,5 +601,168 @@ public class MemoryDB {
         } catch (SQLException e) {
             log.error("[MemoryDB] 执行全局 trigger_count 衰减失败", e);
         }
+    }
+
+    /**
+     * 更新感觉维度的 status 和 llm_notes（违和迭代分析入口）。
+     */
+    public void updateDimensionStatusAndNotes(int id, String status, String llmNotes) {
+        String sql = "UPDATE Feeling_Dimensions SET status = ?, llm_notes = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, status);
+            pstmt.setString(2, llmNotes);
+            pstmt.setInt(3, id);
+            pstmt.executeUpdate();
+            log.info("[MemoryDB] 感觉维度 id={} 状态更新: status={}", id, status);
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 更新感觉维度状态失败 id={}", id, e);
+        }
+    }
+
+    // ==========================================
+    // 感觉超图 (Feeling_Hypergraph) CRUD
+    // ==========================================
+
+    public static class HypergraphEdge {
+        public final int id;
+        public final int sourceDimId;
+        public final int targetDimId;
+        public final double weight;
+        public final String relationType;
+
+        public HypergraphEdge(int id, int sourceDimId, int targetDimId, double weight, String relationType) {
+            this.id = id;
+            this.sourceDimId = sourceDimId;
+            this.targetDimId = targetDimId;
+            this.weight = weight;
+            this.relationType = relationType;
+        }
+    }
+
+    /**
+     * 插入或加权更新超图边。已存在则 weight += weightInc 且 relationType 更新。
+     */
+    public void upsertHypergraphEdge(int srcId, int tgtId, String relationType, double weightInc) {
+        String sql = "INSERT INTO Feeling_Hypergraph (source_dim_id, target_dim_id, weight, relation_type) " +
+                "VALUES (?, ?, ?, ?) " +
+                "ON CONFLICT(source_dim_id, target_dim_id) DO UPDATE SET " +
+                "weight = weight + ?, relation_type = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, srcId);
+            pstmt.setInt(2, tgtId);
+            pstmt.setDouble(3, weightInc);
+            pstmt.setString(4, relationType);
+            pstmt.setDouble(5, weightInc);
+            pstmt.setString(6, relationType);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("[MemoryDB] upsert 超图边失败 src={} tgt={}", srcId, tgtId, e);
+        }
+    }
+
+    /**
+     * 查询所有超图边。
+     */
+    public List<HypergraphEdge> getAllHypergraphEdges() {
+        List<HypergraphEdge> result = new ArrayList<>();
+        String sql = "SELECT id, source_dim_id, target_dim_id, weight, relation_type FROM Feeling_Hypergraph";
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                result.add(new HypergraphEdge(
+                        rs.getInt("id"), rs.getInt("source_dim_id"), rs.getInt("target_dim_id"),
+                        rs.getDouble("weight"), rs.getString("relation_type")));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 获取超图边失败", e);
+        }
+        return result;
+    }
+
+    /**
+     * 获取从指定维度出发的所有邻接边（出边）。
+     */
+    public List<HypergraphEdge> getEdgesFrom(int dimId) {
+        List<HypergraphEdge> result = new ArrayList<>();
+        String sql = "SELECT id, source_dim_id, target_dim_id, weight, relation_type FROM Feeling_Hypergraph " +
+                "WHERE source_dim_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, dimId);
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                result.add(new HypergraphEdge(
+                        rs.getInt("id"), rs.getInt("source_dim_id"), rs.getInt("target_dim_id"),
+                        rs.getDouble("weight"), rs.getString("relation_type")));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 获取超图出边失败 dimId={}", dimId, e);
+        }
+        return result;
+    }
+
+    /**
+     * 获取与 target 相关的所有入边。
+     */
+    public List<HypergraphEdge> getEdgesTo(int dimId) {
+        List<HypergraphEdge> result = new ArrayList<>();
+        String sql = "SELECT id, source_dim_id, target_dim_id, weight, relation_type FROM Feeling_Hypergraph " +
+                "WHERE target_dim_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, dimId);
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                result.add(new HypergraphEdge(
+                        rs.getInt("id"), rs.getInt("source_dim_id"), rs.getInt("target_dim_id"),
+                        rs.getDouble("weight"), rs.getString("relation_type")));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 获取超图入边失败 dimId={}", dimId, e);
+        }
+        return result;
+    }
+
+    /**
+     * 对给定的一组维度 ID，找到在超图中同时连接其中多个维度的中间节点（枢纽）。
+     * 返回每个候选节点及其连通的输入维度数量。
+     */
+    public java.util.Map<Integer, Integer> findHubNodes(List<Integer> dimIds) {
+        java.util.Map<Integer, Integer> hubScores = new java.util.LinkedHashMap<>();
+        if (dimIds == null || dimIds.size() < 2) return hubScores;
+
+        StringBuilder placeholders = new StringBuilder();
+        for (int i = 0; i < dimIds.size(); i++) {
+            if (i > 0) placeholders.append(",");
+            placeholders.append("?");
+        }
+
+        // 双向查找：从任一群内节点出发能到达的其他群内节点 → 中间路径上的节点是枢纽
+        String sql = "SELECT e1.target_dim_id AS hub, COUNT(DISTINCT e2.target_dim_id) AS connections " +
+                "FROM Feeling_Hypergraph e1 " +
+                "JOIN Feeling_Hypergraph e2 ON e1.target_dim_id = e2.source_dim_id " +
+                "WHERE e1.source_dim_id IN (" + placeholders + ") " +
+                "AND e2.target_dim_id IN (" + placeholders + ") " +
+                "AND e2.target_dim_id != e1.source_dim_id " +
+                "GROUP BY e1.target_dim_id " +
+                "HAVING connections >= 2 " +
+                "ORDER BY connections DESC";
+
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            for (int i = 0; i < dimIds.size(); i++) {
+                pstmt.setInt(i + 1, dimIds.get(i));
+            }
+            ResultSet rs = pstmt.executeQuery();
+            while (rs.next()) {
+                hubScores.put(rs.getInt("hub"), rs.getInt("connections"));
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryDB] 查找超图枢纽失败: {}", e.getMessage());
+        }
+        return hubScores;
     }
 }

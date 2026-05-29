@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTask;
 
 import lombok.Getter;
+import java.util.List;
 
 public class WebEventTask extends AbstractAgentTask {
 
@@ -17,6 +18,14 @@ public class WebEventTask extends AbstractAgentTask {
 
         this.ipAddress = ipAddress;
         this.rawJson = rawJson;
+    }
+
+    @Override
+    public List<String> getSources() {
+        if (ipAddress != null && !ipAddress.isBlank()) {
+            return List.of("webaddress_" + ipAddress);
+        }
+        return List.of("system:web");
     }
 
     @Override

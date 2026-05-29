@@ -1,7 +1,9 @@
 package com.cna.agent.AgentTasksHandlers;
 
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
+import com.cna.agent.FeelingResonanceAnalyzer;
 import com.cna.agent.LivingLoop;
+import com.cna.agent.MemoryManager;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.llm.LLMAdapter;
@@ -27,6 +29,25 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
         if (!prepareBaseData(task, baseData, engine)) {
             log.info("[TaskHandler] 子类放弃了本次任务的执行: {}", task.getTaskName());
             return null; // 任务终止
+        }
+
+        // 【谐振分析】：对任务文本进行感觉谐振分析，注入 Prompt + 缓存结果
+        try {
+            com.cna.db.FeelingDimensionManager fdm = com.cna.db.FeelingDimensionManager.getInstance();
+            com.cna.db.FeelingHypergraphManager hgm = com.cna.db.FeelingHypergraphManager.getInstance();
+            if (fdm != null && hgm != null) {
+                FeelingResonanceAnalyzer analyzer = new FeelingResonanceAnalyzer(
+                        fdm, hgm, MemoryManager.getInstance());
+                FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance =
+                        analyzer.analyze(task.getTaskText());
+                if (resonance != null) {
+                    baseData.put("feeling_resonance", resonance.llmPromptBlock);
+                    baseData.put("feeling_resonance_result", resonance); // 供 finish_task 回馈
+                    log.info("[TaskHandler] 感觉谐振分析已注入 Prompt (有违和: {})", resonance.hasDissonance());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[TaskHandler] 感觉谐振分析失败，跳过: {}", e.getMessage());
         }
 
         LLMAdapter targetLLM = getTargetLLM(engine);

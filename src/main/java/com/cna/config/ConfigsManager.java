@@ -47,6 +47,16 @@ public class ConfigsManager {
     public static final double FD_PRESSURE_PENALTY;
     public static final double FD_QUALITY_WEIGHT;
     public static final int FEELING_DIMENSION_COUNT;
+    // 感觉超图与谐振分析
+    public static final int FEELING_HYPERGRAPH_EXPAND_LAYERS;
+    public static final int FEELING_HYPERGRAPH_MAX_EXPAND_NODES;
+    public static final double FEELING_HYPERGRAPH_EDGE_WEIGHT_DECAY;
+    public static final int FEELING_HYPERGRAPH_COOCCURRENCE_THRESHOLD;
+    public static final double FEELING_RESONANCE_INFLECTION_SIGMA;
+    public static final double FEELING_RESONANCE_DISSONANCE_MIN_GAP;
+    public static final int FEELING_RESONANCE_CONSONANCE_MIN_COUNT;
+    public static final int FEELING_RESONANCE_DEEP_MEMORY_COUNT;
+    public static final int FEELING_RESONANCE_I1_SIZE;
     public static final int MAX_COGNITIVE_HEAT;
     public static final boolean ALWAYS_RESPOND_TO_AT_ME;
     public static final int INPUT_BACKLOG_MAX_SIZE;
@@ -226,6 +236,15 @@ public class ConfigsManager {
         FD_PRESSURE_PENALTY = getDouble("memory.fdPressurePenalty", 0.01);
         FD_QUALITY_WEIGHT = getDouble("memory.fdQualityWeight", 0.5);
         FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
+        FEELING_HYPERGRAPH_EXPAND_LAYERS = getInt("feeling.hypergraph.expandLayers", 2);
+        FEELING_HYPERGRAPH_MAX_EXPAND_NODES = getInt("feeling.hypergraph.maxExpandNodes", 20);
+        FEELING_HYPERGRAPH_EDGE_WEIGHT_DECAY = getDouble("feeling.hypergraph.edgeWeightDecay", 0.7);
+        FEELING_HYPERGRAPH_COOCCURRENCE_THRESHOLD = getInt("feeling.hypergraph.cooccurrenceThreshold", 3);
+        FEELING_RESONANCE_INFLECTION_SIGMA = getDouble("feeling.resonance.inflectionSigma", 1.5);
+        FEELING_RESONANCE_DISSONANCE_MIN_GAP = getDouble("feeling.resonance.dissonanceMinGap", 0.15);
+        FEELING_RESONANCE_CONSONANCE_MIN_COUNT = getInt("feeling.resonance.consonanceMinCount", 2);
+        FEELING_RESONANCE_DEEP_MEMORY_COUNT = getInt("feeling.resonance.deepMemoryCount", 3);
+        FEELING_RESONANCE_I1_SIZE = getInt("feeling.resonance.i1Size", 5);
         MAX_CONTEXT_CACHE_ROUNDS = getInt("memory.maxContextCacheRounds", 64);
         CONTEXT_RETENTION_RATIO = getDouble("memory.contextRetentionRatio", 0.3);
         CODE_AGENT_BROWSER_ENABLED = getBoolean("agent.codeBrowserEnabled", true);

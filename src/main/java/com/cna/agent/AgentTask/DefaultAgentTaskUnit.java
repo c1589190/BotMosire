@@ -50,4 +50,16 @@ public interface DefaultAgentTaskUnit {
     default void setActivatedToolGroups(java.util.Set<String> groups) {
         // 默认空实现，子类可覆盖
     }
+
+    /**
+     * 返回该任务的来源标识符列表。
+     * 用于在 current memory 和 deep memory 中追溯信息来源。
+     * 格式示例：
+     * - 聊天任务: ["qq_group:xxx", "qqid:yyy"] 或 ["qqid:yyy"] (私聊)
+     * - 网页任务: ["webaddress_192.168.1.100"]
+     * - 系统任务: ["system:internal"]
+     */
+    default java.util.List<String> getSources() {
+        return java.util.List.of("system:internal");
+    }
 }

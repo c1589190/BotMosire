@@ -1,5 +1,7 @@
 package com.cna.agent.AgentTask;
 
+import java.util.List;
+
 public class ConsoleChatTask extends AbstractAgentTask {
 
     private final String context;
@@ -13,6 +15,11 @@ public class ConsoleChatTask extends AbstractAgentTask {
     @Override
     public String getTaskText() {
         return "来自部署者后台终端的直接消息:{\n" + context + "\n}";
+    }
+
+    @Override
+    public List<String> getSources() {
+        return List.of("system:console");
     }
 
 }

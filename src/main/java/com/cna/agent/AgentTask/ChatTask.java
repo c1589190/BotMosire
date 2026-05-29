@@ -13,6 +13,10 @@ public class ChatTask extends AbstractAgentTask {
     private String role;
     private String role_name;
 
+    /** 是否为私聊——影响 getSources() 的行为：私聊仅标注 role，不重复标注 source */
+    @Getter
+    private boolean isPrivate = false;
+
     private List<String> Contexts = new ArrayList<>();
 
     @Getter
@@ -32,6 +36,25 @@ public class ChatTask extends AbstractAgentTask {
     public ChatTask(String source, String source_name, String role, String role_name, long replyToMessageId) {
         this(source, source_name, role, role_name);
         this.replyToMessageId = replyToMessageId;
+    }
+
+    public ChatTask(String source, String source_name, String role, String role_name, long replyToMessageId, boolean isPrivate) {
+        this(source, source_name, role, role_name, replyToMessageId);
+        this.isPrivate = isPrivate;
+    }
+
+    @Override
+    public List<String> getSources() {
+        List<String> sources = new ArrayList<>();
+        // 私聊：仅标注用户 ID（私聊环境已在语义中）
+        // 群聊：标注群 ID + 用户 ID
+        if (!isPrivate && source != null && !source.isBlank()) {
+            sources.add(source);
+        }
+        if (role != null && !role.isBlank()) {
+            sources.add(role);
+        }
+        return sources.isEmpty() ? List.of("system:internal") : sources;
     }
 
     public void addContext(String text) {

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
@@ -43,6 +44,13 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
         queryNode.put("type", "string");
         queryNode.put("description", p.getCustomDescription("query"));
 
+        // 新增：可选的来源过滤参数
+        ObjectNode sourcesNode = properties.putObject("sources");
+        sourcesNode.put("type", "array");
+        sourcesNode.put("description", "可选：按来源标识符过滤/优先召回（如 qqid:xxx, qq_group:xxx, webaddress_xxx, system:internal）。不传则纯语义搜索");
+        ObjectNode sourcesItems = sourcesNode.putObject("items");
+        sourcesItems.put("type", "string");
+
         ArrayNode required = parameters.putArray("required");
         required.add("query");
 
@@ -55,21 +63,46 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
             String query = arguments.path("query").asText().trim();
             this.lastQuery = query;
 
-            // 默认召回 5 条最相关的高维度记忆
+            // 解析可选的 sources 参数
+            List<String> sourceFilter = null;
+            JsonNode sourcesNode = arguments.path("sources");
+            if (sourcesNode.isArray() && !sourcesNode.isEmpty()) {
+                sourceFilter = new ArrayList<>();
+                for (JsonNode s : sourcesNode) {
+                    String src = s.asText();
+                    if (src != null && !src.isBlank()) {
+                        sourceFilter.add(src);
+                    }
+                }
+            }
+
             int limit = ConfigsManager.MEMORY_DEPTH;
-            log.info("[Tool][QueryDeepMemory] 大模型尝试潜入深层记忆网络，搜索关键词: [{}]", query);
+            String filterDesc = (sourceFilter != null && !sourceFilter.isEmpty())
+                    ? "，来源优先: " + sourceFilter
+                    : "";
+            log.info("[Tool][QueryDeepMemory] 大模型尝试潜入深层记忆网络，搜索关键词: [{}]{}, 召回数: {}",
+                    query, filterDesc, limit);
 
-            List<String> deepMemories = MemoryManager.getInstance().searchDeepMemoryByText(query, limit);
+            // 使用带 ID 和来源的结构化结果
+            List<MemoryManager.DeepMemoryResult> results =
+                    MemoryManager.getInstance().searchDeepMemoryResultsByText(query, limit, sourceFilter);
 
-            if (deepMemories == null || deepMemories.isEmpty()) {
+            if (results == null || results.isEmpty()) {
                 this.fetchedCount = 0;
                 return "SYSTEM_FEEDBACK: 记忆深处一片空白，没有找到与 [" + query + "] 相关的深层记忆。";
             }
 
-            this.fetchedCount = deepMemories.size();
+            this.fetchedCount = results.size();
 
-            return String.format("【潜意识深潜结果】：找到了 %d 条关于 [%s] 的深层记忆片段：\n%s\n(注意：深层记忆是过去的总结，可能存在时间上的错乱，请结合当前语境理解)",
-                    fetchedCount, query, String.join("\n---\n", deepMemories));
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("【潜意识深潜结果】：找到了 %d 条关于 [%s] 的深层记忆片段：\n",
+                    fetchedCount, query));
+            for (MemoryManager.DeepMemoryResult r : results) {
+                sb.append(r.toString()).append("\n---\n");
+            }
+            sb.append("(提示：[DM-N] 为记忆编号，可配合 finish_task 的 useful_memory_ids 参数标记有用记忆。深层记忆是过去的总结，可能存在时间错乱，请结合当前语境理解)");
+
+            return sb.toString();
 
         } catch (Exception e) {
             log.error("执行 query_deep_memory 发生异常", e);

@@ -210,7 +210,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         existingTask.addContext(text);
                         if (quotedId > 0) existingTask.setReplyToMessageId(quotedId);
                     } else {
-                        ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId);
+                        ChatTask task = new ChatTask(source, source_name, senderRole, senderName, quotedId, input.isPrivate());
                         task.addContext(text);
                         task.addContext(reasonContext);
 
@@ -231,7 +231,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                     List<String> l = new LinkedList<>();
                     l.add("本能决定回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
-                    MemoryManager.getInstance().inputCurrentMemorys(l);
+                    MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(input));
 
                     updatedRoles.add(senderRole);
                 }
@@ -312,7 +312,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
             if (ChatTaskPreparationPool.containsKey(role)) {
                 task = ChatTaskPreparationPool.get(role);
             } else {
-                task = new ChatTask(source, source_name, role, senderName, quotedId);
+                task = new ChatTask(source, source_name, role, senderName, quotedId, rep.isPrivate());
 
                 // 优先级计算
                 double priority = 3.0;
@@ -337,7 +337,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
             List<String> l = new LinkedList<>();
             l.add("从积压区消化了来自 " + role + " 的消息，回复理由是: " + first.reason);
-            MemoryManager.getInstance().inputCurrentMemorys(l);
+            MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(rep));
         }
 
         // 5. 从积压区移除已消费的条目
@@ -345,5 +345,20 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
         backlog.removeIf(consumed::contains);
 
         log.info("[Backlog-Drain] 消化完成，积压区剩余: {}", backlog.size());
+    }
+
+    /**
+     * 根据 ChatMessageInput 构造来源标识符列表。
+     * 私聊仅标注 role（用户ID），群聊标注 source（群ID）+ role（用户ID）。
+     */
+    protected List<String> buildSourcesFromInput(ChatMessageInput input) {
+        List<String> sources = new ArrayList<>();
+        if (!input.isPrivate() && input.getSource() != null && !input.getSource().isBlank()) {
+            sources.add(input.getSource());
+        }
+        if (input.getRole() != null && !input.getRole().isBlank()) {
+            sources.add(input.getRole());
+        }
+        return sources.isEmpty() ? List.of("system:internal") : sources;
     }
 }

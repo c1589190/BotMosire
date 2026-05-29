@@ -669,6 +669,9 @@ public class LivingLoop implements MosireAPI {
 
         Map<String, Object> turnData = new HashMap<>(baseData);
 
+        // 提取当前任务来源，用于 current memory 标注和 finish_task 记忆回馈
+        List<String> taskSources = taskUnit.getSources();
+
         CallResult result;
 
         StringBuilder currentMemory = new StringBuilder();
@@ -717,7 +720,7 @@ public class LivingLoop implements MosireAPI {
         if (result.getContent() != null && isLLMErrorResponse(result.getContent())) {
             log.error("[EXEC-Engine] LLM 返回了无法恢复的错误，强制结束任务: {}", result.getContent());
             lastSolvingTask = null;
-            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString(), taskSources);
 
             LLManager.clearCache();
 
@@ -729,7 +732,7 @@ public class LivingLoop implements MosireAPI {
                 || !result.getToolCalls().isArray() || result.getToolCalls().isEmpty()) {
             log.info("[EXEC-Engine] 💤 模型未返回工具调用，直接结束任务。响应内容: {}", result.getContent());
             currentMemory.append("在本轮处理中没有调用任何工具，任务自动结束——也许是出错了...");
-            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString(), taskSources);
             lastSolvingTask = null;
 
             // 【核心修改】：任务自然结束，清空该任务的专属上下文缓存
@@ -740,6 +743,13 @@ public class LivingLoop implements MosireAPI {
 
         StringBuilder toolResults = new StringBuilder("\n\n【第 " + turn + " 轮工具观察结果】:\n");
         boolean hasFinishTask = false;
+
+        // 注入当前任务来源 + 谐振分析到 FinishTask.ThreadLocal
+        FinishTask.CURRENT_TASK_SOURCES.set(taskSources);
+        if (turnData.containsKey("feeling_resonance_result")) {
+            FinishTask.CURRENT_RESONANCE_RESULT.set(
+                    (FeelingResonanceAnalyzer.ResonanceAnalysisResult) turnData.get("feeling_resonance_result"));
+        }
 
         for (JsonNode toolCall : result.getToolCalls()) {
             String functionName = toolCall.path("function").path("name").asText();
@@ -817,12 +827,18 @@ public class LivingLoop implements MosireAPI {
             log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
             lastSolvingTask = null;
 
-            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString());
+            MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString(), taskSources);
+            FinishTask.CURRENT_TASK_SOURCES.remove();
+            FinishTask.CURRENT_RESONANCE_RESULT.remove();
 
             // 【核心修改】：主动销毁该任务完成后的上下文缓存
             //LLManager.clearTaskCache(currentTaskId);
             return null; // 直接终结任务
         }
+
+        // 清理 ThreadLocal（finish_task 未调用时）
+        FinishTask.CURRENT_TASK_SOURCES.remove();
+        FinishTask.CURRENT_RESONANCE_RESULT.remove();
 
         // 推进轮数，并检查最大循环限制
         log.info("[EXEC-Engine] 获取到观察线索，转入下一轮思考...");
@@ -837,7 +853,7 @@ public class LivingLoop implements MosireAPI {
             lastSolvingTask = null;
 
             List<String> a = Collections.singletonList(currentMemory.toString());
-            MemoryManager.getInstance().inputCurrentMemorys(a);
+            MemoryManager.getInstance().inputCurrentMemorys(a, taskSources);
 
             // 【核心修改】：死循环被干掉时，清空缓存
             //LLManager.clearTaskCache(currentTaskId);
@@ -845,7 +861,7 @@ public class LivingLoop implements MosireAPI {
         }
         if(!currentMemory.isEmpty()) {
             List<String> a = Collections.singletonList(currentMemory.toString());
-            MemoryManager.getInstance().inputCurrentMemorys(a);
+            MemoryManager.getInstance().inputCurrentMemorys(a, taskSources);
         }
 
         return taskUnit; // 返回更新后的任务，准备重新入队

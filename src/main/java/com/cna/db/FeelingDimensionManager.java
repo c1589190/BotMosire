@@ -130,6 +130,26 @@ public class FeelingDimensionManager {
                 log.info("[Feeling] 显式概念处理完毕：新节点 {} 个，重塑旧节点 {} 个，覆盖替换 {} 个。", addedCount, updatedCount, replacedCount);
                 this.tick();  // 成功处理后触发全局衰减
 
+                // 超图共现：同时出现在 finish_task concepts 中的维度，建立关联边
+                try {
+                    FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
+                    if (hgm != null && concepts.size() >= 2) {
+                        List<FeelingDimension> allDims = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
+                        List<Integer> dimIds = new ArrayList<>();
+                        for (ConceptInput ci : concepts) {
+                            allDims.stream()
+                                    .filter(d -> d.concept.equals(ci.name.trim()))
+                                    .findFirst()
+                                    .ifPresent(d -> dimIds.add(d.id));
+                        }
+                        if (dimIds.size() >= 2) {
+                            hgm.onCoOccurrence(dimIds);
+                        }
+                    }
+                } catch (Exception e2) {
+                    log.debug("[Feeling] 超图共现处理跳过: {}", e2.getMessage());
+                }
+
             } catch (Exception e) {
                 log.error("[Feeling] 显式概念处理失败", e);
             }
@@ -162,6 +182,11 @@ public class FeelingDimensionManager {
             this.hitWeight = hitWeight;
             this.InterestScore = finalScore;
         }
+    }
+
+    /** 获取全量感觉维度（含 status 和 llm_notes）。 */
+    public List<FeelingDimension> getAllDimensions() {
+        return memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
     }
 
     public List<DimensionScore> evaluateAllDimensions(String input) {

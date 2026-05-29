@@ -139,7 +139,13 @@ public class LLManager {
     }
 
     public static List<String> getDeepMemories(String text, LLMAdapter emb, int depth) {
-        return MemoryManager.getInstance().getDeepMemorys(getTextVector(text, emb), depth);
+        List<MemoryManager.DeepMemoryResult> results =
+                MemoryManager.getInstance().getDeepMemoryResults(getTextVector(text, emb), depth);
+        List<String> formatted = new java.util.ArrayList<>();
+        for (MemoryManager.DeepMemoryResult r : results) {
+            formatted.add(r.toPromptLine());
+        }
+        return formatted;
     }
 
     // ==================== 全局共享上下文方法 ====================
