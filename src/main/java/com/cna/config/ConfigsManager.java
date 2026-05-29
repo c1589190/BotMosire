@@ -54,6 +54,13 @@ public class ConfigsManager {
     public static final int MAX_CONTEXT_CACHE_ROUNDS;
     public static final double CONTEXT_RETENTION_RATIO;
 
+    // CodeAgent 是否启用浏览器自动化（Playwright MCP，需本机有 Node/npx）
+    public static final boolean CODE_AGENT_BROWSER_ENABLED;
+    // CodeAgent 是否启用桌面操控（Windows-MCP，需 uv/uvx）。默认关：桌面控制风险高，建议加 master-gate 后再开。
+    public static final boolean CODE_AGENT_DESKTOP_ENABLED;
+    // 主人 id 名单（逗号分隔）：delegate_computer_task 等高权限操作仅放行主人/内部渠道，外部非主人一律拒绝
+    public static final java.util.Set<String> MASTER_IDS;
+
     public static final String SLEEP_START;
     public static final String SLEEP_END;
 
@@ -221,6 +228,9 @@ public class ConfigsManager {
         FEELING_DIMENSION_COUNT = getInt("memory.feelingDimensionCount", 3);
         MAX_CONTEXT_CACHE_ROUNDS = getInt("memory.maxContextCacheRounds", 64);
         CONTEXT_RETENTION_RATIO = getDouble("memory.contextRetentionRatio", 0.3);
+        CODE_AGENT_BROWSER_ENABLED = getBoolean("agent.codeBrowserEnabled", true);
+        CODE_AGENT_DESKTOP_ENABLED = getBoolean("agent.codeDesktopEnabled", false);
+        MASTER_IDS = parseMasterIds(getString("agent.masterIds", ""));
 
         SLEEP_START = getString("agent.sleepStart", "");
         SLEEP_END   = getString("agent.sleepEnd", "");
@@ -279,6 +289,26 @@ public class ConfigsManager {
 
     private static String getString(String key, String defaultValue) {
         return props.getProperty(key, defaultValue);
+    }
+
+    private static java.util.Set<String> parseMasterIds(String raw) {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        if (raw != null) {
+            for (String s : raw.split(",")) {
+                String t = s.trim();
+                if (!t.isEmpty()) ids.add(t);
+            }
+        }
+        return ids;
+    }
+
+    /** 判断聊天来源 role（如 "qqid:12345" / "qq_private:12345"）是否属于主人名单。名单为空时一律 false。 */
+    public static boolean isMaster(String role) {
+        if (role == null || role.isBlank() || MASTER_IDS.isEmpty()) return false;
+        String trimmed = role.trim();
+        if (MASTER_IDS.contains(trimmed)) return true;
+        String id = trimmed.contains(":") ? trimmed.substring(trimmed.lastIndexOf(':') + 1).trim() : trimmed;
+        return MASTER_IDS.contains(id);
     }
 
     public static String getConfig(String key, String defaultValue) {

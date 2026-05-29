@@ -7,11 +7,14 @@ import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandlerUnit;
 import com.cna.agent.AgentInputHandlers.ExpectedChatMessageInputHandler;
 import com.cna.agent.AgentInputHandlers.WebEventInputHandler;
 import com.cna.agent.AgentTask.ChatTask;
+import com.cna.agent.AgentTask.ConsoleChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTask.ScheduledTask;
 import com.cna.agent.AgentTask.UpdateThoughtsTask;
+import com.cna.agent.AgentTask.WebEventTask;
 import com.cna.agent.AgentTasksHandlers.*;
 import com.cna.agent.AgentTool.*;
+import com.cna.agent.code.DelegateComputerTaskTool;
 import com.cna.config.ConfigsManager;
 import com.cna.config.ScenePromptsManager;
 import com.cna.config.ToolPromptsManager;
@@ -321,6 +324,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new GetSleepTimeTool());
         this.registerTool(new GetTaskQueueTool(this));
         this.registerTool(new AdjustTaskPriorityTool(this));
+        this.registerTool(new DelegateComputerTaskTool());
         this.registerTool(new ManageToolGroups(this.largeLLMToolbox));
         this.registerTool(new ManageMessageKeywords());
 
@@ -747,6 +751,15 @@ public class LivingLoop implements MosireAPI {
                 hasFinishTask = true;
             }
 
+            // P5 安全：电脑操作（文件/浏览器/桌面）仅限主人或内部渠道触发，挡掉外部非 master 用户
+            if ("delegate_computer_task".equals(functionName) && !isComputerTaskAuthorized(taskUnit)) {
+                String denied = "权限不足：电脑操作仅限主人(master)或内部渠道触发，已拒绝本次委派。";
+                log.warn("[EXEC-Engine] delegate_computer_task 被拒绝（来源未授权）: task={}", taskUnit.getClass().getSimpleName());
+                toolResults.append("调用了工具 [").append(functionName).append("] , 但因来源未授权被拒绝;\n");
+                LLManager.feedToolResult(currentTaskId, toolCallId, functionName, denied);
+                continue;
+            }
+
             DefaultAgentToolUnit targetTool = largeLLMToolbox.get(functionName);
             if (targetTool != null) {
                 try {
@@ -872,6 +885,22 @@ public class LivingLoop implements MosireAPI {
      * 判断 LLM 返回的内容是否为不可恢复的错误响应，
      * 防止将 API 解析错误误认为"模型不调用工具"而进入无限循环。
      */
+    /**
+     * delegate_computer_task 的来源授权。
+     * 内部渠道（控制台 / 定时 / 反思 / 网页后台）一律放行；外部聊天仅当发话者在 master 名单内放行；
+     * 未知来源默认拒绝。master 名单为空时，外部聊天一律拒绝（安全默认）。
+     */
+    private boolean isComputerTaskAuthorized(DefaultAgentTaskUnit task) {
+        if (task instanceof ConsoleChatTask || task instanceof ScheduledTask
+                || task instanceof UpdateThoughtsTask || task instanceof WebEventTask) {
+            return true;
+        }
+        if (task instanceof ChatTask ct) {
+            return ConfigsManager.isMaster(ct.getRole());
+        }
+        return false;
+    }
+
     private static boolean isLLMErrorResponse(String content) {
         if (content == null) return false;
         return content.startsWith("响应缺少 choices")
