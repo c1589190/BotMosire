@@ -3,6 +3,7 @@ package com.cna.agent.AgentInputHandlers;
 import com.cna.agent.AgentInput.ChatMessageInput;
 import com.cna.agent.AgentTask.ChatTask;
 import com.cna.agent.LivingLoop;
+import com.cna.agent.MessageKeywordManager;
 import com.cna.config.ConfigsManager;
 import com.cna.agent.MemoryManager;
 import com.cna.db.FeelingDimensionManager;
@@ -69,6 +70,15 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                     reason = String.format("触达关注点：[%s] (得分: %.2f)", eval.topConcept, eval.InterestScore);
                 }
 
+                // 消息关键词命中加分
+                double keywordBonus = MessageKeywordManager.getInstance()
+                        .evaluateInput(input.getContent(), input.getRole(),
+                                input.getRole_name(), input.getSource(), input.getSource_name());
+                score += keywordBonus;
+                if (keywordBonus > 0) {
+                    reason += String.format(" + 关键词加成:%.2f", keywordBonus);
+                }
+
                 backlog.offer(new BackloggedInput(input, score, reason));
                 // 超上限踢最旧
                 while (backlog.size() > ConfigsManager.INPUT_BACKLOG_MAX_SIZE) {
@@ -124,6 +134,16 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
             for (ChatMessageInput input : unknownInputs) {
                 String textContent = input.getContent();
 
+                // ========== @提及强通：被 @ 直接放行，无需感觉评估 ==========
+                if (ConfigsManager.ALWAYS_RESPOND_TO_AT_ME && input.isAtMe()) {
+                    String reason = "这条消息明确@了你 (自身被提及)，直接放行，无需感觉评估";
+                    interestingInputsWithReasons.put(input, reason);
+                    log.info("高优消息被 @提及强通拦截放行。原因：{}", reason);
+                    int newHeat = this.engine.getCognitiveHeat().incrementAndGet();
+                    log.debug("认知热度上升至: {}", newHeat);
+                    continue;
+                }
+
                 if (feelingManager == null) {
                     log.warn("[Gatekeeper-Feeling] 感觉引擎未挂载，默认放行此消息。");
                     interestingInputsWithReasons.put(input, "系统感觉中枢离线，出于本能接收所有刺激");
@@ -132,14 +152,24 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                 FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(textContent);
 
-                boolean isHighValue = eval.InterestScore >= currentDynamicThreshold;
+                // 消息关键词命中加分
+                double keywordBonus = MessageKeywordManager.getInstance()
+                        .evaluateInput(input.getContent(), input.getRole(),
+                                input.getRole_name(), input.getSource(), input.getSource_name());
+                double adjustedScore = eval.InterestScore + keywordBonus;
+
+                boolean isHighValue = adjustedScore >= currentDynamicThreshold;
                 boolean isLuckyTrash = !isHighValue && isStarving && (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE);
 
                 if (isHighValue || isLuckyTrash) {
                     String reason;
                     if (isHighValue) {
-                        reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (潜意识得分: %.2f，打破当前动态阈值: %.2f)",
-                                eval.topConcept, eval.InterestScore, currentDynamicThreshold);
+                        reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (感觉得分: %.2f",
+                                eval.topConcept, eval.InterestScore);
+                        if (keywordBonus > 0) {
+                            reason += String.format(" + 关键词加成:%.2f", keywordBonus);
+                        }
+                        reason += String.format("，打破当前动态阈值: %.2f)", currentDynamicThreshold);
                         log.info("高优消息被拦截放行。原因：{}", reason);
                     } else {
                         reason = String.format("这条消息在你的感觉中枢里得分极低(%.2f < %.2f)，你感觉它是废话。但是由于现在你也没其他事干，你决定勉为其难地随便回复一下它，维持活性。",
@@ -186,7 +216,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                         FeelingDimensionManager.FeelingEvaluation eval = feelingManager.evaluateInput(text);
                         double priority = 3.0;
-                        if ("private".equalsIgnoreCase(source)) {
+                        if (input.isPrivate()) {
                             priority -= 0.5;
                         }
                         priority -= eval.stimulusBonus;
@@ -286,7 +316,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
 
                 // 优先级计算
                 double priority = 3.0;
-                if ("private".equalsIgnoreCase(source)) {
+                if (rep.isPrivate()) {
                     priority -= 0.5;
                 }
                 if (feelingManager != null) {

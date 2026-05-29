@@ -3,33 +3,66 @@ package com.cna.agent.AgentInput;
 import com.cna.Utils;
 import lombok.Getter;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 
+/**
+ * 平台无关的聊天消息抽象。NapcatAdapter / DiscordAdapter 各自负责将平台事件翻译为此结构。
+ * 新字段均有默认值，未适配的 adapter（如 Discord）使用旧构造器即可正常工作。
+ */
 public class ChatMessageInput implements DefaultAgentInputUnit {
     private UUID uuid;
     @Getter
-    private String source; //消息来源
+    private String source;       // 平台无关来源标识 (e.g. "qq_group:xxx", "discord_dm:xxx")
     @Getter
-    private String source_name;
+    private String source_name;  // 可读来源名 (e.g. "BotMosire灰测群", "Discord私聊")
     @Getter
-    private String role; //发送角色
+    private String role;         // 发送者标识 (e.g. "qqid:xxx", "discordid:xxx")
     @Getter
-    private String role_name;
+    private String role_name;    // 发送者昵称
     @Getter
-    private String content; //具体内容
-    private long quotedMessageId = 0; //被引用回覆的源消息ID（Napcat message_id），0表示无引用
+    private String content;      // 已解析为纯文本的消息正文
+    private long quotedMessageId = 0;
+
+    // ========== 平台无关的结构化元数据（默认值保证向后兼容） ==========
+    @Getter
+    private boolean isPrivate;         // 私聊/群聊
+    @Getter
+    private boolean isAtMe;            // 自身是否被 @提及
+    @Getter
+    private List<String> atTargets;    // 消息中所有被 @ 的用户 ID 列表
+    @Getter
+    private String senderCard;         // 发送者在此场景下的展示名（QQ群名片 / Discord公会昵称），可能为空
+    @Getter
+    private String senderGroupRole;    // 发送者在此场景下的角色（owner/admin/member），非群聊场景为空
+    @Getter
+    private String subType;            // 消息子类型（平台相关：normal/anonymous/notice...）
+    @Getter
+    private boolean hasForward;        // 是否包含合并转发内容
+    @Getter
+    private String richSummary;        // 富媒体摘要，如 "[图片x2][@提及][合并转发]"，方便 LLM 快速感知
+
+    // ========== 兼容旧构造器（DiscordAdapter 等未适配的调用方继续使用） ==========
 
     public ChatMessageInput(String source, String source_name, String role, String role_name, String content) {
-        uuid = UUID.randomUUID();
-        this.source = source;
-        this.source_name = source_name;
-        this.role = role;
-        this.role_name = role_name;
-        this.content = content;
-        this.quotedMessageId = 0;
+        this(source, source_name, role, role_name, content, 0, false, false,
+                Collections.emptyList(), "", "", "normal", false, "");
     }
 
-    public ChatMessageInput(String source, String source_name, String role, String role_name, String content, long quotedMessageId) {
+    public ChatMessageInput(String source, String source_name, String role, String role_name,
+                            String content, long quotedMessageId) {
+        this(source, source_name, role, role_name, content, quotedMessageId, false, false,
+                Collections.emptyList(), "", "", "normal", false, "");
+    }
+
+    // ========== 完整构造器 ==========
+
+    public ChatMessageInput(String source, String source_name, String role, String role_name,
+                            String content, long quotedMessageId,
+                            boolean isPrivate, boolean isAtMe, List<String> atTargets,
+                            String senderCard, String senderGroupRole, String subType,
+                            boolean hasForward, String richSummary) {
         uuid = UUID.randomUUID();
         this.source = source;
         this.source_name = source_name;
@@ -37,9 +70,16 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
         this.role_name = role_name;
         this.content = content;
         this.quotedMessageId = quotedMessageId;
+        this.isPrivate = isPrivate;
+        this.isAtMe = isAtMe;
+        this.atTargets = atTargets != null ? atTargets : Collections.emptyList();
+        this.senderCard = senderCard != null ? senderCard : "";
+        this.senderGroupRole = senderGroupRole != null ? senderGroupRole : "";
+        this.subType = subType != null ? subType : "normal";
+        this.hasForward = hasForward;
+        this.richSummary = richSummary != null ? richSummary : "";
     }
 
-    /** 被引用回覆的源消息ID，0表示这条消息不是在回复某人 */
     public long getQuotedMessageId() { return quotedMessageId; }
     public boolean hasQuotedMessage() { return quotedMessageId > 0; }
 
@@ -47,12 +87,41 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     public String getInputText() {
         StringBuilder ret = new StringBuilder();
         ret.append(Utils.getNowPrecise()).append(",");
-        ret.append("来源于 " + this.source_name + " (" + this.source + ") ");
-        ret.append("的 " + this.role_name + " (" + this.role + ") ");
-        if (quotedMessageId > 0) {
-            ret.append("引用回复了消息 [" + quotedMessageId + "] ");
+
+        // 聊天类型标签
+        if (isPrivate) {
+            ret.append("[私聊] ");
+        } else if (source.startsWith("qq_group:") || source.startsWith("discord_guild:")) {
+            ret.append("[群聊] ");
         }
-        ret.append("发送了: {\n" + this.content + "\n};");
+
+        // 自身被 @ 提示
+        if (isAtMe) {
+            ret.append("(自身被@提及) ");
+        }
+
+        ret.append("来源于 ").append(this.source_name).append(" (").append(this.source).append(") ");
+        ret.append("的 ").append(this.role_name).append(" (").append(this.role).append(")");
+
+        // 发送者场景内身份
+        if (!senderCard.isBlank() && !senderCard.equals(this.role_name)) {
+            ret.append(" [群名片:").append(senderCard).append("]");
+        }
+        if (!senderGroupRole.isBlank() && !"member".equals(senderGroupRole)) {
+            ret.append(" [角色:").append(senderGroupRole).append("]");
+        }
+
+        // 回复引用
+        if (quotedMessageId > 0) {
+            ret.append(" 引用回复了消息[").append(quotedMessageId).append("]");
+        }
+
+        // 富媒体摘要（让 LLM 快速感知消息里有什么）
+        if (!richSummary.isBlank()) {
+            ret.append(" ").append(richSummary);
+        }
+
+        ret.append(" 发送了: {\n").append(this.content).append("\n};");
         return ret.toString();
     }
 

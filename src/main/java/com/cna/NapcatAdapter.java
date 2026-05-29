@@ -93,7 +93,25 @@ public class NapcatAdapter extends WebSocketClient {
     @Override
     public void onOpen(ServerHandshake handshakedata) {
         log.info("[WS] 物理链路接入成功 (正向连接远端 Napcat)");
-        new Thread(this::refreshFriendListCache).start();
+        new Thread(() -> {
+            refreshFriendListCache();
+            fetchSelfId();
+        }).start();
+    }
+
+    /** 通过 get_login_info 获取 bot 自身 QQ 号 */
+    private void fetchSelfId() {
+        String url = napcatHttpApiBase + "/get_login_info";
+        ObjectNode payload = jsonMapper.createObjectNode();
+        try {
+            JsonNode root = executeHttpRequest(url, payload);
+            if (root != null && "ok".equals(root.path("status").asText())) {
+                this.selfId = root.path("data").path("user_id").asLong();
+                log.info("[NapcatAdapter] 从 API 获取自身 QQ: {}", selfId);
+            }
+        } catch (Exception e) {
+            log.warn("[NapcatAdapter] 获取自身 QQ 失败，将回退到从事件中读取: {}", e.getMessage());
+        }
     }
 
     @Override
@@ -118,53 +136,110 @@ public class NapcatAdapter extends WebSocketClient {
     // ==========================================
     // 🌟 核心重构：JDK 21 内部 Record DTO
     // ==========================================
-    private record ParsedMessage(String content, long quotedMessageId) {}
+    private record ParsedMessage(
+            String content,
+            long quotedMessageId,
+            boolean isAtMe,
+            java.util.List<String> atTargets,
+            boolean hasForward,
+            boolean hasImage,
+            int imageCount,
+            int faceCount,
+            String richSummary
+    ) {}
+
+    /** bot 自身 QQ 号，启动时通过 get_login_info 获取 */
+    private volatile long selfId = -1;
 
     private void handleMessageEvent(JsonNode event) {
         String messageType = event.path("message_type").asText();
         long senderId = event.path("user_id").asLong();
-        long selfId = event.path("self_id").asLong();
+        long eventSelfId = event.path("self_id").asLong();
+
+        // 首次拿到 selfId 时缓存
+        if (selfId < 0) {
+            selfId = eventSelfId;
+            log.info("[NapcatAdapter] 从事件中获取自身 QQ: {}", selfId);
+        }
 
         if (senderId == selfId) {
             return; // 屏蔽自身消息
         }
 
-        // 🌟 视觉注意力防瘫痪阀门
         boolean isPrivate = "private".equals(messageType);
-        boolean isAtMe = checkIsAtMe(event.path("message"), selfId);
-        boolean shouldParseVision = isPrivate || isAtMe;
+        boolean shouldParseVision = isPrivate; // 私聊必定解析图片；群聊先看是否 @自己
 
-        // 🌟 一次遍历解析：文本、图片AI、引用ID、合并转发
-        ParsedMessage parsed = parseMessageContent(event.path("message"), shouldParseVision);
+        // 🌟 一次遍历解析：返回完整结构化信息
+        ParsedMessage parsed = parseMessageContent(event.path("message"), shouldParseVision, selfId);
+
+        // 如果初始化时还没拿到 selfId 导致漏判，用解析结果的 isAtMe 补刀
+        boolean effectiveParseVision = shouldParseVision || parsed.isAtMe();
+        if (effectiveParseVision && !shouldParseVision) {
+            // 有 @自己但第一次遍历时没解析图片 → 重新解析一遍
+            parsed = parseMessageContent(event.path("message"), true, selfId);
+        }
 
         if (parsed.content() == null || parsed.content().isBlank()) return;
 
+        // sender 信息
+        JsonNode senderNode = event.path("sender");
+        String senderCard = senderNode.path("card").asText("");
+        String senderGroupRole = senderNode.path("role").asText("member");
+        String subType = event.path("sub_type").asText("normal");
+
         if ("group".equals(messageType)) {
-            handleGroupMessage(event, senderId, parsed.content(), parsed.quotedMessageId());
+            handleGroupMessage(event, senderId, parsed, senderCard, senderGroupRole, subType, isPrivate);
         } else if (isPrivate) {
-            handlePrivateMessage(event, senderId, parsed.content(), parsed.quotedMessageId());
+            handlePrivateMessage(event, senderId, parsed, senderCard, senderGroupRole, subType);
         }
     }
 
-    private ParsedMessage parseMessageContent(JsonNode messageNode, boolean shouldParseVision) {
-        // 修复点：直接 new 出来，干掉之前的 empty() 导致找不到符号的报错
-        if (messageNode == null || messageNode.isMissingNode()) return new ParsedMessage("", 0);
-        if (messageNode.isTextual()) return new ParsedMessage(messageNode.asText().trim(), 0);
-        if (!messageNode.isArray()) return new ParsedMessage("", 0);
+    /**
+     * 解析 OneBot v11 message array，返回完整结构化信息。
+     * <p>
+     * 支持的 segment 类型: text / at / image / face / reply / forward / json / xml / video / record / file / markdown
+     */
+    private ParsedMessage parseMessageContent(JsonNode messageNode, boolean shouldParseVision, long selfId) {
+        if (messageNode == null || messageNode.isMissingNode())
+            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "");
+        if (messageNode.isTextual())
+            return new ParsedMessage(messageNode.asText().trim(), 0, false, java.util.List.of(), false, false, 0, 0, "");
+        if (!messageNode.isArray())
+            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "");
 
         StringBuilder parsedContent = new StringBuilder();
         long quotedId = 0;
+        boolean isAtMe = false;
+        java.util.List<String> atTargets = new java.util.ArrayList<>();
+        boolean hasForward = false;
+        int imageCount = 0;
+        int faceCount = 0;
 
         for (JsonNode segment : messageNode) {
             String type = segment.path("type").asText("");
             JsonNode data = segment.path("data");
 
             switch (type) {
+                // ── 基础文本 ──
                 case "text":
                     parsedContent.append(data.path("text").asText(""));
                     break;
 
+                // ── @提及 ──
+                case "at":
+                    String atQq = data.path("qq").asText("");
+                    atTargets.add(atQq);
+                    if (!atQq.isBlank() && Long.parseLong(atQq) == selfId) {
+                        isAtMe = true;
+                        parsedContent.append("[@").append(atQq).append("(自身qq)]");
+                    } else {
+                        parsedContent.append("[@").append(atQq).append("]");
+                    }
+                    break;
+
+                // ── 图片 ──
                 case "image":
+                    imageCount++;
                     if (!shouldParseVision) {
                         parsedContent.append("[图片]");
                         break;
@@ -197,63 +272,137 @@ public class NapcatAdapter extends WebSocketClient {
                     }
                     break;
 
-                case "at":
-                    parsedContent.append("[@").append(data.path("qq").asText("")).append("]");
-                    break;
-
+                // ── QQ 表情 ──
                 case "face":
+                    faceCount++;
                     parsedContent.append("[表情]");
                     break;
 
+                // ── 引用回复 ──
+                case "reply":
+                    String replyIdStr = data.path("id").asText("");
+                    if (!replyIdStr.isBlank()) {
+                        try {
+                            quotedId = Long.parseLong(replyIdStr);
+                            // 不再往正文塞 [引用回覆:xxx]，getInputText 会自动标注
+                        } catch (NumberFormatException ignored) {}
+                    }
+                    break;
+
+                // ── 合并转发 ──
                 case "forward":
+                    hasForward = true;
                     String forwardId = data.path("id").asText("");
                     parsedContent.append("\n【合并转发记录开始】\n");
                     parsedContent.append(getForwardMsgSync(forwardId));
                     parsedContent.append("【合并转发记录结束】\n");
                     break;
 
-                case "reply":
-                    String replyIdStr = data.path("id").asText("");
-                    if (!replyIdStr.isBlank()) {
+                // ── JSON 卡片（小程序/分享卡片等） ──
+                case "json":
+                    String jsonData = data.path("data").asText("");
+                    parsedContent.append("[JSON卡片");
+                    if (!jsonData.isBlank()) {
+                        // 尝试提取 app 名作简短描述
                         try {
-                            quotedId = Long.parseLong(replyIdStr);
-                            parsedContent.append("[引用回覆: ").append(replyIdStr).append("]");
-                        } catch (NumberFormatException ignored) {}
+                            JsonNode cardJson = jsonMapper.readTree(jsonData);
+                            String app = cardJson.path("app").asText("");
+                            String desc = cardJson.path("desc").asText("");
+                            if (!app.isBlank()) parsedContent.append(": ").append(app);
+                            if (!desc.isBlank()) parsedContent.append(" - ").append(desc);
+                        } catch (Exception e) {
+                            // 不是合法 JSON，截取前60字符
+                            String snippet = jsonData.length() > 60 ? jsonData.substring(0, 60) + "..." : jsonData;
+                            parsedContent.append(": ").append(snippet);
+                        }
                     }
+                    parsedContent.append("]");
+                    break;
+
+                // ── XML 卡片（富媒体/音乐分享等） ──
+                case "xml":
+                    parsedContent.append("[XML卡片]");
+                    break;
+
+                // ── 视频 ──
+                case "video":
+                    parsedContent.append("[视频]");
+                    break;
+
+                // ── 语音 ──
+                case "record":
+                    parsedContent.append("[语音]");
+                    break;
+
+                // ── 文件 ──
+                case "file":
+                    String fileName = data.path("name").asText("");
+                    parsedContent.append("[文件");
+                    if (!fileName.isBlank()) parsedContent.append(": ").append(fileName);
+                    parsedContent.append("]");
+                    break;
+
+                // ── Markdown（Napcat 扩展） ──
+                case "markdown":
+                    String mdContent = data.path("content").asText("");
+                    if (!mdContent.isBlank()) {
+                        // 直接取 markdown 原文，LLM 能读懂
+                        parsedContent.append("[Markdown消息] ").append(mdContent);
+                    } else {
+                        parsedContent.append("[Markdown消息]");
+                    }
+                    break;
+
+                // ── 未知类型 ──
+                default:
+                    log.debug("[NapcatAdapter] 未识别的消息段类型: {}", type);
+                    parsedContent.append("[未知消息类型:").append(type).append("]");
                     break;
             }
         }
-        return new ParsedMessage(parsedContent.toString().trim(), quotedId);
+
+        // 构建富媒体摘要
+        StringBuilder summary = new StringBuilder();
+        if (imageCount > 0) summary.append("[图片x").append(imageCount).append("]");
+        if (faceCount > 0) summary.append("[表情x").append(faceCount).append("]");
+        if (hasForward) summary.append("[合并转发]");
+        if (!atTargets.isEmpty()) summary.append("[@提及]");
+        String richSummary = summary.toString();
+
+        return new ParsedMessage(
+                parsedContent.toString().trim(), quotedId,
+                isAtMe, atTargets, hasForward,
+                imageCount > 0, imageCount, faceCount,
+                richSummary
+        );
     }
 
-    private boolean checkIsAtMe(JsonNode messageNode, long selfId) {
-        if (messageNode == null || !messageNode.isArray()) return false;
-        for (JsonNode segment : messageNode) {
-            if ("at".equals(segment.path("type").asText())) {
-                if (segment.path("data").path("qq").asLong(0) == selfId) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private void handleGroupMessage(JsonNode event, long senderId, String content, long replyToMessageId) {
+    private void handleGroupMessage(JsonNode event, long senderId, ParsedMessage parsed,
+                                     String senderCard, String senderGroupRole, String subType,
+                                     boolean isPrivate) {
         try {
             long groupId = event.path("group_id").asLong();
             String groupName = getGroupNameSync(groupId);
             String senderName = getFriendNameSync(senderId);
             if (senderName.isBlank()) senderName = String.valueOf(senderId);
 
-            System.out.println(String.format("[群聊|%s] %s: %s", groupName, senderName, content));
+            System.out.println(String.format("[群聊|%s] %s: %s", groupName, senderName, parsed.content()));
 
             ChatMessageInput input = new ChatMessageInput(
                     "qq_group:" + groupId,
                     groupName,
                     "qqid:" + senderId,
                     senderName,
-                    content,
-                    replyToMessageId
+                    parsed.content(),
+                    parsed.quotedMessageId(),
+                    isPrivate,
+                    parsed.isAtMe(),
+                    parsed.atTargets(),
+                    senderCard,
+                    senderGroupRole,
+                    subType,
+                    parsed.hasForward(),
+                    parsed.richSummary()
             );
             Main.offerInput(input, "QQ群:" + groupId);
         } catch (Throwable t) {
@@ -261,20 +410,29 @@ public class NapcatAdapter extends WebSocketClient {
         }
     }
 
-    private void handlePrivateMessage(JsonNode event, long senderId, String content, long replyToMessageId) {
+    private void handlePrivateMessage(JsonNode event, long senderId, ParsedMessage parsed,
+                                       String senderCard, String senderGroupRole, String subType) {
         try {
             String senderName = getFriendNameSync(senderId);
             if (senderName.isBlank()) senderName = String.valueOf(senderId);
 
-            System.out.println(String.format("[私聊|%s] -> %s", senderName, content));
+            System.out.println(String.format("[私聊|%s] -> %s", senderName, parsed.content()));
 
             ChatMessageInput input = new ChatMessageInput(
                     "qq_private:" + senderId,
                     "QQ私聊",
                     "qqid:" + senderId,
                     senderName,
-                    content,
-                    replyToMessageId
+                    parsed.content(),
+                    parsed.quotedMessageId(),
+                    true,           // isPrivate
+                    false,          // isAtMe — 私聊不涉及 @
+                    parsed.atTargets(),
+                    senderCard,
+                    senderGroupRole,
+                    subType,
+                    parsed.hasForward(),
+                    parsed.richSummary()
             );
             Main.offerInput(input, "QQ私聊:" + senderId);
         } catch (Throwable t) {
@@ -425,7 +583,7 @@ public class NapcatAdapter extends WebSocketClient {
                     for (JsonNode msgNode : messagesArray) {
                         String senderName = msgNode.path("sender").path("nickname").asText("Unknown");
                         JsonNode contentNode = msgNode.has("content") ? msgNode.path("content") : msgNode.path("message");
-                        String innerContent = parseMessageContent(contentNode, false).content();
+                        String innerContent = parseMessageContent(contentNode, false, selfId).content();
                         sb.append("  - ").append(senderName).append(": ").append(innerContent).append("\n");
                     }
                 }
@@ -456,7 +614,7 @@ public class NapcatAdapter extends WebSocketClient {
                             senderName = !card.isEmpty() ? card : nickname;
                         }
                         if (senderName.isEmpty()) senderName = msgNode.path("user_id").asText("Unknown");
-                        String rawMessage = parseMessageContent(msgNode.path("message"), false).content();
+                        String rawMessage = parseMessageContent(msgNode.path("message"), false, selfId).content();
                         historyList.add(String.format("%s: %s", senderName, rawMessage));
                     }
                 }
@@ -484,7 +642,7 @@ public class NapcatAdapter extends WebSocketClient {
                             senderName = getFriendNameSync(msgSenderId);
                             if (senderName.isBlank()) senderName = String.valueOf(msgSenderId);
                         }
-                        String rawMessage = parseMessageContent(msgNode.path("message"), false).content();
+                        String rawMessage = parseMessageContent(msgNode.path("message"), false, selfId).content();
                         historyList.add(String.format("%s: %s", senderName, rawMessage));
                     }
                 }

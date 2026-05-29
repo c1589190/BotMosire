@@ -48,6 +48,7 @@ public class ConfigsManager {
     public static final double FD_QUALITY_WEIGHT;
     public static final int FEELING_DIMENSION_COUNT;
     public static final int MAX_COGNITIVE_HEAT;
+    public static final boolean ALWAYS_RESPOND_TO_AT_ME;
     public static final int INPUT_BACKLOG_MAX_SIZE;
     public static final int INPUT_REVIEW_BATCH_SIZE;
     public static final int MAX_CONTEXT_CACHE_ROUNDS;
@@ -76,6 +77,11 @@ public class ConfigsManager {
     public static final int MAX_TASK_COGNITIVE_AGE;
     public static final double TASK_PRIORITY_ADJUSTMENT_RANGE;
     public static final long RATE_LIMIT_MS;
+    public static final double MESSAGE_KEYWORD_WEIGHT_MIN;
+    public static final double MESSAGE_KEYWORD_WEIGHT_MAX;
+    public static final double MESSAGE_KEYWORD_DEFAULT_WEIGHT;
+    public static final int MESSAGE_KEYWORD_MAX_COUNT;
+    public static final int MESSAGE_KEYWORD_DEFAULT_TTL_MINUTES;
     public static final String DEPLOYER_ROLE;
     public static final String SEARCH_API_KEY;
     public static final String JINA_API_KEY;
@@ -176,6 +182,17 @@ public class ConfigsManager {
         TASK_PRIORITY_ADJUSTMENT_RANGE = getDouble("cognitive.taskPriorityAdjustmentRange", 0.4);
         RANDOM_CHAT_CHANCE = getDouble("cognitive.randomChatChance", 0.05);
         RATE_LIMIT_MS = getInt("cognitive.rateLimitMs", 5000);
+        ALWAYS_RESPOND_TO_AT_ME = getBoolean("cognitive.alwaysRespondToAtMe", true);
+
+        // ==========================================
+        // 2b. 消息关键词系统
+        // ==========================================
+        MESSAGE_KEYWORD_WEIGHT_MIN = getDouble("messageKeyword.weightMin", 0.1);
+        MESSAGE_KEYWORD_WEIGHT_MAX = getDouble("messageKeyword.weightMax", 2.0);
+        MESSAGE_KEYWORD_DEFAULT_WEIGHT = getDouble("messageKeyword.defaultWeight", 0.5);
+        MESSAGE_KEYWORD_MAX_COUNT = getInt("messageKeyword.maxKeywords", 20);
+        MESSAGE_KEYWORD_DEFAULT_TTL_MINUTES = getInt("messageKeyword.defaultTTLMinutes", 30);
+
         DEPLOYER_ROLE = getString("bot.deployerRole", "");
         SEARCH_API_KEY = getEnvOrProp("BRAVE_SEARCH_API_KEY", "search.braveApiKey", "");
         JINA_API_KEY   = getEnvOrProp("JINA_API_KEY", "search.jinaApiKey", "");
