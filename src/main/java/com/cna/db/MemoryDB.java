@@ -377,17 +377,35 @@ public class MemoryDB {
     /**
      * 【修改】：插入新的感觉维度：hit_weight 不再硬编码为1.0，而是由初次评估的客观极性注入
      */
-    public void insertFeelingDimension(String concept, double[] vector, double initialHitWeight) {
-        String sql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, ?, 1)";
+    /**
+     * 插入新的感觉维度，返回生成的 ID（如果已存在同名维度则返回其 ID）。
+     */
+    public int insertFeelingDimension(String concept, double[] vector, double initialHitWeight) {
+        String insertSql = "INSERT OR IGNORE INTO Feeling_Dimensions (concept, vector_json, hit_weight, trigger_count) VALUES (?, ?, ?, 1)";
+        String querySql = "SELECT id FROM Feeling_Dimensions WHERE concept = ?";
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+             PreparedStatement pstmt = conn.prepareStatement(insertSql)) {
             pstmt.setString(1, concept);
             pstmt.setString(2, mapper.writeValueAsString(vector));
             pstmt.setDouble(3, initialHitWeight);
             pstmt.executeUpdate();
-            log.info("[MemoryDB] 成功生长出新感觉维度: {} (初始化 trigger_count = 1, hit_weight = {})", concept, initialHitWeight);
+
+            // 获取实际 ID（新插入或已存在的）
+            try (PreparedStatement qStmt = conn.prepareStatement(querySql)) {
+                qStmt.setString(1, concept);
+                try (ResultSet rs = qStmt.executeQuery()) {
+                    if (rs.next()) {
+                        int id = rs.getInt("id");
+                        log.info("[MemoryDB] 成功生长出新感觉维度: {} (id={}, trigger_count=1, hit_weight={})", concept, id, initialHitWeight);
+                        return id;
+                    }
+                }
+            }
+            log.warn("[MemoryDB] 插入感觉维度后无法获取 ID: {}", concept);
+            return -1;
         } catch (SQLException | JsonProcessingException e) {
             log.error("插入感觉维度失败: " + concept, e);
+            return -1;
         }
     }
 
@@ -740,14 +758,12 @@ public class MemoryDB {
             placeholders.append("?");
         }
 
-        // 双向查找：从任一群内节点出发能到达的其他群内节点 → 中间路径上的节点是枢纽
-        String sql = "SELECT e1.target_dim_id AS hub, COUNT(DISTINCT e2.target_dim_id) AS connections " +
-                "FROM Feeling_Hypergraph e1 " +
-                "JOIN Feeling_Hypergraph e2 ON e1.target_dim_id = e2.source_dim_id " +
-                "WHERE e1.source_dim_id IN (" + placeholders + ") " +
-                "AND e2.target_dim_id IN (" + placeholders + ") " +
-                "AND e2.target_dim_id != e1.source_dim_id " +
-                "GROUP BY e1.target_dim_id " +
+        // 枢纽 = 同时被多个输入维度直接连接的目标节点（入度 ≥ 2）
+        String sql = "SELECT target_dim_id AS hub, COUNT(DISTINCT source_dim_id) AS connections " +
+                "FROM Feeling_Hypergraph " +
+                "WHERE source_dim_id IN (" + placeholders + ") " +
+                "AND target_dim_id NOT IN (" + placeholders + ") " +
+                "GROUP BY target_dim_id " +
                 "HAVING connections >= 2 " +
                 "ORDER BY connections DESC";
 
@@ -764,5 +780,87 @@ public class MemoryDB {
             log.warn("[MemoryDB] 查找超图枢纽失败: {}", e.getMessage());
         }
         return hubScores;
+    }
+
+    /**
+     * 获取两个维度之间的最大边权重（考虑两个方向）。
+     */
+    public double getMaxEdgeWeightBetween(int dimIdA, int dimIdB) {
+        String sql = "SELECT MAX(weight) FROM Feeling_Hypergraph " +
+                "WHERE (source_dim_id = ? AND target_dim_id = ?) " +
+                "OR (source_dim_id = ? AND target_dim_id = ?)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, dimIdA);
+            pstmt.setInt(2, dimIdB);
+            pstmt.setInt(3, dimIdB);
+            pstmt.setInt(4, dimIdA);
+            ResultSet rs = pstmt.executeQuery();
+            if (rs.next()) {
+                double w = rs.getDouble(1);
+                return rs.wasNull() ? 0.0 : w;
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryDB] 查询边权重失败: {}↔{} - {}", dimIdA, dimIdB, e.getMessage());
+        }
+        return 0.0;
+    }
+
+    /**
+     * 超图边全局衰减：所有权重乘以 decayFactor。
+     * 权重低于 minWeight 的边自动删除。
+     * @param decayFactor 衰减因子，0.0~1.0（如 0.95 表示保留 95%）
+     * @param minWeight   低于此权重的边被清理
+     * @return 删除的边数量
+     */
+    public int decayHypergraphEdges(double decayFactor, double minWeight) {
+        int deleted = 0;
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                // 衰减所有权重
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "UPDATE Feeling_Hypergraph SET weight = weight * ?")) {
+                    pstmt.setDouble(1, decayFactor);
+                    pstmt.executeUpdate();
+                }
+                // 删除弱边
+                try (PreparedStatement pstmt = conn.prepareStatement(
+                        "DELETE FROM Feeling_Hypergraph WHERE weight < ?")) {
+                    pstmt.setDouble(1, minWeight);
+                    deleted = pstmt.executeUpdate();
+                }
+                conn.commit();
+                if (deleted > 0) {
+                    log.info("[MemoryDB] 超图衰减: decayFactor={}, 清理 {} 条弱边", decayFactor, deleted);
+                }
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryDB] 超图边衰减失败: {}", e.getMessage());
+        }
+        return deleted;
+    }
+
+    /**
+     * 降低指定边的权重（负反馈惩罚）。
+     */
+    public void weakenHypergraphEdge(int srcId, int tgtId, double penalty) {
+        String sql = "UPDATE Feeling_Hypergraph SET weight = MAX(0, weight - ?) " +
+                "WHERE source_dim_id = ? AND target_dim_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setDouble(1, penalty);
+            pstmt.setInt(2, srcId);
+            pstmt.setInt(3, tgtId);
+            int rows = pstmt.executeUpdate();
+            if (rows > 0) {
+                log.info("[MemoryDB] 边 {}→{} 权重减少 {} (负反馈)", srcId, tgtId, penalty);
+            }
+        } catch (SQLException e) {
+            log.warn("[MemoryDB] 削弱超图边失败: {}→{} - {}", srcId, tgtId, e.getMessage());
+        }
     }
 }

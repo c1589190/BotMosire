@@ -43,13 +43,12 @@ public class FeelingHypergraphManager {
     private final MemoryDB db;
     private final double edgeWeightDecay;
     private final int maxExpandNodes;
-    private final int cooccurrenceThreshold;
+    private static final double MIN_PROPAGATION_WEIGHT = 0.15; // BFS 传播最低门槛（比旧值 0.05 高 3 倍）
 
     private FeelingHypergraphManager(MemoryDB db) {
         this.db = db;
         this.edgeWeightDecay = ConfigsManager.FEELING_HYPERGRAPH_EDGE_WEIGHT_DECAY;
         this.maxExpandNodes = ConfigsManager.FEELING_HYPERGRAPH_MAX_EXPAND_NODES;
-        this.cooccurrenceThreshold = ConfigsManager.FEELING_HYPERGRAPH_COOCCURRENCE_THRESHOLD;
     }
 
     // =====================================================
@@ -92,7 +91,7 @@ public class FeelingHypergraphManager {
                     for (HypergraphEdge e : inEdges) { if (e.sourceDimId == neighbor) edgeWeight = Math.max(edgeWeight, e.weight); }
 
                     double propagatedWeight = currentWeight * Math.max(edgeWeight * edgeWeightDecay, 0.1);
-                    if (propagatedWeight >= 0.05) { // 权重太低的不扩展
+                    if (propagatedWeight >= MIN_PROPAGATION_WEIGHT) { // 权重太低的不扩展（避免噪音扩散）
                         visited.add(neighbor);
                         queue.add(neighbor);
                         layerWeights.put(neighbor, propagatedWeight);
@@ -133,21 +132,75 @@ public class FeelingHypergraphManager {
     /**
      * 一组感觉维度同时被触发时调用。
      * 为其中任意两两组合建立/加权 associated 边。
-     * 仅在共现次数达到阈值后建立边，防止噪声。
+     * 权重增量基于两个维度的 embedding 余弦相似度（0.1 ~ 0.6），
+     * 语义越相似、共现证据越强；弱相关对获得较小增量，低频自然衰减消失。
      */
     public void onCoOccurrence(List<Integer> dimIds) {
+        // 无向量版本：回退到统一 +0.3（兼容旧调用）
+        onCoOccurrence(dimIds, null);
+    }
+
+    /**
+     * @param dimIds      共现的维度 ID 列表
+     * @param dimProvider 维度 ID → FeelingDimension 的查询函数，传 null 则退化为固定 +0.3
+     */
+    public void onCoOccurrence(List<Integer> dimIds,
+                                java.util.function.Function<Integer, MemoryDB.FeelingDimension> dimProvider) {
         if (dimIds == null || dimIds.size() < 2) return;
 
-        // 用 cooccurrenceThreshold 控制：低频共现不建立边
-        // 实际做法：每次都 +0.3 的权重增量，低频共现权重很低，高频自然积累
-        double weightInc = 0.3;
+        int pairCount = 0;
+        double totalInc = 0;
         for (int i = 0; i < dimIds.size(); i++) {
             for (int j = i + 1; j < dimIds.size(); j++) {
+                double weightInc;
+                if (dimProvider != null) {
+                    MemoryDB.FeelingDimension dimA = dimProvider.apply(dimIds.get(i));
+                    MemoryDB.FeelingDimension dimB = dimProvider.apply(dimIds.get(j));
+                    if (dimA != null && dimB != null && dimA.vector != null && dimB.vector != null) {
+                        double sim = cosineSimilarity(dimA.vector, dimB.vector);
+                        // sim ∈ [0,1] → weightInc ∈ [0.1, 0.6]
+                        weightInc = 0.1 + sim * 0.5;
+                    } else {
+                        weightInc = 0.3;
+                    }
+                } else {
+                    weightInc = 0.3;
+                }
                 upsertEdge(dimIds.get(i), dimIds.get(j), "associated", weightInc);
                 upsertEdge(dimIds.get(j), dimIds.get(i), "associated", weightInc);
+                pairCount += 2;
+                totalInc += weightInc * 2;
             }
         }
-        log.debug("[Hypergraph] {} 个维度共现，已更新关联边", dimIds.size());
+        log.debug("[Hypergraph] {} 个维度共现，{} 对边加权，平均增量 {:.3f}",
+                dimIds.size(), pairCount, pairCount > 0 ? totalInc / pairCount : 0);
+    }
+
+    /** 获取两个维度之间的最大边权重（双向查找）。 */
+    public double getMaxEdgeWeightBetween(int dimIdA, int dimIdB) {
+        return db.getMaxEdgeWeightBetween(dimIdA, dimIdB);
+    }
+
+    /**
+     * 超图边全局衰减 + 弱边清理。
+     * 建议在 FeelingDimensionManager.tick() 中周期性调用。
+     */
+    public void decayAllEdges(double decayFactor, double minWeight) {
+        int deleted = db.decayHypergraphEdges(decayFactor, minWeight);
+        if (deleted > 0) {
+            log.info("[Hypergraph] 清理 {} 条弱边 (minWeight < {})", deleted, minWeight);
+        }
+    }
+
+    private double cosineSimilarity(double[] a, double[] b) {
+        if (a == null || b == null || a.length != b.length) return 0.0;
+        double dot = 0, na = 0, nb = 0;
+        for (int k = 0; k < a.length; k++) {
+            dot += a[k] * b[k];
+            na += a[k] * a[k];
+            nb += b[k] * b[k];
+        }
+        return (na == 0 || nb == 0) ? 0.0 : dot / (Math.sqrt(na) * Math.sqrt(nb));
     }
 
     // =====================================================

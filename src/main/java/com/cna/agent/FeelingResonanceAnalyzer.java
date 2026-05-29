@@ -198,13 +198,24 @@ public class FeelingResonanceAnalyzer {
      * 输入已按相似度降序排列的列表，找第一个"陡降"位置。
      *
      * 算法：
-     * 1. 计算相邻相似度差值
-     * 2. 计算差值的均值和标准差
-     * 3. 第一个超过 mean + sigma * std 的差值位置 → 拐点
-     * 4. 若所有差值都平稳，拐点设在末尾（全部不违和）
+     * - 小样本（<4）：用绝对阈值 0.25，避免统计方法在小样本下失效
+     * - 大样本（≥4）：计算相邻差值的均值+sigma*std 作为动态阈值
+     * - 若所有差值都平稳或低于 minGap，拐点设在末尾（全部不违和）
      */
     int detectInflection(List<DimensionSimilarity> sorted) {
         if (sorted.size() < 2) return sorted.size();
+
+        // 小样本 fallback：统计阈值不可靠，直接用绝对阈值
+        if (sorted.size() < 4) {
+            for (int i = 0; i < sorted.size(); i++) {
+                if (sorted.get(i).similarity < 0.25) {
+                    log.debug("[Inflection] 小样本拐点位于 index={}, sim={:.4f} < 0.25",
+                            i, sorted.get(i).similarity);
+                    return i;
+                }
+            }
+            return sorted.size();
+        }
 
         // 计算相邻差值
         double[] gaps = new double[sorted.size() - 1];

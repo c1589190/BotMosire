@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -78,6 +79,8 @@ public class FeelingDimensionManager {
                 int addedCount = 0;
                 int updatedCount = 0;
                 int replacedCount = 0;
+                // 在锁定内收集实际命中的维度 ID，避免后期名匹配因 renamed/updated 概念名不同而丢失
+                List<Integer> matchedDimIds = new ArrayList<>();
 
                 for (ConceptInput ci : concepts) {
                     String concept = ci.name.trim();
@@ -105,6 +108,7 @@ public class FeelingDimensionManager {
                             replacedCount++;
                             double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
                             memoryDB.replaceFeelingDimension(bestMatch.id, concept, conceptVector, newHitWeight);
+                            matchedDimIds.add(bestMatch.id);
 
                             log.info("[Feeling-Replace] 概念 [{}] 与 [{}] 相似度 {} >= 替换阈值 {}，已覆盖旧词。Weight: {}->{}",
                                     concept, bestMatch.concept, highestSim, REPLACE_THRESHOLD,
@@ -115,14 +119,16 @@ public class FeelingDimensionManager {
                             int newTriggerCount = memoryDB.hitDimension(bestMatch.id);
                             double newHitWeight = bestMatch.hitWeight * (1 - ALPHA) + targetPolarity * ALPHA;
                             memoryDB.updateDimensionHitWeight(bestMatch.id, newHitWeight);
+                            matchedDimIds.add(bestMatch.id); // 关键：用 bestMatch.id 而非后期名匹配
 
                             log.info("[Attention-Engine] 概念 [{}] 命中老维度 [{}]。Trigger: {}->{}, Weight: {}->{}",
                                     concept, bestMatch.concept, bestMatch.triggerCount, newTriggerCount,
                                     String.format("%.3f", bestMatch.hitWeight), String.format("%.3f", newHitWeight));
                         } else {
-                            memoryDB.insertFeelingDimension(concept, conceptVector, targetPolarity * ALPHA);
+                            int newId = memoryDB.insertFeelingDimension(concept, conceptVector, targetPolarity * ALPHA);
                             addedCount++;
-                            log.info("[Feeling] 发现新刺激 [{}] 生成新神经节点。初始 Trigger=1, 初始极性={}", concept, targetPolarity);
+                            if (newId > 0) matchedDimIds.add(newId);
+                            log.info("[Feeling] 发现新刺激 [{}] 生成新神经节点 id={}。初始 Trigger=1, 初始极性={}", concept, newId, targetPolarity);
                         }
                     }
                 }
@@ -130,24 +136,20 @@ public class FeelingDimensionManager {
                 log.info("[Feeling] 显式概念处理完毕：新节点 {} 个，重塑旧节点 {} 个，覆盖替换 {} 个。", addedCount, updatedCount, replacedCount);
                 this.tick();  // 成功处理后触发全局衰减
 
-                // 超图共现：同时出现在 finish_task concepts 中的维度，建立关联边
-                try {
-                    FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
-                    if (hgm != null && concepts.size() >= 2) {
-                        List<FeelingDimension> allDims = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
-                        List<Integer> dimIds = new ArrayList<>();
-                        for (ConceptInput ci : concepts) {
-                            allDims.stream()
-                                    .filter(d -> d.concept.equals(ci.name.trim()))
-                                    .findFirst()
-                                    .ifPresent(d -> dimIds.add(d.id));
+                // 超图共现：同时出现在 finish_task concepts 中的维度，用 embedding 相似度做动态权重
+                if (matchedDimIds.size() >= 2) {
+                    try {
+                        FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
+                        if (hgm != null) {
+                            // 传入 dimProvider 以根据 embedding 相似度计算动态权重增量
+                            List<FeelingDimension> allDims = memoryDB.getAllFeelingDimensionsSafe(this::getEmbeddingMock);
+                            java.util.Map<Integer, FeelingDimension> dimMap = new java.util.HashMap<>();
+                            for (FeelingDimension d : allDims) dimMap.put(d.id, d);
+                            hgm.onCoOccurrence(matchedDimIds, dimMap::get);
                         }
-                        if (dimIds.size() >= 2) {
-                            hgm.onCoOccurrence(dimIds);
-                        }
+                    } catch (Exception e2) {
+                        log.debug("[Feeling] 超图共现处理跳过: {}", e2.getMessage());
                     }
-                } catch (Exception e2) {
-                    log.debug("[Feeling] 超图共现处理跳过: {}", e2.getMessage());
                 }
 
             } catch (Exception e) {
@@ -171,13 +173,20 @@ public class FeelingDimensionManager {
 
     public static class DimensionScore {
         public final String concept;
+        public final int dimId;         // 感觉维度 DB ID，-1 表示未知（向后兼容旧构造）
         public final double similarity;
-        public final double hitWeight; // 【新增】：保留原汁原味的极性效价
+        public final double hitWeight;
         public final double InterestScore;
 
-        // 【修改】：构造器加入 hitWeight
+        /** 旧构造器（dimId=-1），向后兼容 */
         public DimensionScore(String concept, double similarity, double hitWeight, double finalScore) {
+            this(concept, -1, similarity, hitWeight, finalScore);
+        }
+
+        /** 新构造器：附带 dimId，供超图激活扩散等场景使用 */
+        public DimensionScore(String concept, int dimId, double similarity, double hitWeight, double finalScore) {
             this.concept = concept;
+            this.dimId = dimId;
             this.similarity = similarity;
             this.hitWeight = hitWeight;
             this.InterestScore = finalScore;
@@ -204,12 +213,65 @@ public class FeelingDimensionManager {
             //double finalScore = sim * baseDynamicArousal * Math.abs(dim.hitWeight);
             double finalScore = sim * baseDynamicArousal; //暂时不使用好坏评判权重来判断……
 
-            // 【修改】：将 dim.hitWeight 一起封装出去
-            scoredList.add(new DimensionScore(dim.concept, sim, dim.hitWeight, finalScore));
+            scoredList.add(new DimensionScore(dim.concept, dim.id, sim, dim.hitWeight, finalScore));
         }
 
         scoredList.sort((a, b) -> Double.compare(b.InterestScore, a.InterestScore));
+
+        // ====== 超图激活扩散 ======
+        // 对 top-N 维度做 1 层 BFS 扩展，被扩散命中的维度加 bonus 后重排序
+        applySpreadingActivation(scoredList, dimensions);
+
         return scoredList;
+    }
+
+    /**
+     * 超图激活扩散：top-N 维度通过超图向外传播，关联维度获得 bonus。
+     * bonus = 源维度 InterestScore × 边权重 × spreadFactor
+     */
+    private void applySpreadingActivation(List<DimensionScore> scoredList, List<FeelingDimension> dimensions) {
+        FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
+        if (hgm == null || scoredList.size() < 2) return;
+
+        int spreadN = Math.min(3, scoredList.size());
+        // bonus map: dimId → max bonus (取所有源维度扩散来的最大值)
+        java.util.Map<Integer, Double> activationBonus = new java.util.HashMap<>();
+
+        // 构建 dimId → DimensionScore 快速索引
+        java.util.Map<Integer, DimensionScore> idToScore = new java.util.HashMap<>();
+        for (DimensionScore ds : scoredList) {
+            if (ds.dimId > 0) idToScore.put(ds.dimId, ds);
+        }
+
+        for (int i = 0; i < spreadN; i++) {
+            DimensionScore top = scoredList.get(i);
+            if (top.dimId <= 0) continue;
+
+            // 1 层 BFS 扩展（不包含自身）
+            Set<Integer> neighbors = hgm.expandDimension(top.dimId, 1);
+            for (int neighborId : neighbors) {
+                if (neighborId == top.dimId) continue; // 跳过自身
+                double edgeWeight = hgm.getMaxEdgeWeightBetween(top.dimId, neighborId);
+                if (edgeWeight <= 0) continue;
+
+                double bonus = top.InterestScore * edgeWeight * 0.15; // spread factor
+                activationBonus.merge(neighborId, bonus, Double::max); // 多个源同时扩散取 max
+            }
+        }
+
+        if (activationBonus.isEmpty()) return;
+
+        // 应用 bonus 并重排序
+        for (int i = 0; i < scoredList.size(); i++) {
+            DimensionScore ds = scoredList.get(i);
+            Double bonus = ds.dimId > 0 ? activationBonus.get(ds.dimId) : null;
+            if (bonus != null && bonus > 0) {
+                double newScore = ds.InterestScore + bonus;
+                // 直接用反射不可行，替换 list 中的对象
+                scoredList.set(i, new DimensionScore(ds.concept, ds.dimId, ds.similarity, ds.hitWeight, newScore));
+            }
+        }
+        scoredList.sort((a, b) -> Double.compare(b.InterestScore, a.InterestScore));
     }
 
     /**
@@ -337,6 +399,16 @@ public class FeelingDimensionManager {
     public void tick() {
         log.debug("[Feeling] 触发全局心跳 (Tick), 所有维度的 trigger_count -1");
         memoryDB.applyGlobalTick();
+
+        // 每 tick 触发超图边衰减（周期性清理弱关联）
+        try {
+            FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
+            if (hgm != null) {
+                hgm.decayAllEdges(0.95, 0.08); // 保留 95%，清理 < 0.08 的弱边
+            }
+        } catch (Exception e) {
+            log.debug("[Feeling] 超图衰减跳过: {}", e.getMessage());
+        }
     }
 
     private double cosineSimilarity(double[] vectorA, double[] vectorB) {
