@@ -322,6 +322,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new GetTaskQueueTool(this));
         this.registerTool(new AdjustTaskPriorityTool(this));
         this.registerTool(new ManageToolGroups(this.largeLLMToolbox));
+        this.registerTool(new ManageMessageKeywords());
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
 
