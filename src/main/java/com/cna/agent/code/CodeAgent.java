@@ -8,6 +8,7 @@ import com.cna.config.ConfigsManager;
 import com.cna.db.MDManager;
 import com.cna.llm.CallResult;
 import com.cna.llm.LLMAdapter;
+import com.cna.mcp.McpManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,7 +41,6 @@ public class CodeAgent {
 
     private final LLMAdapter llm;
     private final Map<String, DefaultAgentToolUnit> toolbox = new LinkedHashMap<>();
-    private final McpToolHub mcpHub;
 
     public CodeAgent() {
         // P1 先复用 BRAIN_CONFIG；日后可换成专属 / 备用模型（见 feature-model-escalation-backup-api）。
@@ -54,28 +54,15 @@ public class CodeAgent {
         register(new CodeGrepText());
         register(new CodeAgentFinishTask());
 
-        // 浏览器自动化（Playwright MCP，stdio 子进程长驻）。Node/npx 缺失或启动失败时
-        // hub 会优雅降级返回空列表，子执行体仍保有文件能力。Chromium 仅在真正导航时才由 MCP 拉起。
-        this.mcpHub = new McpToolHub(mapper);
-        if (ConfigsManager.CODE_AGENT_BROWSER_ENABLED) {
-            for (DefaultAgentToolUnit t : mcpHub.connectNpx("playwright", "@playwright/mcp@latest", "--headless")) {
-                register(t);
-            }
-        }
-        // 桌面操控（Windows-MCP，UIA 树）。默认关闭；启用时排除最高风险工具
-        // （PowerShell/Registry 可任意改系统、FileSystem 会绕过 workspace 沙盒、Process 可杀进程）。
-        if (ConfigsManager.CODE_AGENT_DESKTOP_ENABLED) {
-            for (DefaultAgentToolUnit t : mcpHub.connectUvx("windows", "windows-mcp",
-                    "serve", "--transport", "stdio",
-                    "--exclude-tools", "PowerShell,Registry,FileSystem,Process")) {
-                register(t);
-            }
+        // 注入所有已启用的 MCP 服务器工具（由统一 McpManager 管理）
+        for (DefaultAgentToolUnit t : McpManager.getInstance().getAllToolAdapters()) {
+            register(t);
         }
     }
 
-    /** 关闭子执行体持有的 MCP 子进程（hub 另有 JVM 关闭钩子兜底）。 */
+    /** 关闭子执行体持有的 MCP 子进程（由 McpManager 单例管理，此处为兼容保留）。 */
     public void shutdown() {
-        if (mcpHub != null) mcpHub.shutdown();
+        // McpManager 单例通过 JVM 关闭钩子统一清理
     }
 
     private void register(DefaultAgentToolUnit tool) {

@@ -39,6 +39,9 @@ public class ConfigsLoader {
         for (String fileName : promptFiles) {
             FILE_MAP.put(promptDir + fileName, "prompts/" + fileName);
         }
+
+        // 3. MCP 服务器配置模板
+        FILE_MAP.put("/mcp-servers-template.json", "mcp-servers.json");
     }
 
     /**

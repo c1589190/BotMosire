@@ -107,6 +107,7 @@ public class Main {
             }
             loop.stop();
             MemoryManager.getInstance().stop();
+            com.cna.mcp.McpManager.getInstance().shutdown(); // 关闭所有 MCP 子进程
             com.cna.db.MemoryDB.shutdown(); // 关闭 HikariCP 连接池（I19）
         }));
 
