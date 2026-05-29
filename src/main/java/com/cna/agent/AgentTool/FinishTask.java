@@ -261,7 +261,7 @@ public class FinishTask implements DefaultAgentToolUnit {
                     new com.cna.llm.LLMAdapter(com.cna.config.ConfigsManager.EMBEDDING_CONFIG));
 
             String result = resolver.processDissonanceUpdates(updates, consonantDimIds, allInvolved);
-            db.shutdown(); // 释放临时连接
+            // 注意：不能调用 db.shutdown() — 这是 static 方法，会关掉所有实例共享的连接池
             log.info("[FinishTask] {}", result);
             return result;
         } catch (Exception e) {
