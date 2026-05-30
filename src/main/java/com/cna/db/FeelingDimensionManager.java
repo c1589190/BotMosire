@@ -399,16 +399,7 @@ public class FeelingDimensionManager {
     public void tick() {
         log.debug("[Feeling] 触发全局心跳 (Tick), 所有维度的 trigger_count -1");
         memoryDB.applyGlobalTick();
-
-        // 每 tick 触发超图边衰减（周期性清理弱关联）
-        try {
-            FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
-            if (hgm != null) {
-                hgm.decayAllEdges(0.95, 0.08); // 保留 95%，清理 < 0.08 的弱边
-            }
-        } catch (Exception e) {
-            log.debug("[Feeling] 超图衰减跳过: {}", e.getMessage());
-        }
+        // 超图边衰减已迁移至 MemoryManager.consolidateMemory()，跟随深度记忆巩固触发
     }
 
     private double cosineSimilarity(double[] vectorA, double[] vectorB) {

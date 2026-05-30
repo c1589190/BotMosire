@@ -249,6 +249,10 @@ public class MemoryManager {
                 } else {
                     log.warn("[MemoryManager] 解析成功，但没有找到 points 数组，返回数据: {}", argumentsJson);
                 }
+
+                // 深度记忆巩固完成后，触发超图边衰减（跟随记忆巩固节律，而非认知 tick）
+                triggerHypergraphDecay();
+
             } catch (Exception e) {
                 log.error("[MemoryManager] 解析 Tool 参数失败，原始数据: {}", result.getToolCalls().toString(), e);
             }
@@ -427,6 +431,24 @@ public class MemoryManager {
         }
         if (normA == 0.0 || normB == 0.0) return 0.0;
         return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    /**
+     * 超图边衰减：跟随深度记忆巩固触发，而非认知 tick。
+     * 衰减速率由配置项 feeling.hypergraph.edgeRetentionRate / edgeMinWeight 控制。
+     */
+    private void triggerHypergraphDecay() {
+        try {
+            com.cna.db.FeelingHypergraphManager hgm = com.cna.db.FeelingHypergraphManager.getInstance();
+            if (hgm != null) {
+                hgm.decayAllEdges(
+                    ConfigsManager.FEELING_HYPERGRAPH_EDGE_RETENTION_RATE,
+                    ConfigsManager.FEELING_HYPERGRAPH_EDGE_MIN_WEIGHT
+                );
+            }
+        } catch (Exception e) {
+            log.debug("[MemoryManager] 超图衰减跳过: {}", e.getMessage());
+        }
     }
 
     /**

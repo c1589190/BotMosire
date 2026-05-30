@@ -52,6 +52,8 @@ public class ConfigsManager {
     public static final int FEELING_HYPERGRAPH_MAX_EXPAND_NODES;
     public static final double FEELING_HYPERGRAPH_EDGE_WEIGHT_DECAY;
     public static final int FEELING_HYPERGRAPH_COOCCURRENCE_THRESHOLD;
+    public static final double FEELING_HYPERGRAPH_EDGE_RETENTION_RATE;
+    public static final double FEELING_HYPERGRAPH_EDGE_MIN_WEIGHT;
     public static final double FEELING_RESONANCE_INFLECTION_SIGMA;
     public static final double FEELING_RESONANCE_DISSONANCE_MIN_GAP;
     public static final double FEELING_RESONANCE_DISSONANCE_ABSOLUTE_THRESHOLD;
@@ -241,6 +243,8 @@ public class ConfigsManager {
         FEELING_HYPERGRAPH_MAX_EXPAND_NODES = getInt("feeling.hypergraph.maxExpandNodes", 20);
         FEELING_HYPERGRAPH_EDGE_WEIGHT_DECAY = getDouble("feeling.hypergraph.edgeWeightDecay", 0.7);
         FEELING_HYPERGRAPH_COOCCURRENCE_THRESHOLD = getInt("feeling.hypergraph.cooccurrenceThreshold", 3);
+        FEELING_HYPERGRAPH_EDGE_RETENTION_RATE = getDouble("feeling.hypergraph.edgeRetentionRate", 0.985);
+        FEELING_HYPERGRAPH_EDGE_MIN_WEIGHT = getDouble("feeling.hypergraph.edgeMinWeight", 0.05);
         FEELING_RESONANCE_INFLECTION_SIGMA = getDouble("feeling.resonance.inflectionSigma", 1.5);
         FEELING_RESONANCE_DISSONANCE_MIN_GAP = getDouble("feeling.resonance.dissonanceMinGap", 0.15);
         FEELING_RESONANCE_DISSONANCE_ABSOLUTE_THRESHOLD = getDouble("feeling.resonance.dissonanceAbsoluteThreshold", 0.4);
