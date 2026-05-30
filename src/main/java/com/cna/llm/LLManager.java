@@ -198,6 +198,13 @@ public class LLManager {
                         needInjection ? MDManager.read("thoughts.md", "") : "");
                 dataModel.put("tools_guide",
                         needInjection ? MDManager.read("prompts/toolsGuide.md", "") : "");
+                // 好奇心上下文：上下文重建时注入活跃的好奇心条目
+                dataModel.put("curiosity_context",
+                        needInjection
+                                ? (com.cna.agent.CuriosityListManager.getInstance() != null
+                                        ? com.cna.agent.CuriosityListManager.getInstance().buildCuriosityPromptBlock()
+                                        : "")
+                                : "");
 
                 dataModel.put("now_time", Utils.getNowPrecise());
                 dataModel.put("pending_tasks_summary", livingLoop != null ? livingLoop.buildTaskQueueSummary() : "");

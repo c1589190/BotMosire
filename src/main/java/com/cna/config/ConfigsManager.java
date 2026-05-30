@@ -60,6 +60,9 @@ public class ConfigsManager {
     public static final int FEELING_RESONANCE_CONSONANCE_MIN_COUNT;
     public static final int FEELING_RESONANCE_DEEP_MEMORY_COUNT;
     public static final int FEELING_RESONANCE_I1_SIZE;
+    // 好奇心系统
+    public static final int CURIOSITY_MAX_ENTRIES;
+    public static final double CURIOSITY_INPUT_BONUS;
     public static final int MAX_COGNITIVE_HEAT;
     public static final boolean ALWAYS_RESPOND_TO_AT_ME;
     public static final int INPUT_BACKLOG_MAX_SIZE;
@@ -259,6 +262,10 @@ public class ConfigsManager {
 
         SLEEP_START = getString("agent.sleepStart", "");
         SLEEP_END   = getString("agent.sleepEnd", "");
+
+        // 好奇心系统
+        CURIOSITY_MAX_ENTRIES = getInt("curiosity.maxEntries", 15);
+        CURIOSITY_INPUT_BONUS = getDouble("curiosity.inputBonus", 0.25);
 
         MAX_COGNITIVE_HEAT = getInt("cognitive.maxCognitiveHeat", 24);
         INPUT_BACKLOG_MAX_SIZE = getInt("cognitive.inputBacklogMaxSize", 128);

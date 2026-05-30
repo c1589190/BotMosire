@@ -44,6 +44,14 @@ public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandle
                     baseData.put("feeling_resonance", resonance.llmPromptBlock);
                     baseData.put("feeling_resonance_result", resonance); // 供 finish_task 回馈
                     log.info("[TaskHandler] 感觉谐振分析已注入 Prompt (有违和: {})", resonance.hasDissonance());
+
+                    // 积累违和感到好奇心列表
+                    if (resonance.hasDissonance()) {
+                        com.cna.agent.CuriosityListManager clm = com.cna.agent.CuriosityListManager.getInstance();
+                        if (clm != null) {
+                            clm.accumulateFromResonance(resonance, task.getTaskText());
+                        }
+                    }
                 }
             }
         } catch (Exception e) {

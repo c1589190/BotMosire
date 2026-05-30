@@ -113,6 +113,46 @@ public class LivingLoop implements MosireAPI {
     }
 
     /**
+     * 将指定展示编号的任务提升为下一个执行（优先级设为当前队列最低值 - 0.1）。
+     * 如果目标任务已在执行中或不存在，则静默跳过。
+     * @param displayId LLM 可见的任务编号 [#N]
+     */
+    public void promoteTaskToNext(int displayId) {
+        if (displayId <= 1) return; // [#1] 是当前正在执行的任务
+
+        TaskQueueSnapshot snapshot = getTaskQueueSnapshot();
+        int idCounter = 1; // [#1] = executing
+
+        DefaultAgentTaskUnit target = null;
+        double minPriority = Double.MAX_VALUE;
+        for (DefaultAgentTaskUnit t : snapshot.pendingTasks()) {
+            t.setDisplayId(++idCounter);
+            if (t.getDisplayId() == displayId) {
+                target = t;
+            }
+            if (t.getPriority() < minPriority) {
+                minPriority = t.getPriority();
+            }
+        }
+
+        if (target == null) {
+            log.info("[TaskQueue] promoteTaskToNext: 未找到 [#{}]，可能已被消费", displayId);
+            return;
+        }
+
+        double newPriority = Math.max(0.1, minPriority - 0.1);
+        target.setPriority(newPriority);
+
+        // 触发重新排序
+        if (pendingQueue.remove(target)) {
+            pendingQueue.offer(target);
+        }
+
+        log.info("[TaskQueue] LLM 指定下一个执行任务: [#{}] {}，优先级已提升至 {}",
+                displayId, target.getTaskName(), newPriority);
+    }
+
+    /**
      * 根据展示编号查找任务并调整其优先级。
      * @param displayId LLM 可见的任务编号 [#N]
      * @param delta 调整量，自动钳位到 ±TASK_PRIORITY_ADJUSTMENT_RANGE
@@ -327,6 +367,8 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new DelegateComputerTaskTool());
         this.registerTool(new ManageToolGroups(this.largeLLMToolbox));
         this.registerTool(new ManageMessageKeywords());
+        this.registerTool(new CreateSelfTask(this));
+        this.registerTool(new CancelTask(this));
         this.registerTool(new McpBridge());
 
         log.info("[LivingLoop] 大模型默认工具箱装配完毕，已挂载工具数: {}", largeLLMToolbox.size());
@@ -335,6 +377,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTaskHandler(new ScheduledTaskHandler());       // 定时计划
         this.registerTaskHandler(new UpdateThoughtsTaskHandler());  // 潜意识反思
         this.registerTaskHandler(new ConsoleChatTaskHandler());
+        this.registerTaskHandler(new SelfTaskHandler());            // 自主任务
 
         this.registerInputHandler(new ExpectedChatMessageInputHandler(this));
 
@@ -423,6 +466,21 @@ public class LivingLoop implements MosireAPI {
 
         this.pendingQueue.offer(task);
         this.trimTaskQueue();
+    }
+
+    /**
+     * 从待处理队列中取消指定 UUID 的任务。仅作用于 pendingQueue（非 executingTask）。
+     * @return true 如果成功移除
+     */
+    public boolean cancelPendingTask(UUID taskUUID) {
+        for (DefaultAgentTaskUnit t : pendingQueue) {
+            if (t.getUUID().equals(taskUUID)) {
+                pendingQueue.remove(t);
+                log.info("[TaskQueue] 任务已被 Agent 主动取消: {} (UUID: {})", t.getTaskName(), taskUUID);
+                return true;
+            }
+        }
+        return false;
     }
 
     public void submitPendingRequest(DefaultAgentTaskUnit request) {
@@ -826,6 +884,13 @@ public class LivingLoop implements MosireAPI {
         if (hasFinishTask) {
             log.info("[EXEC-Engine] 捕捉到 finish_task 工具调用，模型主动判定任务完成。");
             lastSolvingTask = null;
+
+            // 消费 LLM 指定的下一个优先任务
+            Integer nextTaskId = FinishTask.NEXT_TASK_DISPLAY_ID.get();
+            if (nextTaskId != null && nextTaskId > 0) {
+                promoteTaskToNext(nextTaskId);
+            }
+            FinishTask.NEXT_TASK_DISPLAY_ID.remove();
 
             MemoryManager.getInstance().inputCurrentMemory(currentMemory.toString(), taskSources);
             FinishTask.CURRENT_TASK_SOURCES.remove();

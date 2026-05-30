@@ -53,9 +53,9 @@ public class ScenePromptsManager {
         String thinkingPath = PROMPTS_PATH_CACHE.getProperty(simpleClassName + ".Thinking", "");
         String solvingPath = PROMPTS_PATH_CACHE.getProperty(simpleClassName + ".Solving", "");
 
-        // 3. 校验路径并读取内容
-        String tPrompt = isValidMdPath(thinkingPath) ? MDManager.read(thinkingPath) : "";
-        String sPrompt = isValidMdPath(solvingPath) ? MDManager.read(solvingPath) : "";
+        // 3. 校验路径并读取内容（显式传 "" 作为默认值，避免 MDManager 用 "请输入文本" 创建垃圾文件）
+        String tPrompt = isValidMdPath(thinkingPath) ? MDManager.read(thinkingPath, "") : "";
+        String sPrompt = isValidMdPath(solvingPath) ? MDManager.read(solvingPath, "") : "";
 
         // 4. 终极兜底：防止 MDManager.read() 内部读取失败返回 null，强转为 ""
         this.thinkingPrompt = (tPrompt == null) ? "" : tPrompt;

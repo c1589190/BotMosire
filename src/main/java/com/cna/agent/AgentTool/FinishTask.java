@@ -33,6 +33,12 @@ public class FinishTask implements DefaultAgentToolUnit {
     public static final ThreadLocal<com.cna.agent.FeelingResonanceAnalyzer.ResonanceAnalysisResult>
             CURRENT_RESONANCE_RESULT = new ThreadLocal<>();
 
+    /**
+     * LLM 在 finish_task 时指定的下一个优先执行任务的展示编号。
+     * 0 或不填 = 默认调度。由 LivingLoop 在任务终结后消费并清理。
+     */
+    public static final ThreadLocal<Integer> NEXT_TASK_DISPLAY_ID = new ThreadLocal<>();
+
     @Override
     public String getName() {
         return "finish_task";
@@ -107,6 +113,25 @@ public class FinishTask implements DefaultAgentToolUnit {
         ObjectNode posProp = dissItemProps.putObject("is_positive");
         posProp.put("type", "boolean");
 
+        // 好奇心疑问（NEW）
+        ObjectNode cqProp = properties.putObject("curiosity_questions");
+        cqProp.put("type", "array");
+        cqProp.put("description", "可选：当你对感觉谐振分析中发现的违和感有具体困惑时，以疑问句形式写下你的问题。每项包含 source_dim_id(触发违和的感觉维度ID)、question(你的疑问句)。这些疑问会在后续轮次中持续提醒你思考。");
+        ObjectNode cqItems = cqProp.putObject("items");
+        cqItems.put("type", "object");
+        ObjectNode cqItemProps = cqItems.putObject("properties");
+        ObjectNode srcDimIdProp = cqItemProps.putObject("source_dim_id");
+        srcDimIdProp.put("type", "integer");
+        srcDimIdProp.put("description", "触发违和感的感觉维度ID（在感觉谐振分析的违和感条目中查找 dim_id）");
+        ObjectNode questionProp = cqItemProps.putObject("question");
+        questionProp.put("type", "string");
+        questionProp.put("description", "你对该违和感的具体困惑，以疑问句形式表达");
+
+        // 下一个优先执行的任务
+        ObjectNode nextTaskProp = properties.putObject("next_task_display_id");
+        nextTaskProp.put("type", "integer");
+        nextTaskProp.put("description", "可选：指定任务完成后，你希望优先执行的下一个任务的 [#N] 编号。如果你根据当前任务的发现、队列中其他任务的内容和优先级判断某个任务更值得立即执行，在此指定它的编号。填 0 或不填则使用默认优先级调度。请主动检查任务队列并做出选择——这是你掌控自己工作流的机会。");
+
         ArrayNode required = params.putArray("required");
         required.add("summary");
         required.add("concepts");
@@ -122,6 +147,15 @@ public class FinishTask implements DefaultAgentToolUnit {
 
             if (summary.isEmpty() || conceptsNode.isMissingNode() || !conceptsNode.isArray()) {
                 return "任务已完成，但你提供的总结或概念列表无效，请重试。";
+            }
+
+            // 捕获 LLM 指定的下一个优先任务
+            int nextTaskId = arguments.path("next_task_display_id").asInt(0);
+            if (nextTaskId > 0) {
+                NEXT_TASK_DISPLAY_ID.set(nextTaskId);
+                log.info("[FinishTask] LLM 指定下一个优先执行任务 [#{}]", nextTaskId);
+            } else {
+                NEXT_TASK_DISPLAY_ID.remove();
             }
 
             FeelingDimensionManager fdManager = FeelingDimensionManager.getInstance();
@@ -218,28 +252,71 @@ public class FinishTask implements DefaultAgentToolUnit {
     }
 
     /**
-     * 解析 dissonance_updates 参数，调用 FeelingDissonanceResolver 结算违和。
+     * 解析 dissonance_updates 和 curiosity_questions 参数，
+     * 分别调用 FeelingDissonanceResolver 结算违和、CuriosityListManager 注册疑问。
      */
     private String processDissonanceUpdates(JsonNode arguments) {
         try {
+            StringBuilder summary = new StringBuilder();
+
+            // === Part A: dissonance_updates ===
             JsonNode dissNode = arguments.path("dissonance_updates");
-            if (dissNode.isMissingNode() || !dissNode.isArray() || dissNode.isEmpty()) {
-                return "";
-            }
-
             List<FeelingDissonanceResolver.DissonanceUpdate> updates = new ArrayList<>();
-            for (JsonNode item : dissNode) {
-                int dimId = item.path("dim_id").asInt(-1);
-                if (dimId < 0) continue;
-                String newNotes = item.path("new_notes").asText("");
-                boolean resolved = item.path("resolved").asBoolean(false);
-                String resolutionConcept = item.path("resolution_concept").asText("");
-                boolean isPositive = item.path("is_positive").asBoolean(true);
-                updates.add(new FeelingDissonanceResolver.DissonanceUpdate(
-                        dimId, newNotes, resolved, resolutionConcept, isPositive));
+            java.util.Set<Integer> curiosityResolvedDims = new java.util.LinkedHashSet<>();
+            java.util.Map<Integer, String> curiosityNotes = new java.util.HashMap<>();
+
+            if (!dissNode.isMissingNode() && dissNode.isArray() && !dissNode.isEmpty()) {
+                for (JsonNode item : dissNode) {
+                    int dimId = item.path("dim_id").asInt(-1);
+                    if (dimId < 0) continue;
+                    String newNotes = item.path("new_notes").asText("");
+                    boolean resolved = item.path("resolved").asBoolean(false);
+                    String resolutionConcept = item.path("resolution_concept").asText("");
+                    boolean isPositive = item.path("is_positive").asBoolean(true);
+                    updates.add(new FeelingDissonanceResolver.DissonanceUpdate(
+                            dimId, newNotes, resolved, resolutionConcept, isPositive));
+
+                    if (item.path("curiosity_resolved").asBoolean(false)) {
+                        curiosityResolvedDims.add(dimId);
+                        curiosityNotes.put(dimId, newNotes);
+                    }
+                }
             }
 
-            if (updates.isEmpty()) return "";
+            // === Part B: curiosity_questions (NEW) ===
+            JsonNode cqNode = arguments.path("curiosity_questions");
+            if (!cqNode.isMissingNode() && cqNode.isArray() && !cqNode.isEmpty()) {
+                com.cna.agent.CuriosityListManager clm = com.cna.agent.CuriosityListManager.getInstance();
+                if (clm != null) {
+                    for (JsonNode item : cqNode) {
+                        int sourceDimId = item.path("source_dim_id").asInt(-1);
+                        if (sourceDimId < 0) continue;
+                        String question = item.path("question").asText("");
+                        if (question.isBlank()) continue;
+
+                        // 从谐振分析结果中找对应的 dissonantDimIds
+                        java.util.List<Integer> dissonantDimIds = new java.util.ArrayList<>();
+                        com.cna.agent.FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance =
+                                CURRENT_RESONANCE_RESULT.get();
+                        if (resonance != null && resonance.groups != null) {
+                            for (var g : resonance.groups) {
+                                if (g.sourceDimId == sourceDimId && g.hasDissonance()) {
+                                    for (var m : g.getDissonant()) {
+                                        dissonantDimIds.add(m.dimId);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        clm.registerCuriosityQuestion(sourceDimId, question, dissonantDimIds);
+                    }
+                    summary.append("curiosity_questions 已处理, ");
+                }
+            }
+
+            if (updates.isEmpty() && curiosityResolvedDims.isEmpty()) {
+                return summary.isEmpty() ? "" : summary.toString().replaceAll(", $", "");
+            }
 
             // 获取谐振分析结果中的不违和维度
             com.cna.agent.FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance =
@@ -261,9 +338,18 @@ public class FinishTask implements DefaultAgentToolUnit {
                     new com.cna.llm.LLMAdapter(com.cna.config.ConfigsManager.EMBEDDING_CONFIG));
 
             String result = resolver.processDissonanceUpdates(updates, consonantDimIds, allInvolved);
-            // 注意：不能调用 db.shutdown() — 这是 static 方法，会关掉所有实例共享的连接池
             log.info("[FinishTask] {}", result);
-            return result;
+            summary.append(result);
+
+            // 好奇心消解
+            for (int dimId : curiosityResolvedDims) {
+                com.cna.agent.CuriosityListManager clm = com.cna.agent.CuriosityListManager.getInstance();
+                if (clm != null) {
+                    clm.resolveEntriesByDim(dimId, curiosityNotes.getOrDefault(dimId, ""));
+                }
+            }
+
+            return summary.toString();
         } catch (Exception e) {
             log.error("[FinishTask] 处理 dissonance_updates 失败", e);
             return "";

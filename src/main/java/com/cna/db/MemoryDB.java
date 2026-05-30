@@ -85,6 +85,21 @@ public class MemoryDB {
             stmt.execute(createDeepSql);
             stmt.execute(createFeelingSql);
             stmt.execute(createHypergraphSql);
+
+            // 好奇心列表表
+            String createCuriositySql = "CREATE TABLE IF NOT EXISTS Curiosity_List (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "source_dim_id INTEGER NOT NULL, " +
+                    "dissonant_dim_ids TEXT NOT NULL, " +
+                    "source_concept TEXT NOT NULL, " +
+                    "dissonant_concepts TEXT NOT NULL, " +
+                    "trigger_count INTEGER DEFAULT 1, " +
+                    "is_active INTEGER DEFAULT 1, " +
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
+                    "last_triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, " +
+                    "resolved_at TIMESTAMP, " +
+                    "resolution_note TEXT DEFAULT '')";
+            stmt.execute(createCuriositySql);
         } catch (SQLException e) {
             log.error("初始化记忆数据库失败", e);
         }
@@ -94,6 +109,8 @@ public class MemoryDB {
         ensureColumn("Deep_Memorys", "sources", "TEXT DEFAULT '[]'");
         ensureColumn("Feeling_Dimensions", "status", "TEXT DEFAULT 'stable'");
         ensureColumn("Feeling_Dimensions", "llm_notes", "TEXT DEFAULT ''");
+        ensureColumn("Curiosity_List", "resolution_note", "TEXT DEFAULT ''");
+        ensureColumn("Curiosity_List", "llm_question", "TEXT DEFAULT ''");
     }
 
     /**
@@ -658,6 +675,52 @@ public class MemoryDB {
         }
     }
 
+    public static class CuriosityEntry {
+        public final int id;
+        public final int sourceDimId;
+        public final List<Integer> dissonantDimIds;
+        public final String sourceConcept;
+        public final List<String> dissonantConcepts;
+        public final int triggerCount;
+        public final boolean isActive;
+        public final String createdAt;
+        public final String lastTriggeredAt;
+        public final String resolvedAt;
+        public final String resolutionNote;
+        public final String llmQuestion;
+
+        public CuriosityEntry(int id, int sourceDimId, String dissonantDimIdsJson,
+                               String sourceConcept, String dissonantConceptsJson,
+                               int triggerCount, boolean isActive,
+                               String createdAt, String lastTriggeredAt,
+                               String resolvedAt, String resolutionNote, String llmQuestion) {
+            this.id = id;
+            this.sourceDimId = sourceDimId;
+            List<Integer> dissIds = new ArrayList<>();
+            List<String> dissConcepts = new ArrayList<>();
+            try {
+                com.fasterxml.jackson.core.type.TypeReference<List<Integer>> intRef =
+                        new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>() {};
+                dissIds = mapper.readValue(dissonantDimIdsJson, intRef);
+                com.fasterxml.jackson.core.type.TypeReference<List<String>> strRef =
+                        new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {};
+                dissConcepts = mapper.readValue(dissonantConceptsJson, strRef);
+            } catch (Exception e) {
+                log.warn("[MemoryDB] 解析 CuriosityEntry JSON 失败: id={}", id, e);
+            }
+            this.dissonantDimIds = dissIds;
+            this.sourceConcept = sourceConcept;
+            this.dissonantConcepts = dissConcepts;
+            this.triggerCount = triggerCount;
+            this.isActive = isActive;
+            this.createdAt = createdAt;
+            this.lastTriggeredAt = lastTriggeredAt;
+            this.resolvedAt = resolvedAt;
+            this.resolutionNote = resolutionNote;
+            this.llmQuestion = llmQuestion != null ? llmQuestion : "";
+        }
+    }
+
     /**
      * 插入或加权更新超图边。已存在则 weight += weightInc 且 relationType 更新。
      */
@@ -862,5 +925,140 @@ public class MemoryDB {
         } catch (SQLException e) {
             log.warn("[MemoryDB] 削弱超图边失败: {}→{} - {}", srcId, tgtId, e.getMessage());
         }
+    }
+
+    // ============================================================
+    // Curiosity_List CRUD
+    // ============================================================
+
+    public int insertCuriosityEntry(int sourceDimId, String sourceConcept,
+                                     String dissonantDimIdsJson, String dissonantConceptsJson,
+                                     String llmQuestion) {
+        String sql = "INSERT INTO Curiosity_List (source_dim_id, dissonant_dim_ids, source_concept, " +
+                "dissonant_concepts, llm_question, trigger_count, is_active) VALUES (?, ?, ?, ?, ?, 1, 1)";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, sourceDimId);
+            pstmt.setString(2, dissonantDimIdsJson);
+            pstmt.setString(3, sourceConcept);
+            pstmt.setString(4, dissonantConceptsJson);
+            pstmt.setString(5, llmQuestion != null ? llmQuestion : "");
+            pstmt.executeUpdate();
+            // SQLite JDBC 不支持 RETURN_GENERATED_KEYS，改用 last_insert_rowid()
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SELECT last_insert_rowid()")) {
+                if (rs.next()) return rs.getInt(1);
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 插入好奇心条目失败", e);
+        }
+        return -1;
+    }
+
+    public List<CuriosityEntry> getActiveCuriosityEntries() {
+        List<CuriosityEntry> result = new ArrayList<>();
+        String sql = "SELECT id, source_dim_id, dissonant_dim_ids, source_concept, dissonant_concepts, " +
+                "trigger_count, is_active, created_at, last_triggered_at, resolved_at, resolution_note, " +
+                "llm_question FROM Curiosity_List WHERE is_active = 1 ORDER BY last_triggered_at DESC";
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                result.add(new CuriosityEntry(
+                        rs.getInt("id"), rs.getInt("source_dim_id"),
+                        rs.getString("dissonant_dim_ids"), rs.getString("source_concept"),
+                        rs.getString("dissonant_concepts"), rs.getInt("trigger_count"),
+                        rs.getBoolean("is_active"), rs.getString("created_at"),
+                        rs.getString("last_triggered_at"), rs.getString("resolved_at"),
+                        rs.getString("resolution_note"), rs.getString("llm_question")));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 查询活跃好奇心条目失败", e);
+        }
+        return result;
+    }
+
+    public List<CuriosityEntry> getAllCuriosityEntries() {
+        List<CuriosityEntry> result = new ArrayList<>();
+        String sql = "SELECT id, source_dim_id, dissonant_dim_ids, source_concept, dissonant_concepts, " +
+                "trigger_count, is_active, created_at, last_triggered_at, resolved_at, resolution_note, " +
+                "llm_question FROM Curiosity_List ORDER BY last_triggered_at DESC";
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                result.add(new CuriosityEntry(
+                        rs.getInt("id"), rs.getInt("source_dim_id"),
+                        rs.getString("dissonant_dim_ids"), rs.getString("source_concept"),
+                        rs.getString("dissonant_concepts"), rs.getInt("trigger_count"),
+                        rs.getBoolean("is_active"), rs.getString("created_at"),
+                        rs.getString("last_triggered_at"), rs.getString("resolved_at"),
+                        rs.getString("resolution_note"), rs.getString("llm_question")));
+            }
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 查询所有好奇心条目失败", e);
+        }
+        return result;
+    }
+
+    public void incrementCuriosityTriggerCount(int entryId) {
+        String sql = "UPDATE Curiosity_List SET trigger_count = trigger_count + 1, " +
+                "last_triggered_at = CURRENT_TIMESTAMP WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, entryId);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 更新好奇心触发次数失败 id={}", entryId, e);
+        }
+    }
+
+    public void deactivateCuriosityEntry(int entryId, String resolutionNote) {
+        String sql = "UPDATE Curiosity_List SET is_active = 0, resolved_at = CURRENT_TIMESTAMP, " +
+                "resolution_note = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, resolutionNote != null ? resolutionNote : "");
+            pstmt.setInt(2, entryId);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 消解好奇心条目失败 id={}", entryId, e);
+        }
+    }
+
+    public void updateCuriosityQuestion(int entryId, String question) {
+        String sql = "UPDATE Curiosity_List SET llm_question = ?, " +
+                "last_triggered_at = CURRENT_TIMESTAMP WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, question != null ? question : "");
+            pstmt.setInt(2, entryId);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 更新好奇心疑问失败 id={}", entryId, e);
+        }
+    }
+
+    public void deleteCuriosityEntry(int entryId) {
+        String sql = "DELETE FROM Curiosity_List WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, entryId);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 删除好奇心条目失败 id={}", entryId, e);
+        }
+    }
+
+    public int getActiveCuriosityCount() {
+        String sql = "SELECT COUNT(*) FROM Curiosity_List WHERE is_active = 1";
+        try (Connection conn = dataSource.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (rs.next()) return rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("[MemoryDB] 查询好奇心条目数失败", e);
+        }
+        return 0;
     }
 }

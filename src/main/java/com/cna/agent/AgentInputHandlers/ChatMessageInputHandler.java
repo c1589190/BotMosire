@@ -158,19 +158,38 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                                 input.getRole_name(), input.getSource(), input.getSource_name());
                 double adjustedScore = eval.InterestScore + keywordBonus;
 
-                boolean isHighValue = adjustedScore >= currentDynamicThreshold;
+                // 好奇心优先审查：检查输入是否触及活跃的好奇维度
+                com.cna.agent.CuriosityListManager clm = com.cna.agent.CuriosityListManager.getInstance();
+                java.util.List<Integer> curiosityMatch = (clm != null)
+                        ? clm.checkCuriosityMatch(textContent) : java.util.List.of();
+                double curiosityBonus = curiosityMatch.isEmpty() ? 0.0
+                        : com.cna.config.ConfigsManager.CURIOSITY_INPUT_BONUS;
+                double finalScore = adjustedScore + curiosityBonus;
+
+                boolean isHighValue = finalScore >= currentDynamicThreshold;
                 boolean isLuckyTrash = !isHighValue && isStarving && (Math.random() < ConfigsManager.RANDOM_CHAT_CHANCE);
 
                 if (isHighValue || isLuckyTrash) {
                     String reason;
                     if (isHighValue) {
-                        reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (感觉得分: %.2f",
-                                eval.topConcept, eval.InterestScore);
-                        if (keywordBonus > 0) {
-                            reason += String.format(" + 关键词加成:%.2f", keywordBonus);
+                        if (adjustedScore < currentDynamicThreshold && curiosityBonus > 0) {
+                            // 仅因好奇心加成而通过
+                            String matchConcepts = clm.buildCuriosityMatchReason(curiosityMatch);
+                            reason = String.format("这条消息虽然感觉得分较低(%.2f)，但触及了你的未解认知矛盾[%s](好奇心加成%.2f)，出于探索本能决定处理。综合得分: %.2f >= 阈值: %.2f",
+                                    adjustedScore, matchConcepts, curiosityBonus, finalScore, currentDynamicThreshold);
+                            log.info("好奇心加成放行。原因：{}", reason);
+                        } else {
+                            reason = String.format("这条消息强烈触碰了你的核心关注点：[%s] (感觉得分: %.2f",
+                                    eval.topConcept, eval.InterestScore);
+                            if (keywordBonus > 0) {
+                                reason += String.format(" + 关键词加成:%.2f", keywordBonus);
+                            }
+                            if (curiosityBonus > 0) {
+                                reason += String.format(" + 好奇心加成:%.2f", curiosityBonus);
+                            }
+                            reason += String.format("，打破当前动态阈值: %.2f)", currentDynamicThreshold);
+                            log.info("高优消息被拦截放行。原因：{}", reason);
                         }
-                        reason += String.format("，打破当前动态阈值: %.2f)", currentDynamicThreshold);
-                        log.info("高优消息被拦截放行。原因：{}", reason);
                     } else {
                         reason = String.format("这条消息在你的感觉中枢里得分极低(%.2f < %.2f)，你感觉它是废话。但是由于现在你也没其他事干，你决定勉为其难地随便回复一下它，维持活性。",
                                 eval.InterestScore, currentDynamicThreshold);

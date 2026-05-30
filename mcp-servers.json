@@ -1,0 +1,36 @@
+{
+  "_comment": "MCP 服务器配置文件 — 由 McpManager 自动加载。支持 command / npx / uvx 三种类型。",
+  "servers": [
+    {
+      "name": "echo",
+      "enabled": false,
+      "command": "python3",
+      "args": ["test-mcp-server/echo_server.py"]
+    },
+    {
+      "name": "github",
+      "enabled": false,
+      "command": "python3",
+      "args": ["test-mcp-server/github_mcp_server.py"],
+      "env": {
+        "GITHUB_TOKEN": "your_github_pat_here",
+        "GITHUB_OWNER": "your_username",
+        "GITHUB_REPO": "your_repo"
+      }
+    },
+    {
+      "name": "playwright",
+      "enabled": false,
+      "type": "npx",
+      "package": "@playwright/mcp@latest",
+      "extraArgs": ["--headless"]
+    },
+    {
+      "name": "windows",
+      "enabled": false,
+      "type": "uvx",
+      "package": "windows-mcp",
+      "extraArgs": ["serve", "--transport", "stdio", "--exclude-tools", "PowerShell,Registry,FileSystem,Process"]
+    }
+  ]
+}

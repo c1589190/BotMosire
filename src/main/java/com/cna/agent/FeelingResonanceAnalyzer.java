@@ -266,7 +266,6 @@ public class FeelingResonanceAnalyzer {
         StringBuilder sb = new StringBuilder();
         sb.append("## 感觉谐振分析\n\n");
 
-        // 不违和汇总
         boolean hasAnyDissonance = groups.stream().anyMatch(ResonanceGroup::hasDissonance);
 
         if (!hasAnyDissonance) {
@@ -281,41 +280,56 @@ public class FeelingResonanceAnalyzer {
             }
         } else {
             for (ResonanceGroup g : groups) {
+                if (!g.hasDissonance()) {
+                    // 无违和的组：简述
+                    List<DimensionSimilarity> consonant = g.getConsonant();
+                    if (!consonant.isEmpty()) {
+                        sb.append("- 触发: **").append(g.sourceConcept)
+                                .append("** → 与以往一致: ");
+                        sb.append(consonant.stream().map(m -> m.concept)
+                                .collect(Collectors.joining("、")));
+                        sb.append("\n");
+                    }
+                    continue;
+                }
+
                 sb.append("### 触发感觉: **").append(g.sourceConcept)
                         .append("** (相似度 ").append(String.format("%.2f", g.sourceSimilarity)).append(")\n\n");
 
-                // 不违和
+                // 不违和 → 合并为一行简述
                 List<DimensionSimilarity> consonant = g.getConsonant();
                 if (!consonant.isEmpty()) {
-                    sb.append("**与以往一致 (不违和):**\n");
-                    for (DimensionSimilarity m : consonant) {
-                        sb.append("- ").append(m.concept);
-                        sb.append(" (sim=").append(String.format("%.2f", m.similarity)).append(")\n");
-                    }
+                    sb.append("- 与以往一致的感觉: ");
+                    sb.append(consonant.stream().map(m -> m.concept)
+                            .collect(Collectors.joining("、")));
                     sb.append("\n");
                 }
 
-                // 违和
+                // 违和 → 保留数值（数值是精细标签）
                 List<DimensionSimilarity> dissonant = g.getDissonant();
                 if (!dissonant.isEmpty()) {
-                    sb.append("**⚠️ 存在违和感:**\n");
+                    sb.append("- ⚠️ 违和感: ");
+                    for (int i = 0; i < dissonant.size(); i++) {
+                        DimensionSimilarity m = dissonant.get(i);
+                        if (i > 0) sb.append("、");
+                        sb.append("**").append(m.concept).append("**");
+                        sb.append(" (sim=").append(String.format("%.2f", m.similarity)).append(")");
+                    }
+                    sb.append("\n");
+                    // 之前的 LLM 分析笔记
                     for (DimensionSimilarity m : dissonant) {
-                        sb.append("- **").append(m.concept).append("**");
-                        sb.append(" (sim=").append(String.format("%.2f", m.similarity)).append(", ");
-                        sb.append("status=").append(m.status).append(")");
                         if (m.llmNotes != null && !m.llmNotes.isBlank()) {
                             String notes = m.llmNotes.length() > 120
                                     ? m.llmNotes.substring(0, 120) + "..."
                                     : m.llmNotes;
-                            sb.append("\n  之前的分析: ").append(notes);
+                            sb.append("  - ").append(m.concept).append(" 之前的分析: ").append(notes).append("\n");
                         }
-                        sb.append("\n");
                     }
-                    sb.append("\n请分析：为什么这些感觉与已有经验产生了矛盾？");
-                    sb.append("在 finish_task 的 dissonance_updates 中说明你的判断。");
-                    sb.append("如果暂时无法确定原因，也请如实记录。\n");
                 }
+                sb.append("\n");
             }
+            sb.append("如果你对这些违和感有具体的困惑，请在 finish_task 的 curiosity_questions 中以疑问句形式写下你的疑问。\n");
+            sb.append("这些疑问会在后续轮次中持续提醒你思考。同时，在 dissonance_updates 中也可以记录你对违和感觉本身的分析判断。\n");
         }
 
         return sb.toString();

@@ -36,7 +36,7 @@ ${current_thoughts}
 </#if>
 
 <#if deep_memories?? && (deep_memories?size > 0)>
-以下是你脑海中浮现的与当前事件相关的以往经验（[DM-N] 为记忆编号，可在 finish_task 的 useful_memory_ids 中标记有用的记忆编号）：{
+以下是你脑海中浮现的与当前事件相关的以往经验：{
 
 <#list deep_memories as d_mem>
 - ${d_mem}
@@ -68,14 +68,4 @@ ${recent_history}
 </#list>
 }
 </#if>
-
-<#if feeling_resonance?has_content>
-${feeling_resonance}
-</#if>
-
-<#if curiosity_context?has_content>
----
-${curiosity_context}
-</#if>
-
 </#if>
