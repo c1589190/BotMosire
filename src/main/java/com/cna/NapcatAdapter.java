@@ -382,6 +382,14 @@ public class NapcatAdapter extends WebSocketClient {
                                      boolean isPrivate) {
         try {
             long groupId = event.path("group_id").asLong();
+
+            // ★ Napcat 来源过滤：配置中排除的群直接丢弃，不录入 input
+            if (!com.cna.config.ConfigsManager.NAPCAT_EXCLUDE_GROUP_IDS.isEmpty()
+                    && com.cna.config.ConfigsManager.NAPCAT_EXCLUDE_GROUP_IDS.contains(String.valueOf(groupId))) {
+                log.debug("[NapcatAdapter] 🚫 群 {} 在 napcat.filter.excludeGroupIds 中，跳过录入", groupId);
+                return;
+            }
+
             String groupName = getGroupNameSync(groupId);
             String senderName = getFriendNameSync(senderId);
             if (senderName.isBlank()) senderName = String.valueOf(senderId);

@@ -219,8 +219,29 @@ public class LLManager {
 
     private static com.cna.agent.LivingLoop livingLoop;
 
+    /**
+     * V4 模式标志：当 ActionLoop（V4 架构）接管所有流程时设为 true。
+     * V4 使用独立的 prompt 模板（V4_ACTION_LOOP_PROMPT.ftl），该模板不引用
+     * tools_guide / current_thoughts / current_memories / curiosity_context /
+     * pending_tasks_summary 等旧架构字段。
+     *
+     * 开启后 executeSceneAsyncWithCache 跳过这 5 个字段的注入，
+     * 避免每轮不必要的文件 I/O 和 DB 查询。
+     */
+    private static volatile boolean v4Mode = false;
+
     public static void init(com.cna.agent.LivingLoop loop) {
         livingLoop = loop;
+    }
+
+    /** 设置 V4 模式（由 ActionLoop 在启动时调用）。 */
+    public static void setV4Mode(boolean v4) {
+        v4Mode = v4;
+        log.info("[LLManager] V4 模式已{} (冗余注入将跳过)", v4 ? "启用" : "禁用");
+    }
+
+    public static boolean isV4Mode() {
+        return v4Mode;
     }
 
     public static CompletableFuture<CallResult> executeSceneAsyncWithCache(
@@ -255,26 +276,31 @@ public class LLManager {
                     GLOBAL_CACHE.wasContextCleared = false;
                 }
 
-                if (!dataModel.containsKey("current_memories")) {
-                    dataModel.put("current_memories",
+                // ★ V4 模式：V4_ACTION_LOOP_PROMPT.ftl 不引用以下 5 个旧架构字段，
+                //    跳过注入以省去每轮的文件 I/O 和 DB 查询。
+                if (!v4Mode) {
+                    if (!dataModel.containsKey("current_memories")) {
+                        dataModel.put("current_memories",
+                                needInjection
+                                        ? MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE)
+                                        : java.util.Collections.emptyList());
+                    }
+                    dataModel.put("current_thoughts",
+                            needInjection ? MDManager.read("thoughts.md", "") : "");
+                    dataModel.put("tools_guide",
+                            needInjection ? MDManager.read("prompts/toolsGuide.md", "") : "");
+                    // 好奇心上下文：上下文重建时注入活跃的好奇心条目
+                    dataModel.put("curiosity_context",
                             needInjection
-                                    ? MemoryManager.getInstance().getCurrentMemorys(ConfigsManager.CURRENT_MEMORIES_MAXSIZE)
-                                    : java.util.Collections.emptyList());
+                                    ? (com.cna.agent.CuriosityListManager.getInstance() != null
+                                            ? com.cna.agent.CuriosityListManager.getInstance().buildCuriosityPromptBlock()
+                                            : "")
+                                    : "");
+                    dataModel.put("pending_tasks_summary", livingLoop != null ? livingLoop.buildTaskQueueSummary() : "");
                 }
-                dataModel.put("current_thoughts",
-                        needInjection ? MDManager.read("thoughts.md", "") : "");
-                dataModel.put("tools_guide",
-                        needInjection ? MDManager.read("prompts/toolsGuide.md", "") : "");
-                // 好奇心上下文：上下文重建时注入活跃的好奇心条目
-                dataModel.put("curiosity_context",
-                        needInjection
-                                ? (com.cna.agent.CuriosityListManager.getInstance() != null
-                                        ? com.cna.agent.CuriosityListManager.getInstance().buildCuriosityPromptBlock()
-                                        : "")
-                                : "");
 
+                // now_time 无论 V4/旧架构都需要
                 dataModel.put("now_time", Utils.getNowPrecise());
-                dataModel.put("pending_tasks_summary", livingLoop != null ? livingLoop.buildTaskQueueSummary() : "");
 
                 String userPrompt = render(userTemplate, dataModel);
                 log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());

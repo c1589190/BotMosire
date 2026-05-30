@@ -92,6 +92,8 @@ public class ConfigsManager {
     public static final String NAPCAT_TOEKN;
     public static final int NAPCAT_WS_PORT;
     public static final String NAPCAT_HTTP_URL;
+    /** Napcat 来源过滤：禁止录入 input 的群号集合（逗号分隔配置，启动时解析为 Set） */
+    public static final java.util.Set<String> NAPCAT_EXCLUDE_GROUP_IDS;
 
     public static final String WORKSPACE_DIR;
 
@@ -278,6 +280,21 @@ public class ConfigsManager {
         NAPCAT_WS_PORT = getInt("napcat.wsPort", 3001);
         NAPCAT_HTTP_URL = getString("napcat.httpUrl", "http://127.0.0.1:3000");
         NAPCAT_TOEKN = getString("napcat.token", "");
+
+        // Napcat 来源过滤 — 解析逗号分隔的群号白名单
+        {
+            String raw = getString("napcat.filter.excludeGroupIds", "");
+            if (raw != null && !raw.isBlank()) {
+                java.util.Set<String> set = new java.util.HashSet<>();
+                for (String id : raw.split(",")) {
+                    String trimmed = id.trim();
+                    if (!trimmed.isEmpty()) set.add(trimmed);
+                }
+                NAPCAT_EXCLUDE_GROUP_IDS = java.util.Collections.unmodifiableSet(set);
+            } else {
+                NAPCAT_EXCLUDE_GROUP_IDS = java.util.Collections.emptySet();
+            }
+        }
 
         // ==========================================
         // 5. WorkSpace 沙盒目录

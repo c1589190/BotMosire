@@ -362,16 +362,40 @@ public class CognitivePreparePool {
 
     /** 构建池状态摘要，供 LLM prompt 注入 */
     public String buildPoolSummary() {
+        return buildPoolSummary(Integer.MAX_VALUE);
+    }
+
+    /**
+     * 构建池状态摘要，限制最大单元数以控制 prompt 大小。
+     * @param maxUnits 最多显示的单元数
+     */
+    public String buildPoolSummary(int maxUnits) {
         List<CognitivePrepareUnit> units = getAllUnits();
         if (units.isEmpty()) return "准备池为空";
 
+        int shown = Math.min(units.size(), maxUnits);
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("【认知准备池】共 %d 个单元:\n", units.size()));
-        for (CognitivePrepareUnit u : units) {
+        sb.append(String.format("【认知准备池】共 %d 个单元", units.size()));
+        if (units.size() > maxUnits) {
+            sb.append(String.format("（仅显示前 %d 个）", maxUnits));
+        }
+        sb.append(":\n");
+
+        for (int i = 0; i < shown; i++) {
+            CognitivePrepareUnit u = units.get(i);
+            String text = u.getText();
+            // 防止 null 在 format 中渲染为 "null" 字面量
+            String displayText;
+            if (text == null || text.isBlank()) {
+                displayText = "(无文本)";
+            } else if (text.length() > 40) {
+                displayText = text.substring(0, 40) + "...";
+            } else {
+                displayText = text;
+            }
             sb.append(String.format("  - [%s] '%s' SE=%.2f UE=%.2f tick=%d cw=%.2f\n",
                     u.getUuid().toString().substring(0, 8),
-                    u.getText() != null && u.getText().length() > 40
-                            ? u.getText().substring(0, 40) + "..." : u.getText(),
+                    displayText,
                     u.getStimulateEnergy(), u.getUnderstandEnergy(),
                     u.getTick(), u.getContinueWeight()));
         }
