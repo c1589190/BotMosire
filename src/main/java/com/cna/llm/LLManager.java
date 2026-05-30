@@ -315,6 +315,73 @@ public class LLManager {
         }, LLM_EXECUTOR);
     }
 
+    /**
+     * 初始化全局缓存（供 ActionLoop 等 V4 组件使用）。
+     * 用自定义 system prompt 替换默认的 CORE.md。
+     */
+    public static void initGlobalCache(String systemPrompt) {
+        synchronized (GLOBAL_CACHE.lock) {
+            GLOBAL_CACHE.messages = jsonMapper.createArrayNode();
+            ObjectNode sysMsg = GLOBAL_CACHE.messages.addObject();
+            sysMsg.put("role", "system");
+            sysMsg.put("content", systemPrompt != null ? systemPrompt : "");
+            GLOBAL_CACHE.roundCount.set(0);
+            GLOBAL_CACHE.wasContextCleared = true;
+            log.info("[LLManager] 全局缓存已初始化 (system prompt: {} chars)",
+                    systemPrompt != null ? systemPrompt.length() : 0);
+        }
+    }
+
+    /**
+     * 使用全局共享上下文执行 LLM 调用（供 ActionLoop 等 V4 组件使用）。
+     * 不注入 LivingLoop 特有的数据模型，仅做上下文管理 + LLM 调用 + 结果持久化。
+     *
+     * @param userPrompt  已渲染好的用户提示词
+     * @param llm         LLM 适配器
+     * @param tools       工具定义数组
+     * @return CallResult，保证非 null
+     */
+    public static CallResult executeWithGlobalCache(
+            String userPrompt,
+            LLMAdapter llm,
+            ArrayNode tools) {
+        synchronized (GLOBAL_CACHE.lock) {
+            if (GLOBAL_CACHE.messages == null || GLOBAL_CACHE.messages.isEmpty()) {
+                log.warn("[LLManager] 全局缓存未初始化，请先调用 initGlobalCache()");
+                return errorResult("全局缓存未初始化");
+            }
+
+            truncateGlobalCacheIfNeeded();
+
+            ArrayNode working = GLOBAL_CACHE.messages.deepCopy();
+            ObjectNode userMsg = working.addObject();
+            userMsg.put("role", "user");
+            userMsg.put("content", userPrompt);
+
+            ArrayNode toolsParam = (tools != null) ? tools : jsonMapper.createArrayNode();
+            CallResult result = llm.generateResponseWithTools(working, toolsParam);
+
+            if (result != null) {
+                GLOBAL_CACHE.messages.add(userMsg);
+
+                ObjectNode assistantMsg = jsonMapper.createObjectNode();
+                assistantMsg.put("role", "assistant");
+                assistantMsg.put("content", result.getContent() != null ? result.getContent() : "");
+                if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().size() > 0) {
+                    assistantMsg.set("tool_calls", result.getToolCalls());
+                }
+                GLOBAL_CACHE.messages.add(assistantMsg);
+
+                GLOBAL_CACHE.roundCount.incrementAndGet();
+                log.info("[LLManager] 全局第 {} 轮完成，消息总数: {}",
+                        GLOBAL_CACHE.roundCount.get(), GLOBAL_CACHE.messages.size());
+            } else {
+                log.error("[LLManager] executeWithGlobalCache: LLM 返回 null，缓存不更新");
+            }
+            return result;
+        }
+    }
+
     public static void feedToolResult(UUID taskId, String toolCallId, String toolName, String toolResult) {
         synchronized (GLOBAL_CACHE.lock) {
             if (GLOBAL_CACHE.messages == null || GLOBAL_CACHE.messages.isEmpty()) {

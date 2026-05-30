@@ -53,6 +53,20 @@ ${action_text}
   ⚠️ 没有关联的感觉维度。这是一个全新领域的动作，你可以创建新的感觉维度。
 </#if>
 
+<#-- ── 感觉谐振分析（违和检测） ── -->
+<#if feeling_resonance?has_content>
+
+──────────────────────────────────────────────────────────────
+🔍 感觉谐振分析（系统自动检测的感觉违和度）
+──────────────────────────────────────────────────────────────
+
+${feeling_resonance}
+
+  ⚠️ 请在 thoughts 中反思上述违和感：为什么这些感觉与当前输入的模式不一致？
+     这可能意味着情境发生了变化、用户的意图被误解、或者出现了新的认知维度。
+     如果你认为违和感指向值得探索的方向，可以在 stimulated_feelings 中创建新的感觉维度。
+</#if>
+
 <#-- ── 先验经验 ── -->
 
 ──────────────────────────────────────────────────────────────
@@ -112,7 +126,8 @@ ${pool_summary}
 }
 
 提醒：
-  - tool_calls 不需要时传空数组 []，不要省略该字段
+  - tool_calls 的第一个元素必须是 finish_action（即使 experience_scoring 为空也必须调用）
+  - 没有经验时，finish_action 的 arguments 传 {"experience_scoring": []}
   - new_prepare_unit 不需要时传 null，不要省略该字段
   - experience_scoring 中的 experience_id 必须与上面先验经验中的 ID 一致
   - continue_weight_boosts 中 boost 推荐范围 0.3~1.0，不确定时传空数组 []

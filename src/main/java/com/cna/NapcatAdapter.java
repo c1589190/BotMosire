@@ -404,6 +404,8 @@ public class NapcatAdapter extends WebSocketClient {
                     parsed.hasForward(),
                     parsed.richSummary()
             );
+            // 注入最近聊天历史，让 ActionLoop 拿到完整的带环境上下文
+            input.setRecentHistory(ChatAdaptersManager.getHistory("qq_group:" + groupId, ConfigsManager.CHATHISTORY_VIEW_AMOUNT));
             Main.offerInput(input, "QQ群:" + groupId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 群消息推入主线队列失败", t);
@@ -434,6 +436,7 @@ public class NapcatAdapter extends WebSocketClient {
                     parsed.hasForward(),
                     parsed.richSummary()
             );
+            input.setRecentHistory(ChatAdaptersManager.getHistory("qq_private:" + senderId, ConfigsManager.CHATHISTORY_VIEW_AMOUNT));
             Main.offerInput(input, "QQ私聊:" + senderId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 私聊消息推入主线队列失败", t);

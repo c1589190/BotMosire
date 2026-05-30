@@ -68,7 +68,7 @@ public class ApcoreConsole {
                         // 兼容旧 ConsoleCommandSystem 的 send 命令（不带斜杠）
                         String payload = input.substring(5).trim();
                         if (payload.isEmpty()) {
-                            System.out.println("  ⚠️ 用法: send <消息内容>");
+                        System.out.println("  usage: send <msg>");
                         } else {
                             handleSend(payload);
                         }
@@ -100,34 +100,24 @@ public class ApcoreConsole {
         if (!verbose) return;
 
         System.out.println();
-        System.out.println("  ╔══════════════════════════════════════════════════════╗");
-        System.out.printf("  ║  🧠 LLM 响应 #%d (耗时 %dms)%n", n.actionNum(), n.llmElapsedMs());
-        System.out.println("  ╠══════════════════════════════════════════════════════╣");
-        System.out.println("  ║  触发: " + truncateToWidth(n.actionSummary(), 46));
-        System.out.println("  ╠══════════════════════════════════════════════════════╣");
+        System.out.printf("[LLM #%d] %dms | 触发: %s%n", n.actionNum(), n.llmElapsedMs(), truncateToWidth(n.actionSummary(), 80));
 
-        // LLM 想法
         if (n.llmThoughts() != null && !n.llmThoughts().isBlank()) {
-            System.out.println("  ║  💭 想法:");
+            System.out.println("  thoughts:");
             for (String line : n.llmThoughts().split("\n")) {
-                System.out.println("  ║    " + truncateToWidth(line, 48));
+                System.out.println("    " + line);
             }
-            System.out.println("  ╠══════════════════════════════════════════════════════╣");
         }
 
-        // 工具调用
         if (n.toolCallCount() > 0) {
-            System.out.printf("  ║  🔨 工具调用: %d 次%n", n.toolCallCount());
+            System.out.printf("  tools: %d call(s)%n", n.toolCallCount());
             for (String tr : n.toolResults()) {
-                System.out.println("  ║    " + truncateToWidth(tr, 48));
+                System.out.println("    " + truncateToWidth(tr, 100));
             }
-            System.out.println("  ╠══════════════════════════════════════════════════════╣");
         }
 
-        // 统计
-        System.out.printf("  ║  📊 经验ID:%d | 刺激维度:%d | 池剩余:%d%n",
+        System.out.printf("  exp=%d feelings=%d pool=%d%n",
                 n.experienceId(), n.stimulatedFeelingCount(), n.poolSizeAfter());
-        System.out.println("  ╚══════════════════════════════════════════════════════╝");
         System.out.println();
     }
 
@@ -140,10 +130,10 @@ public class ApcoreConsole {
         CognitivePrepareUnit cpu = CognitivePrepareUnit.create(
                 text,
                 List.of("console:apcore"),
-                0.7  // 控制台消息给予较高 SE，更容易被选中
+                0.7
         );
         core.pushPrepareUnit(cpu);
-        System.out.println("  ✅ 已推入准备池 (SE=0.70): " + truncate(text, 80));
+        System.out.println("  -> pool (SE=0.70): " + truncate(text, 80));
     }
 
     // ==========================================
@@ -166,7 +156,7 @@ public class ApcoreConsole {
             case "/help" -> printHelp();
             case "/exit", "/stop" -> handleExit();
             default -> {
-                System.out.println("  ❓ 未知命令: " + cmd + " (输入 /help 查看帮助)");
+            System.out.println("  ? 未知命令: " + cmd + " (输入 /help 查看帮助)");
                 // 如果不认识的命令，也当作消息处理
                 handleRawMessage(input);
             }
@@ -175,23 +165,22 @@ public class ApcoreConsole {
 
     private void handleSend(String message) {
         if (message.isBlank()) {
-            System.out.println("  ⚠️ 用法: /send <消息内容>");
+            System.out.println("  usage: /send <msg>");
             return;
         }
         CognitivePrepareUnit cpu = CognitivePrepareUnit.create(
                 message,
                 List.of("console:apcore:send"),
-                0.75  // 显式 send 给予更高 SE
+                0.75
         );
         core.pushPrepareUnit(cpu);
-        System.out.println("  ✅ 已发送 (SE=0.75): " + truncate(message, 80));
+        System.out.println("  -> pool (SE=0.75): " + truncate(message, 80));
     }
 
     private void handleFrom(String arg) {
         String[] parts = arg.split("\\s+", 2);
         if (parts.length < 2) {
-            System.out.println("  ⚠️ 用法: /from <来源> <消息内容>");
-            System.out.println("  示例: /from qq_group:12345 你好");
+            System.out.println("  usage: /from <source> <msg>");
             return;
         }
         String source = parts[0];
@@ -203,7 +192,7 @@ public class ApcoreConsole {
                 0.65
         );
         core.pushPrepareUnit(cpu);
-        System.out.println("  ✅ 已从 [" + source + "] 注入 (SE=0.65): " + truncate(message, 80));
+        System.out.println("  -> pool [" + source + "] (SE=0.65): " + truncate(message, 80));
     }
 
     private void handlePool(String arg) {
@@ -211,11 +200,11 @@ public class ApcoreConsole {
         int size = pool.size();
         List<CognitivePrepareUnit> units = pool.getAllUnits();
 
-        System.out.println("  📊 认知准备池: " + size + " 个单元 (上限: " + CoreConfig.MAX_POOL_SIZE + ")");
-        System.out.println("  ─────────────────────────────────────────────");
+        System.out.println("  pool: " + size + " units (max " + CoreConfig.MAX_POOL_SIZE + ")");
+        System.out.println("  --");
 
         if (units.isEmpty()) {
-            System.out.println("  (空)");
+            System.out.println("  (empty)");
             return;
         }
 
@@ -253,54 +242,46 @@ public class ApcoreConsole {
 
     private void handleStats() {
         Map<String, Integer> stats = core.getStats();
-        System.out.println("  📈 ActionLoop 运行统计");
-        System.out.println("  ─────────────────────────────────────────────");
-        System.out.printf("  Ticks:            %d%n", stats.getOrDefault("ticks", 0));
-        System.out.printf("  Inputs 已处理:    %d%n", stats.getOrDefault("inputsProcessed", 0));
-        System.out.printf("  Actions 已处理:   %d%n", stats.getOrDefault("actionsProcessed", 0));
-        System.out.printf("  工具执行次数:     %d%n", stats.getOrDefault("toolsExecuted", 0));
-        System.out.printf("  经验存储条数:     %d%n", stats.getOrDefault("experiencesStored", 0));
-        System.out.printf("  感觉刺激次数:     %d%n", stats.getOrDefault("feelingsStimulated", 0));
-        System.out.printf("  当前池大小:       %d%n", stats.getOrDefault("poolSize", 0));
-        System.out.printf("  工具箱工具数:     %d%n", stats.getOrDefault("toolboxSize", 0));
+        System.out.println("  stats:");
+        System.out.printf("    ticks=%-16d inputs=%-14d actions=%d%n",
+                stats.getOrDefault("ticks", 0),
+                stats.getOrDefault("inputsProcessed", 0),
+                stats.getOrDefault("actionsProcessed", 0));
+        System.out.printf("    tools=%-16d experiences=%-11d feelings=%d%n",
+                stats.getOrDefault("toolsExecuted", 0),
+                stats.getOrDefault("experiencesStored", 0),
+                stats.getOrDefault("feelingsStimulated", 0));
+        System.out.printf("    pool=%-16d toolbox=%d%n",
+                stats.getOrDefault("poolSize", 0),
+                stats.getOrDefault("toolboxSize", 0));
     }
 
     private void handleTools() {
         Set<String> tools = core.getToolboxNames();
-        System.out.println("  🔧 工具箱: " + tools.size() + " 个工具");
-        System.out.println("  ─────────────────────────────────────────────");
+        System.out.println("  tools: " + tools.size() + " registered");
         for (String name : tools) {
-            System.out.println("  - " + name);
+            System.out.println("    " + name);
         }
     }
 
     private void handleConfig() {
-        System.out.println("  ⚙️  V4 核心配置");
-        System.out.println("  ─────────────────────────────────────────────");
-        System.out.printf("  COGNITIVE_TICK_MS:        %d ms%n", CoreConfig.COGNITIVE_TICK_MS);
-        System.out.printf("  BASELINE_THRESHOLD:       %.3f%n", CoreConfig.BASELINE_THRESHOLD);
-        System.out.printf("  CONTINUE_WEIGHT_DECAY:    %.3f%n", CoreConfig.CONTINUE_WEIGHT_DECAY);
-        System.out.printf("  MAX_CONTINUE_WEIGHT:      %.2f%n", CoreConfig.MAX_CONTINUE_WEIGHT);
-        System.out.printf("  SINGLE_BOOST_CAP:         %.2f%n", CoreConfig.SINGLE_BOOST_CAP);
-        System.out.printf("  MAX_POOL_SIZE:            %d%n", CoreConfig.MAX_POOL_SIZE);
-        System.out.printf("  MAX_TICKS_WITHOUT_SELECT: %d%n", CoreConfig.MAX_TICKS_WITHOUT_SELECT);
-        System.out.printf("  TOP_N_ACTION_PREDICTS:    %d%n", CoreConfig.TOP_N_ACTION_PREDICTS);
-        System.out.printf("  HABITUATION_LIMIT:        %.0f%n", CoreConfig.HABITUATION_LIMIT);
-        System.out.printf("  BFS_MAX_LAYERS:           %d%n", CoreConfig.BFS_MAX_LAYERS);
-        System.out.printf("  BFS_LAYER_DECAY:          %.3f%n", CoreConfig.BFS_LAYER_DECAY);
-        System.out.printf("  DEDUP_THRESHOLD:          %.3f%n", CoreConfig.DEDUP_THRESHOLD);
+        System.out.println("  config:");
+        System.out.printf("    tick=%dms  baseline=%.3f  cw_decay=%.3f  cw_max=%.1f  boost_cap=%.1f%n",
+                CoreConfig.COGNITIVE_TICK_MS, CoreConfig.BASELINE_THRESHOLD,
+                CoreConfig.CONTINUE_WEIGHT_DECAY, CoreConfig.MAX_CONTINUE_WEIGHT, CoreConfig.SINGLE_BOOST_CAP);
+        System.out.printf("    pool_max=%d  tick_max=%d  top_n=%d  habituate=%.0f  bfs_layers=%d  bfs_decay=%.2f  dedup=%.2f%n",
+                CoreConfig.MAX_POOL_SIZE, CoreConfig.MAX_TICKS_WITHOUT_SELECT,
+                CoreConfig.TOP_N_ACTION_PREDICTS, CoreConfig.HABITUATION_LIMIT,
+                CoreConfig.BFS_MAX_LAYERS, CoreConfig.BFS_LAYER_DECAY, CoreConfig.DEDUP_THRESHOLD);
     }
 
     private void handleListen() {
         verbose = !verbose;
-        System.out.println("  🔊 LLM 响应实时输出: " + (verbose ? "开启" : "关闭"));
-        if (verbose) {
-            System.out.println("     (每当 ActionLoop 完成 LLM 调用，将在此打印想法和工具结果)");
-        }
+        System.out.println("  LLM output: " + (verbose ? "ON" : "OFF"));
     }
 
     private void handleExit() {
-        System.out.println("  🛑 正在退出...");
+        System.out.println("  exiting...");
         running = false;
         System.exit(0);
     }
@@ -311,32 +292,25 @@ public class ApcoreConsole {
 
     private void printBanner() {
         System.out.println();
-        System.out.println("  ╔══════════════════════════════════════════════════════╗");
-        System.out.println("  ║       V4 Apcore 认知控制台                            ║");
-        System.out.println("  ║       直接输入消息即可注入认知准备池                    ║");
-        System.out.println("  ║       输入 /help 查看可用命令                         ║");
-        System.out.println("  ╚══════════════════════════════════════════════════════╝");
+        System.out.println("  V4 Apcore console - type /help for commands");
         System.out.println();
     }
 
     private void printHelp() {
         System.out.println();
-        System.out.println("  📖 V4 Apcore 控制台命令:");
-        System.out.println("  ─────────────────────────────────────────────────────");
-        System.out.println("  直接打字              → 作为消息推入认知准备池");
-        System.out.println("  send <消息>           → 显式发送消息 (兼容旧格式, SE=0.75)");
-        System.out.println("  /send <消息>          → 同上 (/命令格式)");
-        System.out.println("  /from <来源> <消息>    → 模拟特定来源的消息");
-        System.out.println("  /pool                  → 查看准备池状态 (前10条)");
-        System.out.println("  /pool detail           → 查看准备池全部详情");
-        System.out.println("  /stats                 → 查看 ActionLoop 运行统计");
-        System.out.println("  /tools                 → 列出所有已注册工具");
-        System.out.println("  /config                → 查看核心配置参数");
-        System.out.println("  /listen                → 切换 LLM 响应实时输出 (当前:" + (verbose ? "开" : "关") + ")");
-        System.out.println("  /help                  → 显示此帮助");
-        System.out.println("  /exit, /stop           → 安全退出进程");
-        System.out.println();
-        System.out.println("  💡 提示: 发送消息后，LLM 的响应会自动打印到控制台 (用 /listen 切换)");
+        System.out.println("  commands:");
+        System.out.println("    <text>               push message to pool (SE=0.70)");
+        System.out.println("    send <msg>           push with SE=0.75");
+        System.out.println("    /send <msg>           same");
+        System.out.println("    /from <src> <msg>     push with specified source");
+        System.out.println("    /pool                 show pool (top 10)");
+        System.out.println("    /pool detail          show pool (all)");
+        System.out.println("    /stats                show ActionLoop stats");
+        System.out.println("    /tools                list all tools");
+        System.out.println("    /config               show core config");
+        System.out.println("    /listen               toggle LLM output (currently: " + (verbose ? "ON" : "OFF") + ")");
+        System.out.println("    /help                 show this help");
+        System.out.println("    /exit, /stop          shutdown");
         System.out.println();
     }
 

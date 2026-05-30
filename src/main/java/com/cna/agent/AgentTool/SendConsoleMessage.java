@@ -38,6 +38,10 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
         message.put("type", "string");
         message.put("description", p.getCustomDescription("message"));
 
+        ObjectNode requireResponse = properties.putObject("require_response");
+        requireResponse.put("type", "boolean");
+        requireResponse.put("description", p.getCustomDescription("require_response"));
+
         ArrayNode required = parameters.putArray("required");
         required.add("message");
 
@@ -48,6 +52,7 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
     public String execute(JsonNode arguments) {
         try {
             String msg = arguments.path("message").asText();
+            boolean requireResponse = arguments.path("require_response").asBoolean(false);
 
             if (msg == null || msg.trim().isEmpty()) {
                 return "ERROR: message 不能为空。";
@@ -56,9 +61,14 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
             this.lastMessage = msg;
 
             // 使用醒目的格式打印，防止被常规底层日志淹没
-            log.info("\n================ [Agent -> Console] ================\n{}\n==================================================\n", msg);
-
-            return "SUCCESS: 消息已成功打印至系统控制台。";
+            if (requireResponse) {
+                log.info("[Agent->Console] (等待Admin回复) {}", msg);
+                return "SUCCESS: 消息已打印至控制台。require_response=true，等待 admin 在控制台回复。" +
+                       "admin 可通过 ApcoreConsole 直接输入回复内容，回复将作为新的认知输入进入管线。";
+            } else {
+                log.info("[Agent->Console] {}", msg);
+                return "SUCCESS: 消息已成功打印至系统控制台。";
+            }
 
         } catch (Exception e) {
             log.error("执行 send_console_message 发生异常", e);

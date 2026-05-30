@@ -7,7 +7,10 @@ import com.cna.agent.AgentInputHandlers.DefaultAgentInputHandlerUnit;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.AgentTool.*;
 import com.cna.agent.AgentTool.io.*;
+import com.cna.agent.AgentTool.FinishAction;
 import com.cna.agent.AgentTasksHandlers.DefaultAgentTaskHandler;
+import com.cna.agent.CuriosityListManager;
+import com.cna.agent.FeelingResonanceAnalyzer;
 import com.cna.agent.code.DelegateComputerTaskTool;
 import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.ExperiencesDB;
@@ -16,6 +19,7 @@ import com.cna.apcore.model.CognitiveAction;
 import com.cna.apcore.model.CognitivePrepareUnit;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
+import com.cna.db.FeelingDimensionManager;
 import com.cna.db.FeelingHypergraphManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -60,6 +64,9 @@ public class ActionLoop implements MosireAPI {
     private final ScheduledExecutorService tickScheduler;
     private final ExecutorService actionExecutor;
     private final AtomicBoolean isProcessing;
+
+    // LLManager 全局缓存是否已用 ActionLoop 的 system prompt 初始化
+    private volatile boolean globalCacheInitialized = false;
 
     // 控制台监听器列表（供 ApcoreConsole 等外部组件订阅 LLM 响应）
     private final List<Consumer<ActionNotification>> consoleListeners = new CopyOnWriteArrayList<>();
@@ -276,6 +283,7 @@ public class ActionLoop implements MosireAPI {
         registerToolInternal(new UpdateWebUI());
         registerToolInternal(new ToolUsageReader());
         registerToolInternal(new FinishTask());
+        registerToolInternal(new FinishAction());
         registerToolInternal(new GetNowTime());
         registerToolInternal(new SetSleepTimeTool());
         registerToolInternal(new GetSleepTimeTool());
@@ -437,7 +445,7 @@ public class ActionLoop implements MosireAPI {
             }
         }
 
-        // 按来源聚合 → CognitivePrepareUnit
+        // 按来源聚合 → CognitivePrepareUnit（优先合并同源已有单元）
         for (Map.Entry<String, List<DefaultAgentInputUnit>> entry : grouped.entrySet()) {
             String source = entry.getKey();
             List<DefaultAgentInputUnit> inputs = entry.getValue();
@@ -466,17 +474,30 @@ public class ActionLoop implements MosireAPI {
             // 计算 SE = 基础值 × (1 + log(消息数)) × @提及加成
             double baseSE = 0.5;
             double volumeFactor = 1.0 + Math.log1p(inputs.size()) * 0.5;
-            double se = baseSE * volumeFactor;
+            double newSE = baseSE * volumeFactor;
             if (atCount > 0) {
-                se *= 1.0 + Math.min(0.5, atCount * 0.1);
+                newSE *= 1.0 + Math.min(0.5, atCount * 0.1);
             }
 
-            CognitivePrepareUnit cpu = CognitivePrepareUnit.create(finalText, List.of(source), se);
-            preparePool.push(cpu);
-            int count = inputProcessedCount.incrementAndGet();
-
-            log.info("[ActionLoop] 📨 新准备单元入池 (总计: {}): source={}, messages={}, textLen={}, SE={}, atCount={}",
-                    count, source, inputs.size(), finalText.length(), String.format("%.3f", se), atCount);
+            // ★ 同源跨 tick 合并：检查池中是否已有同源单元
+            CognitivePrepareUnit existing = preparePool.findBySource(source);
+            if (existing != null) {
+                // 合并到已有单元：追加文本、取较高 SE、重置 tick、清除旧 UE 触发重算
+                existing.appendText(finalText);
+                existing.setSE(Math.max(existing.getStimulateEnergy(), newSE));
+                existing.resetTick();
+                existing.clearUE();
+                int count = inputProcessedCount.incrementAndGet();
+                log.info("[ActionLoop] 🔗 合并同源输入 (总计: {}): source={}, messages={}, mergedTextLen={}, SE={:.3f}→{:.3f}",
+                        count, source, inputs.size(), finalText.length(),
+                        existing.getStimulateEnergy(), newSE);
+            } else {
+                CognitivePrepareUnit cpu = CognitivePrepareUnit.create(finalText, List.of(source), newSE);
+                preparePool.push(cpu);
+                int count = inputProcessedCount.incrementAndGet();
+                log.info("[ActionLoop] 📨 新准备单元入池 (总计: {}): source={}, messages={}, textLen={}, SE={:.3f}, atCount={}",
+                        count, source, inputs.size(), finalText.length(), newSE, atCount);
+            }
         }
     }
 
@@ -502,14 +523,67 @@ public class ActionLoop implements MosireAPI {
             // 1. 构建 prompt + 工具（由 LLManager 负责渲染模板和调用 LLM）
             String systemPrompt = LLManager.loadPromptTemplate("prompts/V4_ACTION_SYSTEM_PROMPT.md");
             String userTemplate = LLManager.loadPromptTemplate("prompts/V4_ACTION_LOOP_PROMPT.ftl");
-            Map<String, Object> promptData = buildActionPromptData(action);
+
+            // ★ 感觉谐振分析：对 action text 做超图 BFS + 拐点检测，
+            //    找出违和感觉维度，注入 prompt 供 LLM 反思。
+            FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance = null;
+            String feelingResonanceBlock = null;
+            try {
+                FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
+                FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
+                if (fdm != null && hgm != null) {
+                    FeelingResonanceAnalyzer analyzer = new FeelingResonanceAnalyzer(fdm, hgm, null);
+                    resonance = analyzer.analyze(action.getActionText());
+                    if (resonance != null) {
+                        feelingResonanceBlock = resonance.llmPromptBlock;
+                        log.info("[ActionLoop] 🔍 感觉谐振分析完成: {} 组, 有违和={}",
+                                resonance.groups.size(), resonance.hasDissonance());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ActionLoop] 感觉谐振分析失败，跳过: {}", e.getMessage());
+            }
+
+            Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock);
             ArrayNode toolsArray = buildToolsArray();
 
-            // 2. 调用 LLM（通过 LLManager 无状态模式）
+            // 2. 渲染用户提示词
+            String userPrompt = LLManager.render(userTemplate, promptData);
+            log.info("[ActionLoop] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
+
+            // 3. 通过 LLManager 全局缓存调用 LLM（单次调用，不再强制重试 finish_action）
+            //    首次调用时初始化全局缓存，后续调用复用已有上下文
             log.info("[ActionLoop] 🤖 调用大模型 (tools={})...", toolsArray.size());
             long llmStartMs = System.currentTimeMillis();
-            com.cna.llm.CallResult result = LLManager.executeStateless(
-                    brainLLM, systemPrompt, userTemplate, promptData, toolsArray);
+            com.cna.llm.CallResult result;
+
+            // 首次调用：用 ActionLoop 的 system prompt 初始化 LLManager 全局缓存
+            if (!globalCacheInitialized) {
+                LLManager.initGlobalCache(systemPrompt != null ? systemPrompt : "");
+                globalCacheInitialized = true;
+            }
+
+            // LLManager 负责上下文管理、截断、持久化
+            long callStart = System.currentTimeMillis();
+            result = LLManager.executeWithGlobalCache(userPrompt, brainLLM, toolsArray);
+            long callMs = System.currentTimeMillis() - callStart;
+
+            if (result != null) {
+                // ★ 本轮工具调用日志（per-round tool logging）
+                int tcCount = (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray())
+                        ? result.getToolCalls().size() : 0;
+                List<String> tcNames = new ArrayList<>();
+                if (tcCount > 0) {
+                    for (JsonNode tc : result.getToolCalls()) {
+                        tcNames.add(tc.path("function").path("name").asText());
+                    }
+                    log.info("[ActionLoop] 🤖 LLM 返回 {} 个工具调用 ({}ms): {}",
+                            tcCount, callMs, tcNames);
+                } else {
+                    log.info("[ActionLoop] 🤖 LLM 纯文本响应 ({}ms): contentLen={}",
+                            callMs, result.getContent() != null ? result.getContent().length() : 0);
+                }
+            }
             long llmElapsedMs = System.currentTimeMillis() - llmStartMs;
 
             if (result == null) {
@@ -550,19 +624,48 @@ public class ActionLoop implements MosireAPI {
                 log.info("[ActionLoop] LLM content 非 JSON 格式，整体视为 thoughts ({} chars)", thoughts.length());
             }
 
-            // 4. 执行原生 tool_calls（OpenAI function calling 格式）
+            // 4. 执行工具调用 — finish_action 放最后：先提取其数据，执行其他工具，最后结算
             int toolCallCount = 0;
-            if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
-                toolCallCount = result.getToolCalls().size();
-                log.info("[ActionLoop] 🔨 开始执行 {} 个工具调用", toolCallCount);
+            boolean hasFinishAction = false;
+            JsonNode finishActionArgs = null;
+            String finishActionCallId = null;
 
+            if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
+                // —— 分类：finish_action vs 其他工具 ——
+                List<JsonNode> otherToolCalls = new ArrayList<>();
                 for (JsonNode tc : result.getToolCalls()) {
                     String fnName = tc.path("function").path("name").asText();
-                    String fnArgs = tc.path("function").path("arguments").asText();
-                    if (fnName.isEmpty()) {
-                        log.warn("[ActionLoop] 工具名为空，跳过");
-                        continue;
+                    if ("finish_action".equals(fnName)) {
+                        hasFinishAction = true;
+                        finishActionCallId = tc.path("id").asText("");
+                        String fnArgs = tc.path("function").path("arguments").asText();
+                        try {
+                            finishActionArgs = mapper.readTree(fnArgs);
+                            JsonNode scoring = finishActionArgs.path("experience_scoring");
+                            int scoringCount = scoring.isArray() ? scoring.size() : 0;
+                            log.info("[ActionLoop] 📋 检测到 finish_action ({} 条经验打分)，暂存数据，将在其他工具之后执行",
+                                    scoringCount);
+                        } catch (Exception e) {
+                            log.warn("[ActionLoop] finish_action 参数解析失败: {}", e.getMessage());
+                        }
+                    } else {
+                        otherToolCalls.add(tc);
                     }
+                }
+                toolCallCount = result.getToolCalls().size();
+
+                // —— 执行计划日志 ——
+                List<String> otherNames = otherToolCalls.stream()
+                        .map(tc -> tc.path("function").path("name").asText())
+                        .toList();
+                log.info("[ActionLoop] 🔨 工具执行计划: finish_action={}, 其他={}个{}, 总计={}",
+                        hasFinishAction, otherToolCalls.size(), otherNames, toolCallCount);
+
+                // —— 第一步：执行所有非 finish_action 工具 ——
+                for (JsonNode tc : otherToolCalls) {
+                    String callId = tc.path("id").asText("");
+                    String fnName = tc.path("function").path("name").asText();
+                    String fnArgs = tc.path("function").path("arguments").asText();
 
                     log.info("[ActionLoop]   ▶ 执行: {} (argsLen={})", fnName, fnArgs.length());
                     if (log.isDebugEnabled()) {
@@ -570,11 +673,12 @@ public class ActionLoop implements MosireAPI {
                     }
 
                     DefaultAgentToolUnit tool = toolbox.get(fnName);
+                    String execResult;
                     if (tool != null) {
                         try {
                             long toolStartMs = System.currentTimeMillis();
                             JsonNode argsNode = mapper.readTree(fnArgs);
-                            String execResult = tool.execute(argsNode);
+                            execResult = tool.execute(argsNode);
                             long toolElapsedMs = System.currentTimeMillis() - toolStartMs;
 
                             toolResults.add("[" + fnName + "]: " + execResult);
@@ -583,18 +687,61 @@ public class ActionLoop implements MosireAPI {
                                     fnName, toolElapsedMs,
                                     execResult.length() > 80 ? execResult.substring(0, 80) + "..." : execResult);
                         } catch (Exception e) {
-                            String err = "[" + fnName + "] 异常: " + e.getMessage();
-                            toolResults.add(err);
+                            execResult = "ERROR: " + e.getMessage();
+                            toolResults.add("[" + fnName + "] 异常: " + execResult);
                             log.error("[ActionLoop]   ❌ 工具 [{}] 执行异常: {}", fnName, e.getMessage(), e);
                         }
                     } else {
-                        String msg = "工具 \"" + fnName + "\" 未注册";
-                        toolResults.add(msg);
+                        execResult = "工具 \"" + fnName + "\" 未注册";
+                        toolResults.add(execResult);
                         log.warn("[ActionLoop]   ⚠️ 工具不存在: {} (可用: {})",
                                 fnName, toolbox.keySet().stream()
                                         .filter(n -> n.toLowerCase().contains(fnName.substring(0, Math.min(3, fnName.length())).toLowerCase()))
                                         .limit(5).toList());
                     }
+                    // 工具结果压入上下文缓存
+                    LLManager.feedToolResult(UUID.randomUUID(),callId, fnName, execResult);
+                }
+
+                // —— 第二步：最后执行 finish_action（如果存在）——
+                if (hasFinishAction && finishActionArgs != null) {
+                    log.info("[ActionLoop]   ▶ 执行: finish_action (结算本轮认知周期)");
+                    DefaultAgentToolUnit finishTool = toolbox.get("finish_action");
+                    if (finishTool != null) {
+                        try {
+                            long toolStartMs = System.currentTimeMillis();
+                            String execResult = finishTool.execute(finishActionArgs);
+                            long toolElapsedMs = System.currentTimeMillis() - toolStartMs;
+
+                            toolResults.add("[finish_action]: " + execResult);
+                            toolExecutedCount.incrementAndGet();
+                            log.info("[ActionLoop]   ✅ finish_action 结算完成 ({}ms)", toolElapsedMs);
+
+                            // 将 finish_action 结果也压入上下文
+                            LLManager.feedToolResult(UUID.randomUUID(),finishActionCallId, "finish_action", execResult);
+
+                            // ★ LLM 自主后续行动：如果提供了 next_action_text，注入准备池
+                            String nextActionText = finishActionArgs.path("next_action_text").asText();
+                            if (nextActionText != null && !nextActionText.isBlank()) {
+                                double inheritedSE = action.getSourceUnit().getStimulateEnergy() * 0.7;
+                                CognitivePrepareUnit nextUnit = CognitivePrepareUnit.create(
+                                        nextActionText,
+                                        action.getSourceUnit().getSourceIds(),
+                                        inheritedSE
+                                );
+                                preparePool.push(nextUnit);
+                                log.info("[ActionLoop] 🔄 LLM 通过 finish_action 创建后续准备单元: SE={:.3f}, text={}",
+                                        inheritedSE, nextActionText.length() > 80
+                                                ? nextActionText.substring(0, 80) + "..." : nextActionText);
+                            }
+                        } catch (Exception e) {
+                            String execResult = "ERROR: " + e.getMessage();
+                            toolResults.add("[finish_action] 异常: " + execResult);
+                            log.error("[ActionLoop]   ❌ finish_action 执行异常: {}", e.getMessage(), e);
+                        }
+                    }
+                } else if (!hasFinishAction) {
+                    log.info("[ActionLoop] ⚠️ 本轮未调用 finish_action，认知周期无正式结算");
                 }
             } else if (meta != null) {
                 // fallback：如果原生 tool_calls 为空，尝试从 JSON meta 的 tool_calls 字段执行
@@ -632,6 +779,19 @@ public class ActionLoop implements MosireAPI {
             // 9. 应用 ContinueWeight boosts
             if (meta != null) {
                 applyBoosts(meta);
+            }
+
+            // ★ 违和感积累：将有违和的谐振分析结果持久化到好奇心列表
+            if (resonance != null && resonance.hasDissonance()) {
+                try {
+                    CuriosityListManager clm = CuriosityListManager.getInstance();
+                    if (clm != null) {
+                        clm.accumulateFromResonance(resonance, action.getActionText());
+                        log.info("[ActionLoop] 📝 违和感已积累到好奇心列表");
+                    }
+                } catch (Exception e) {
+                    log.warn("[ActionLoop] 违和感积累失败: {}", e.getMessage());
+                }
             }
 
             // ── 通知控制台监听器 ──
@@ -672,7 +832,7 @@ public class ActionLoop implements MosireAPI {
      * 构建 FreeMarker 模板所需的数据模型。
      * 模板渲染由 {@link LLManager#render(String, Map)} 执行。
      */
-    private Map<String, Object> buildActionPromptData(CognitiveAction action) {
+    private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock) {
         Map<String, Object> data = new HashMap<>();
         data.put("action_text", action.getActionText());
         // 显式传递来源标识，确保 LLM 知道消息来自哪个平台/会话
@@ -685,6 +845,11 @@ public class ActionLoop implements MosireAPI {
         data.put("ue_concepts", action.getUEConcepts());
         data.put("ue_dim_ids", action.getUEDimIds());
         data.put("now_time", Utils.getNowPrecise());
+
+        // ★ 感觉谐振分析结果（违和/一致感觉维度）
+        if (feelingResonanceBlock != null && !feelingResonanceBlock.isBlank()) {
+            data.put("feeling_resonance", feelingResonanceBlock);
+        }
 
         // 先验经验
         StringBuilder predictsText = new StringBuilder();
@@ -989,6 +1154,17 @@ public class ActionLoop implements MosireAPI {
     // ==========================================
     // 辅助方法
     // ==========================================
+
+    // ==========================================
+    // 上下文缓存管理（委托给 LLManager 全局缓存）
+    // ==========================================
+
+    /** 清空上下文缓存（异常恢复时使用），委托给 LLManager */
+    public void clearContextCache() {
+        LLManager.clearCache();
+        globalCacheInitialized = false;
+        log.info("[ActionLoop] 上下文缓存已清空（通过 LLManager）");
+    }
 
     private double[] getEmbedding(String text) {
         return LLManager.getTextVector(text, embLLM);

@@ -335,6 +335,26 @@ public class CognitivePreparePool {
         }
     }
 
+    /**
+     * 按来源标识查找池中已有的单元。
+     * 用于同源输入跨 tick 合并：当同一来源的新消息到达时，
+     * 优先合并到已有单元而非创建新单元造成碎片化。
+     *
+     * @param sourceId 来源标识符（如 "qq_group:12345"）
+     * @return 第一个匹配的单元，未找到返回 null
+     */
+    public CognitivePrepareUnit findBySource(String sourceId) {
+        if (sourceId == null || sourceId.isBlank()) return null;
+        synchronized (poolLock) {
+            for (CognitivePrepareUnit unit : pool) {
+                if (unit.getSourceIds() != null && unit.getSourceIds().contains(sourceId)) {
+                    return unit;
+                }
+            }
+        }
+        return null;
+    }
+
     /** 池大小 */
     public int size() {
         return pool.size();

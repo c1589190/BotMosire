@@ -43,6 +43,9 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     @Getter
     private String richSummary;        // 富媒体摘要，如 "[图片x2][@提及][合并转发]"，方便 LLM 快速感知
 
+    // 最近聊天历史（由 adapter 在创建 Input 时注入，ActionLoop 无需关心）
+    private String recentHistory = "";
+
     // ========== 兼容旧构造器（DiscordAdapter 等未适配的调用方继续使用） ==========
 
     public ChatMessageInput(String source, String source_name, String role, String role_name, String content) {
@@ -83,9 +86,22 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     public long getQuotedMessageId() { return quotedMessageId; }
     public boolean hasQuotedMessage() { return quotedMessageId > 0; }
 
+    /** 由 adapter 在创建 Input 时注入最近聊天历史 */
+    public void setRecentHistory(String history) {
+        this.recentHistory = history != null ? history : "";
+    }
+
     @Override
     public String getInputText() {
         StringBuilder ret = new StringBuilder();
+
+        // 最近聊天历史（adapter 注入，提供完整上下文）
+        if (!recentHistory.isBlank()) {
+            ret.append("[最近聊天记录]\n");
+            ret.append(recentHistory);
+            ret.append("\n--- 最新消息 ---\n");
+        }
+
         ret.append(Utils.getNowPrecise()).append(",");
 
         // 聊天类型标签

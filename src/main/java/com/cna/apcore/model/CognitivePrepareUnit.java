@@ -16,7 +16,7 @@ import java.util.UUID;
 @Getter
 public class CognitivePrepareUnit {
     private final UUID uuid;
-    private final String text;                // 聚合后的消息文本
+    private String text;                      // 聚合后的消息文本（支持同源合并追加）
     private final List<String> sourceIds;     // 来源标识符列表（如 "qqid:12345", "qq_group:67890"）
     private final long createdAtMs;           // 创建时间戳
 
@@ -77,6 +77,24 @@ public class CognitivePrepareUnit {
     /** 提升 ContinueWeight（上限由外部控制） */
     public void boostContinueWeight(double boost, double maxWeight) {
         this.continueWeight = Math.min(maxWeight, this.continueWeight + boost);
+    }
+
+    /** 追加文本（同源合并时使用），用分隔符连接 */
+    public void appendText(String newText) {
+        if (newText != null && !newText.isBlank()) {
+            this.text = this.text + "\n---\n" + newText;
+        }
+    }
+
+    /** 重置 tick 为 0（同源合并时使用，给合并后的单元新鲜度） */
+    public void resetTick() {
+        this.tick = 0;
+    }
+
+    /** 清除 UE 计算结果（文本变更后 UE 需要重算） */
+    public void clearUE() {
+        this.understandEnergy = 0.0;
+        this.ueUnits = new ArrayList<>();
     }
 
     /**
