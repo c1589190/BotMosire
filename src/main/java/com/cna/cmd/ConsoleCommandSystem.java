@@ -2,11 +2,11 @@ package com.cna.cmd;
 
 import com.cna.agent.AgentTask.ConsoleChatTask;
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
-import com.cna.agent.LivingLoop; // 确保引入了 LivingLoop
+import com.cna.plugin.MosireAPI;
 import lombok.extern.slf4j.Slf4j;
 import java.util.Scanner;
 
-import static com.cna.Main.loop;
+import static com.cna.Main.loop; // V4: MosireAPI 桥接 (ActionLoop)
 
 @Slf4j
 public class ConsoleCommandSystem {

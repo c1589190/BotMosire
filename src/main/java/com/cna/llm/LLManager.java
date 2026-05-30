@@ -13,8 +13,11 @@ import freemarker.template.Template;
 import freemarker.template.TemplateExceptionHandler;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -65,6 +68,70 @@ public class LLManager {
             log.error("[LLManager] 渲染场景模板字符串失败", e);
             throw new RuntimeException("模板渲染失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 从 classpath 加载 prompt 模板（优先），失败时回退到文件系统。
+     * 这确保模板在 JAR 包内和在开发环境中都能正常工作。
+     *
+     * @param resourcePath 资源路径（如 "prompts/V4_ACTION_LOOP_PROMPT.ftl"）
+     * @return 模板内容字符串
+     */
+    public static String loadPromptTemplate(String resourcePath) {
+        // 1. 尝试从 classpath 加载（JAR 包内）
+        InputStream is = LLManager.class.getClassLoader().getResourceAsStream(resourcePath);
+        if (is != null) {
+            try {
+                String content = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+                log.debug("[LLManager] 从 classpath 加载模板: {} ({} bytes)", resourcePath, content.length());
+                return content;
+            } catch (IOException e) {
+                log.warn("[LLManager] 读取 classpath 资源失败: {}", resourcePath, e);
+            }
+        }
+        // 2. 回退到文件系统（开发环境）
+        log.debug("[LLManager] classpath 中未找到 {}，回退到文件系统", resourcePath);
+        return MDManager.read(resourcePath, "");
+    }
+
+    /**
+     * 无状态 LLM 调用 — 渲染模板、构建消息、调用 LLM，不涉及全局上下文缓存。
+     *
+     * 适用于每次独立执行的场景（如 ActionLoop 的 tick 周期），
+     * 每次调用都从零构建 messages 数组，不会跨 action 累积历史。
+     *
+     * @param llm           LLM 适配器
+     * @param systemPrompt  系统提示词（纯文本，不经 FreeMarker 渲染）
+     * @param userTemplate  用户提示词模板（FreeMarker 格式字符串）
+     * @param dataModel     模板数据模型
+     * @param tools         工具定义数组
+     * @return CallResult，保证非 null
+     */
+    public static CallResult executeStateless(
+            LLMAdapter llm,
+            String systemPrompt,
+            String userTemplate,
+            Map<String, Object> dataModel,
+            ArrayNode tools) {
+        String userPrompt = render(userTemplate, dataModel);
+        log.info("[LLManager 无状态] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
+
+        ArrayNode messages = jsonMapper.createArrayNode();
+        ObjectNode sysMsg = messages.addObject();
+        sysMsg.put("role", "system");
+        sysMsg.put("content", systemPrompt != null ? systemPrompt : "");
+        ObjectNode userMsg = messages.addObject();
+        userMsg.put("role", "user");
+        userMsg.put("content", userPrompt);
+
+        ArrayNode toolsParam = (tools != null) ? tools : jsonMapper.createArrayNode();
+        CallResult result = llm.generateResponseWithTools(messages, toolsParam);
+
+        if (result == null) {
+            log.error("[LLManager 无状态] LLM 返回 null");
+            return errorResult("LLM 返回空结果");
+        }
+        return result;
     }
 
     public static ExecutorService getExecutor() {

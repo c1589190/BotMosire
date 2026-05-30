@@ -31,6 +31,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import com.cna.agent.AgentTool.io.*;
+import com.cna.apcore.ActionLoop;
+import com.cna.apcore.model.CognitivePrepareUnit;
 import org.slf4j.Logger;
 
 import java.util.*;
@@ -383,6 +385,11 @@ public class LivingLoop implements MosireAPI {
 
         this.registerInputHandler(new WebEventInputHandler(this));
         this.registerTaskHandler(new WebEventTaskHandler());
+    }
+
+    /** V4 核心：暴露工具箱供 ActionLoop 导入 */
+    public Map<String, DefaultAgentToolUnit> getToolbox() {
+        return largeLLMToolbox;
     }
 
     private void initLLM(){
@@ -961,6 +968,88 @@ public class LivingLoop implements MosireAPI {
         for (DefaultAgentInputHandlerUnit handler : inputHandlerRegistry.values()) {
             handler.tick();
         }
+
+        // ==========================================
+        // V4 核心：聚合输入 → 推送 CognitivePrepareUnit
+        // ==========================================
+        if (!currentBatch.isEmpty()) {
+            aggregateAndPushToV4(currentBatch);
+        }
+    }
+
+    /**
+     * V4 核心：按来源聚合消息，计算 SE，推送到 ActionLoop。
+     */
+    private void aggregateAndPushToV4(List<DefaultAgentInputUnit> inputs) {
+        try {
+            ActionLoop v4 = ActionLoop.getInstance();
+            if (v4 == null) return;
+
+            // 按来源分组（qqid:xxx, qq_group:xxx, discord:xxx, web_event, system:internal 等）
+            Map<String, List<String>> sourceTexts = new LinkedHashMap<>();
+            for (DefaultAgentInputUnit input : inputs) {
+                String source = extractSource(input);
+                String text = input.getClass().getSimpleName();
+                if (source == null || source.isBlank()) {
+                    source = "unknown";
+                }
+                sourceTexts.computeIfAbsent(source, k -> new ArrayList<>())
+                        .add(text);
+            }
+
+            for (Map.Entry<String, List<String>> entry : sourceTexts.entrySet()) {
+                String source = entry.getKey();
+                List<String> texts = entry.getValue();
+
+                if (texts.isEmpty()) continue;
+
+                // 聚合文本
+                String combinedText = String.join("\n---\n", texts);
+
+                // 计算 SE = 基础值 × (1 + log(消息数)) × @提及加成
+                double baseSE = 0.5;
+                double volumeFactor = 1.0 + Math.log1p(texts.size()) * 0.5;
+                double se = baseSE * volumeFactor;
+
+                // @提及/关键词密度加成
+                int atCount = 0;
+                for (String t : texts) {
+                    if (t.contains("@") || t.contains("atTargets")) {
+                        atCount++;
+                    }
+                }
+                if (atCount > 0) {
+                    se *= 1.0 + Math.min(0.5, atCount * 0.1);
+                }
+
+                // 创建并推送
+                CognitivePrepareUnit cpu = CognitivePrepareUnit.create(
+                        combinedText, List.of(source), se);
+                v4.pushPrepareUnit(cpu);
+
+                log.debug("[V4-Push] 来源={}, 消息数={}, SE={:.3f}, textLen={}",
+                        source, texts.size(), se, combinedText.length());
+            }
+        } catch (Exception e) {
+            log.warn("[V4-Push] 聚合推送异常: {}", e.getMessage());
+        }
+    }
+
+    /** 从 input 中提取来源标识符 */
+    private String extractSource(DefaultAgentInputUnit input) {
+        // ChatMessageInput 有 source 字段
+        if (input instanceof com.cna.agent.AgentInput.ChatMessageInput chatInput) {
+            String source = chatInput.getSource();
+            if (source != null && !source.isBlank()) return source;
+            String sourceName = chatInput.getSource_name();
+            if (sourceName != null && !sourceName.isBlank()) return "chat:" + sourceName;
+            return "chat:unknown";
+        }
+        // WebEventInput
+        if (input instanceof com.cna.agent.AgentInput.WebEventInput) {
+            return "web_event";
+        }
+        return "system:internal";
     }
 
     /**
