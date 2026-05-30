@@ -359,8 +359,14 @@ public class LLMAdapter {
                 log.info("Tool Calling 收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
 
                 if (!response.isSuccessful() || response.body() == null) {
-                    log.error("计算资源请求失败，状态码: {}", response.code());
-                    result.setContent("计算资源请求失败: " + response.code());
+                    int code = response.code();
+                    log.error("计算资源请求失败，状态码: {}", code);
+                    // 5xx 是上游临时故障，可重试；4xx 是客户端错误，立即返回
+                    if (code >= 500 && attempt < maxRetries) {
+                        log.warn("服务端错误 5xx，准备重试 (attempt={}/{})", attempt + 1, maxRetries + 1);
+                        continue;
+                    }
+                    result.setContent("计算资源请求失败: " + code);
                     return result;
                 }
 
@@ -567,8 +573,14 @@ public class LLMAdapter {
                 log.info("Tool Calling 流式收到响应，HTTP 状态码: {}, 耗时: {}ms", response.code(), elapsed);
 
                 if (!response.isSuccessful() || response.body() == null) {
-                    log.error("流式请求失败，状态码: {}", response.code());
-                    result.setContent("计算资源请求失败: " + response.code());
+                    int code = response.code();
+                    log.error("流式请求失败，状态码: {}", code);
+                    // 5xx 是上游临时故障，可重试；4xx 是客户端错误，立即返回
+                    if (code >= 500 && attempt < maxRetries) {
+                        log.warn("服务端错误 5xx，准备重试 (attempt={}/{})", attempt + 1, maxRetries + 1);
+                        continue;
+                    }
+                    result.setContent("计算资源请求失败: " + code);
                     return result;
                 }
 
