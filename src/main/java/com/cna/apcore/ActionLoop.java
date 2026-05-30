@@ -65,9 +65,6 @@ public class ActionLoop implements MosireAPI {
     private final ExecutorService actionExecutor;
     private final AtomicBoolean isProcessing;
 
-    // LLManager 全局缓存是否已用 ActionLoop 的 system prompt 初始化
-    private volatile boolean globalCacheInitialized = false;
-
     // 控制台监听器列表（供 ApcoreConsole 等外部组件订阅 LLM 响应）
     private final List<Consumer<ActionNotification>> consoleListeners = new CopyOnWriteArrayList<>();
 
@@ -325,6 +322,11 @@ public class ActionLoop implements MosireAPI {
                 CoreConfig.COGNITIVE_TICK_MS,
                 CoreConfig.BASELINE_THRESHOLD,
                 CoreConfig.CONTINUE_WEIGHT_DECAY);
+
+        // 初始化 LLManager 全局上下文缓存（用 V4 action system prompt 替代默认的 CORE.md）
+        String systemPrompt = LLManager.loadPromptTemplate("prompts/V4_ACTION_SYSTEM_PROMPT.md");
+        LLManager.initGlobalCache(systemPrompt != null ? systemPrompt : "");
+
         tickScheduler.scheduleAtFixedRate(this::onTick,
                 CoreConfig.COGNITIVE_TICK_MS,
                 CoreConfig.COGNITIVE_TICK_MS,
@@ -520,8 +522,7 @@ public class ActionLoop implements MosireAPI {
         log.info("[ActionLoop] 🔄 开始处理 CognitiveAction #{}: {}", actionNum, action.buildSummary());
 
         try {
-            // 1. 构建 prompt + 工具（由 LLManager 负责渲染模板和调用 LLM）
-            String systemPrompt = LLManager.loadPromptTemplate("prompts/V4_ACTION_SYSTEM_PROMPT.md");
+            // 1. 加载用户模板 + 感觉谐振分析，构建数据模型
             String userTemplate = LLManager.loadPromptTemplate("prompts/V4_ACTION_LOOP_PROMPT.ftl");
 
             // ★ 感觉谐振分析：对 action text 做超图 BFS + 拐点检测，
@@ -547,26 +548,12 @@ public class ActionLoop implements MosireAPI {
             Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock);
             ArrayNode toolsArray = buildToolsArray();
 
-            // 2. 渲染用户提示词
-            String userPrompt = LLManager.render(userTemplate, promptData);
-            log.info("[ActionLoop] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
-
-            // 3. 通过 LLManager 全局缓存调用 LLM（单次调用，不再强制重试 finish_action）
-            //    首次调用时初始化全局缓存，后续调用复用已有上下文
+            // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
             log.info("[ActionLoop] 🤖 调用大模型 (tools={})...", toolsArray.size());
             long llmStartMs = System.currentTimeMillis();
-            com.cna.llm.CallResult result;
-
-            // 首次调用：用 ActionLoop 的 system prompt 初始化 LLManager 全局缓存
-            if (!globalCacheInitialized) {
-                LLManager.initGlobalCache(systemPrompt != null ? systemPrompt : "");
-                globalCacheInitialized = true;
-            }
-
-            // LLManager 负责上下文管理、截断、持久化
-            long callStart = System.currentTimeMillis();
-            result = LLManager.executeWithGlobalCache(userPrompt, brainLLM, toolsArray);
-            long callMs = System.currentTimeMillis() - callStart;
+            com.cna.llm.CallResult result = LLManager.executeScene(
+                    UUID.randomUUID(), userTemplate, promptData, brainLLM, toolsArray);
+            long callMs = System.currentTimeMillis() - llmStartMs;
 
             if (result != null) {
                 // ★ 本轮工具调用日志（per-round tool logging）
@@ -1159,10 +1146,9 @@ public class ActionLoop implements MosireAPI {
     // 上下文缓存管理（委托给 LLManager 全局缓存）
     // ==========================================
 
-    /** 清空上下文缓存（异常恢复时使用），委托给 LLManager */
+    /** 清空上下文缓存（异常恢复时使用），完全委托给 LLManager */
     public void clearContextCache() {
         LLManager.clearCache();
-        globalCacheInitialized = false;
         log.info("[ActionLoop] 上下文缓存已清空（通过 LLManager）");
     }
 
