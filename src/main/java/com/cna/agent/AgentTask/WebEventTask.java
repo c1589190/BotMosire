@@ -3,6 +3,7 @@ package com.cna.agent.AgentTask;
 import lombok.Getter;
 import java.util.List;
 
+@Deprecated
 public class WebEventTask extends AbstractAgentTask {
 
     @Getter

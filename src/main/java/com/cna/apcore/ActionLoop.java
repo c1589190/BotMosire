@@ -13,11 +13,13 @@ import com.cna.agent.CuriosityListManager;
 import com.cna.agent.FeelingResonanceAnalyzer;
 import com.cna.agent.code.DelegateComputerTaskTool;
 import com.cna.apcore.config.CoreConfig;
+import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
 import com.cna.apcore.model.ActionPredict;
 import com.cna.apcore.model.CognitiveAction;
 import com.cna.apcore.model.CognitivePrepareUnit;
+import com.cna.apcore.model.FeelingEntry;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
 import com.cna.db.FeelingDimensionManager;
@@ -85,6 +87,14 @@ public class ActionLoop implements MosireAPI {
     private static final int MAX_POOL_SUMMARY_UNITS = 20;
     /** action_predicts_text 最大经验条数 */
     private static final int MAX_PREDICT_EXPERIENCES = 15;
+
+    // ★ 互斥感觉维度检测参数
+    /** 互斥相似度上限：低于此值视为"语义相斥" */
+    private static final double MUTUAL_EXCLUSION_SIMILARITY_THRESHOLD = 0.25;
+    /** 互斥候选最小激活次数：只有"已建立"的概念才纳入互斥考量 */
+    private static final int MUTUAL_EXCLUSION_MIN_ACTIVATION = 2;
+    /** 互斥候选最大展示数 */
+    private static final int MAX_MUTUAL_EXCLUSIONS = 10;
 
     private ActionLoop() {
         this.preparePool = new CognitivePreparePool();
@@ -557,7 +567,23 @@ public class ActionLoop implements MosireAPI {
                 log.warn("[ActionLoop] 感觉谐振分析失败，跳过: {}", e.getMessage());
             }
 
-            Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock);
+            // ★ 互斥感觉维度检测：找出与 actionText 语义相斥的已有感觉维度
+            List<Map<String, Object>> mutualExclusions = List.of();
+            try {
+                double[] actionTextEmb = getEmbedding(action.getActionText());
+                if (actionTextEmb != null) {
+                    mutualExclusions = detectMutualExclusions(actionTextEmb, feelingsDB);
+                    if (!mutualExclusions.isEmpty()) {
+                        log.info("[ActionLoop] ⚔️ 互斥感觉检测: {} 个互斥候选 → {}",
+                                mutualExclusions.size(),
+                                mutualExclusions.stream().map(m -> m.get("concept")).limit(5).toList());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ActionLoop] 互斥感觉检测失败，跳过: {}", e.getMessage());
+            }
+
+            Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock, mutualExclusions);
             ArrayNode toolsArray = buildToolsArray();
 
             // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
@@ -628,6 +654,9 @@ public class ActionLoop implements MosireAPI {
             boolean hasFinishAction = false;
             JsonNode finishActionArgs = null;
             String finishActionCallId = null;
+
+            // ★ action_feelings 解析结果：LLM 通过 finish_action 回报的本轮涉及感觉维度 ID 列表
+            List<Integer> resolvedDimIds = null;
 
             if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
                 // —— 分类：finish_action vs 其他工具 ——
@@ -733,6 +762,47 @@ public class ActionLoop implements MosireAPI {
                                         inheritedSE, nextActionText.length() > 80
                                                 ? nextActionText.substring(0, 80) + "..." : nextActionText);
                             }
+
+                            // ★ 处理 action_feelings：LLM 回报的本轮涉及所有感觉维度
+                            JsonNode actionFeelings = finishActionArgs.path("action_feelings");
+                            if (actionFeelings.isArray() && actionFeelings.size() > 0) {
+                                resolvedDimIds = new ArrayList<>();
+                                int existingCount = 0;
+                                int newCount = 0;
+                                for (JsonNode af : actionFeelings) {
+                                    int dimId = af.path("dim_id").asInt(-1);
+                                    String concept = af.path("concept").asText("");
+                                    String embText = af.path("embedding_text").asText("");
+                                    String relation = af.path("relation").asText("");
+
+                                    if (dimId > 0) {
+                                        // 已有维度：验证存在 → incrementActivation
+                                        FeelingEntry existing = feelingsDB.getById(dimId);
+                                        if (existing != null) {
+                                            feelingsDB.incrementActivation(dimId);
+                                            resolvedDimIds.add(dimId);
+                                            existingCount++;
+                                        } else {
+                                            log.warn("[ActionLoop] action_feelings 引用不存在的 dim_id={}，跳过", dimId);
+                                        }
+                                    } else if (!concept.isBlank()) {
+                                        // 新维度：生成 embedding → insertFeeling (dedup) → 得到真实 ID
+                                        String textForEmb = !embText.isBlank() ? embText : concept;
+                                        double[] emb = getEmbedding(textForEmb);
+                                        if (emb != null) {
+                                            int realId = feelingsDB.insertFeeling(concept, emb);
+                                            if (realId > 0) {
+                                                resolvedDimIds.add(realId);
+                                                newCount++;
+                                                log.info("[ActionLoop]   🆕 action_feeling 新维度: '{}' → id={}, relation={}",
+                                                        concept, realId, relation);
+                                            }
+                                        }
+                                    }
+                                }
+                                log.info("[ActionLoop] 📋 action_feelings 处理完成: {} 已有 + {} 新增 = {} 个感觉维度",
+                                        existingCount, newCount, resolvedDimIds.size());
+                            }
                         } catch (Exception e) {
                             String execResult = "ERROR: " + e.getMessage();
                             toolResults.add("[finish_action] 异常: " + execResult);
@@ -761,7 +831,19 @@ public class ActionLoop implements MosireAPI {
                     : new ArrayList<>();
 
             // 6. 存储经验
-            int expId = storeExperience(action, thoughts, stimulatedDimIds, toolResults,
+            // ★ 优先使用 LLM 通过 action_feelings 回报的感觉维度 ID 作为富 key
+            //    回退：合并 stimulatedDimIds + UE dimIds（旧逻辑）
+            List<Integer> expDimIds;
+            if (resolvedDimIds != null && !resolvedDimIds.isEmpty()) {
+                expDimIds = resolvedDimIds;
+                log.info("[ActionLoop] 💡 使用 action_feelings 富 key ({}) 存储经验", expDimIds.size());
+            } else {
+                expDimIds = new ArrayList<>();
+                expDimIds.addAll(stimulatedDimIds);
+                expDimIds.addAll(action.getUEDimIds());
+                log.debug("[ActionLoop] 使用 stimulated+UE dims ({}) 存储经验 (fallback)", expDimIds.size());
+            }
+            int expId = storeExperience(action, thoughts, expDimIds, toolResults,
                     meta != null && !meta.path("new_prepare_unit").isNull()
                             ? meta.path("new_prepare_unit").path("text").asText() : null);
 
@@ -834,7 +916,8 @@ public class ActionLoop implements MosireAPI {
      * ★ 内含 prompt 大小保护：对 action_text、pool_summary 等大字段做截断，
      *    防止组合 prompt 超过 API 上下文窗口导致 502 错误。
      */
-    private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock) {
+    private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock,
+                                                       List<Map<String, Object>> mutualExclusions) {
         Map<String, Object> data = new HashMap<>();
 
         // ★ action_text 上限：防止超长聊天历史撑爆上下文窗口
@@ -856,6 +939,11 @@ public class ActionLoop implements MosireAPI {
         data.put("ue_concepts", action.getUEConcepts());
         data.put("ue_dim_ids", action.getUEDimIds());
         data.put("now_time", Utils.getNowPrecise());
+
+        // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
+        if (mutualExclusions != null && !mutualExclusions.isEmpty()) {
+            data.put("mutual_exclusions", mutualExclusions);
+        }
 
         // ★ 感觉谐振分析结果（违和/一致感觉维度）
         if (feelingResonanceBlock != null && !feelingResonanceBlock.isBlank()) {
@@ -888,6 +976,50 @@ public class ActionLoop implements MosireAPI {
         data.put("pool_summary", poolSummary);
 
         return data;
+    }
+
+    /**
+     * 检测与当前 action text 语义互斥的已有感觉维度。
+     *
+     * 算法：
+     * 1. 从 FeelingsDB 获取所有感觉维度
+     * 2. 计算每个维度 embedding 与 actionTextEmb 的余弦相似度
+     * 3. 取相似度最低（< THRESHOLD）且激活次数 >= MIN_ACTIVATION 的维度
+     * 4. 返回 top-N 作为"互斥候选"——这些是系统中已建立的概念，
+     *    但与当前输入高度不匹配，可能代表矛盾或对立的认知方向
+     *
+     * @param actionTextEmb action 文本的 embedding
+     * @param db            感觉维度数据库
+     * @return 互斥候选列表，每项含 dim_id, concept, similarity, activation_count
+     */
+    private List<Map<String, Object>> detectMutualExclusions(double[] actionTextEmb, FeelingsDB db) {
+        List<FeelingEntry> allFeelings = db.getAll();
+        if (allFeelings.isEmpty()) return List.of();
+
+        // 计算每个感觉维度与 action 文本的相似度，按升序排列
+        List<FeelingEntry> sorted = new ArrayList<>(allFeelings);
+        sorted.sort((a, b) -> Double.compare(
+                CognitiveDB.cosineSimilarity(actionTextEmb, a.getEmbedding()),
+                CognitiveDB.cosineSimilarity(actionTextEmb, b.getEmbedding())));
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (FeelingEntry f : sorted) {
+            double sim = CognitiveDB.cosineSimilarity(actionTextEmb, f.getEmbedding());
+            // 相似度超过阈值 → 不再互斥，停止
+            if (sim >= MUTUAL_EXCLUSION_SIMILARITY_THRESHOLD) break;
+            // 只纳入"已建立"的概念（激活次数足够）
+            if (f.getActivationCount() < MUTUAL_EXCLUSION_MIN_ACTIVATION) continue;
+
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("dim_id", f.getId());
+            entry.put("concept", f.getConcept());
+            entry.put("similarity", Math.round(sim * 1000.0) / 1000.0); // 保留3位
+            entry.put("activation_count", f.getActivationCount());
+            result.add(entry);
+
+            if (result.size() >= MAX_MUTUAL_EXCLUSIONS) break;
+        }
+        return result;
     }
 
     private ArrayNode buildToolsArray() {
@@ -944,7 +1076,7 @@ public class ActionLoop implements MosireAPI {
     // ==========================================
 
     private int storeExperience(CognitiveAction action, String thoughts,
-                                 List<Integer> stimulatedDimIds, List<String> toolResults,
+                                 List<Integer> feelingDimIds, List<String> toolResults,
                                  String newPrepareText) {
         List<String> expTexts = new ArrayList<>();
 
@@ -973,10 +1105,8 @@ public class ActionLoop implements MosireAPI {
             return -1;
         }
 
-        // 合并所有感觉维度 ID
-        List<Integer> allDimIds = new ArrayList<>();
-        allDimIds.addAll(stimulatedDimIds);
-        allDimIds.addAll(action.getUEDimIds());
+        // 感觉维度 ID：由调用方统一解析（action_feelings 富 key 或 stimulated+UE fallback）
+        List<Integer> allDimIds = feelingDimIds != null ? feelingDimIds : new ArrayList<>();
 
         // 计算拼接文本的 embedding
         String combinedText = String.join(" ", expTexts);

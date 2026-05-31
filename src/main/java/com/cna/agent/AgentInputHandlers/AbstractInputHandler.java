@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 通用的 Input 处理器抽象基类
  * @param <T> 该处理器专门负责的 Input 具体类型
  */
+@Deprecated
 public abstract class AbstractInputHandler<T extends DefaultAgentInputUnit> implements DefaultAgentInputHandlerUnit {
 
     private final Class<T> supportedInputClass;

@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 @Slf4j
+@Deprecated
 public class UpdateThoughtsTaskHandler implements DefaultAgentTaskHandler {
 
     @Override

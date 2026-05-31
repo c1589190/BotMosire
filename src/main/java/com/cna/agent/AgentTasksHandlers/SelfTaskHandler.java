@@ -17,6 +17,7 @@ import java.util.Map;
  * 外部聊天记录——它的全部上下文就是任务描述 + 深层记忆 + 系统状态。
  */
 @Slf4j
+@Deprecated
 public class SelfTaskHandler extends AbstractAgentTaskHandler {
 
     @Override

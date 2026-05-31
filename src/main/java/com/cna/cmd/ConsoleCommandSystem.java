@@ -9,6 +9,7 @@ import java.util.Scanner;
 import static com.cna.Main.loop; // V4: MosireAPI 桥接 (ActionLoop)
 
 @Slf4j
+@Deprecated
 public class ConsoleCommandSystem {
 
     private Thread commandThread;

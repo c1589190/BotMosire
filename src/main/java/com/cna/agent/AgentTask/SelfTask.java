@@ -11,6 +11,7 @@ import java.util.UUID;
  * 通过 create_self_task 工具主动为自己创建的任务。它可以关联任意来源、
  * 设置优先级、并可选择性地挂载到父任务下形成任务树。
  */
+@Deprecated
 public class SelfTask extends AbstractAgentTask {
 
     private final String taskText;

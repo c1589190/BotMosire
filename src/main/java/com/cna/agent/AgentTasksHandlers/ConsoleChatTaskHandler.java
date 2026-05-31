@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import java.util.Map;
 
+@Deprecated
 public class ConsoleChatTaskHandler extends AbstractAgentTaskHandler {
 
     @Override

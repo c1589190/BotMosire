@@ -62,6 +62,26 @@ public class FinishAction implements DefaultAgentToolUnit {
                 + "系统会将其作为新的 CognitivePrepareUnit 注入准备池，在后续 tick 中被选中继续处理。"
                 + "留空或不填则本轮完全结算，不创建后续单元。");
 
+        // action_feelings: 可选，LLM 自主输出本轮涉及的所有感觉维度
+        ObjectNode actionFeelings = properties.putObject("action_feelings");
+        actionFeelings.put("type", "array");
+        actionFeelings.put("description", p.getCustomDescription("action_feelings"));
+        ObjectNode afItems = actionFeelings.putObject("items");
+        afItems.put("type", "object");
+        ObjectNode afProps = afItems.putObject("properties");
+        ObjectNode afDimId = afProps.putObject("dim_id");
+        afDimId.put("type", "integer");
+        afDimId.put("description", p.getCustomDescription("action_feelings.dim_id"));
+        ObjectNode afConcept = afProps.putObject("concept");
+        afConcept.put("type", "string");
+        afConcept.put("description", p.getCustomDescription("action_feelings.concept"));
+        ObjectNode afEmbText = afProps.putObject("embedding_text");
+        afEmbText.put("type", "string");
+        afEmbText.put("description", p.getCustomDescription("action_feelings.embedding_text"));
+        ObjectNode afRelation = afProps.putObject("relation");
+        afRelation.put("type", "string");
+        afRelation.put("description", p.getCustomDescription("action_feelings.relation"));
+
         ArrayNode required = parameters.putArray("required");
         required.add("experience_scoring");
 

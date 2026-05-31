@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Slf4j
+@Deprecated
 public class MDManager {
 
     // 异步写入专用单线程，保证串行写入，避免并发写文件导致内容交错或丢失

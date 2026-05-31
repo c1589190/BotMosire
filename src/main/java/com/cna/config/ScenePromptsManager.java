@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.util.Properties;
 
 @Slf4j
+@Deprecated
 public class ScenePromptsManager {
 
     // 静态缓存，存储所有场景的提示词文件【路径】

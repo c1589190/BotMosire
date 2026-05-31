@@ -2,6 +2,7 @@ package com.cna.agent.AgentTask;
 
 import java.util.UUID;
 
+@Deprecated
 public abstract class AbstractAgentTask implements DefaultAgentTaskUnit {
 
     // 基础标识

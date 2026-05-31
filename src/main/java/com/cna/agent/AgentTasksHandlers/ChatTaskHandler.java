@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.Map;
 
 @Slf4j
+@Deprecated
 public class ChatTaskHandler extends AbstractAgentTaskHandler {
 
     public static final ThreadLocal<Long> CURRENT_REPLY_TO_ID = ThreadLocal.withInitial(() -> 0L);

@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
+@Deprecated
 public class NapcatAdapter extends WebSocketClient {
 
     private static final ObjectMapper jsonMapper = new ObjectMapper();
@@ -377,16 +378,48 @@ public class NapcatAdapter extends WebSocketClient {
         );
     }
 
+    /**
+     * Napcat 来源过滤 — 支持黑名单/白名单双模式。
+     *
+     * @param sourceId 群号或用户QQ号（字符串形式）
+     * @param sourceLabel 来源标签，用于日志（如 "qq_group:123456"）
+     * @return true=放行, false=丢弃
+     */
+    private boolean applySourceFilter(String sourceId, String sourceLabel) {
+        java.util.Set<String> filterIds = com.cna.config.ConfigsManager.NAPCAT_FILTER_GROUP_IDS;
+        String mode = com.cna.config.ConfigsManager.NAPCAT_FILTER_MODE;
+
+        // 列表为空时：两种模式都放行所有消息
+        if (filterIds.isEmpty()) return true;
+
+        boolean inList = filterIds.contains(sourceId);
+
+        if ("whitelist".equals(mode)) {
+            // 白名单模式：只放行列表中的来源
+            if (!inList) {
+                log.debug("[NapcatAdapter] 🔒 白名单模式：{} 不在 napcat.filter.groupIds 中，跳过录入", sourceLabel);
+                return false;
+            }
+            log.debug("[NapcatAdapter] ✅ 白名单模式：{} 在允许列表中，放行", sourceLabel);
+            return true;
+        } else {
+            // 黑名单模式（默认）：排除列表中的来源
+            if (inList) {
+                log.debug("[NapcatAdapter] 🚫 黑名单模式：{} 在 napcat.filter.groupIds 中，跳过录入", sourceLabel);
+                return false;
+            }
+            return true;
+        }
+    }
+
     private void handleGroupMessage(JsonNode event, long senderId, ParsedMessage parsed,
                                      String senderCard, String senderGroupRole, String subType,
                                      boolean isPrivate) {
         try {
             long groupId = event.path("group_id").asLong();
 
-            // ★ Napcat 来源过滤：配置中排除的群直接丢弃，不录入 input
-            if (!com.cna.config.ConfigsManager.NAPCAT_EXCLUDE_GROUP_IDS.isEmpty()
-                    && com.cna.config.ConfigsManager.NAPCAT_EXCLUDE_GROUP_IDS.contains(String.valueOf(groupId))) {
-                log.debug("[NapcatAdapter] 🚫 群 {} 在 napcat.filter.excludeGroupIds 中，跳过录入", groupId);
+            // ★ Napcat 来源过滤（支持黑名单/白名单双模式）
+            if (!applySourceFilter(String.valueOf(groupId), "qq_group:" + groupId)) {
                 return;
             }
 
@@ -423,6 +456,11 @@ public class NapcatAdapter extends WebSocketClient {
     private void handlePrivateMessage(JsonNode event, long senderId, ParsedMessage parsed,
                                        String senderCard, String senderGroupRole, String subType) {
         try {
+            // ★ Napcat 来源过滤（支持黑名单/白名单双模式）
+            if (!applySourceFilter(String.valueOf(senderId), "qq_private:" + senderId)) {
+                return;
+            }
+
             String senderName = getFriendNameSync(senderId);
             if (senderName.isBlank()) senderName = String.valueOf(senderId);
 

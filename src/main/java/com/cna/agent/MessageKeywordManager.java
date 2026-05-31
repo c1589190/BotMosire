@@ -28,6 +28,7 @@ import java.util.concurrent.Executors;
  * 线程安全：基于 ConcurrentHashMap，无外部锁。
  */
 @Slf4j
+@Deprecated
 public class MessageKeywordManager {
 
     private static final String PERSIST_FILE = "message_keywords.json";

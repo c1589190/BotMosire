@@ -92,8 +92,10 @@ public class ConfigsManager {
     public static final String NAPCAT_TOEKN;
     public static final int NAPCAT_WS_PORT;
     public static final String NAPCAT_HTTP_URL;
-    /** Napcat 来源过滤：禁止录入 input 的群号集合（逗号分隔配置，启动时解析为 Set） */
-    public static final java.util.Set<String> NAPCAT_EXCLUDE_GROUP_IDS;
+    /** Napcat 来源过滤：过滤用 ID 集合。黑名单-排除这些ID；白名单-只接受这些ID */
+    public static final java.util.Set<String> NAPCAT_FILTER_GROUP_IDS;
+    /** Napcat 来源过滤模式："blacklist"（默认，排除列表中的群/人）| "whitelist"（只接受列表中的群/人） */
+    public static final String NAPCAT_FILTER_MODE;
 
     public static final String WORKSPACE_DIR;
 
@@ -281,18 +283,28 @@ public class ConfigsManager {
         NAPCAT_HTTP_URL = getString("napcat.httpUrl", "http://127.0.0.1:3000");
         NAPCAT_TOEKN = getString("napcat.token", "");
 
-        // Napcat 来源过滤 — 解析逗号分隔的群号白名单
+        // Napcat 来源过滤 — 解析 mode + ID 列表（兼容旧 key: napcat.filter.excludeGroupIds）
         {
-            String raw = getString("napcat.filter.excludeGroupIds", "");
-            if (raw != null && !raw.isBlank()) {
+            NAPCAT_FILTER_MODE = getString("napcat.filter.mode", "blacklist").trim().toLowerCase();
+            if (!NAPCAT_FILTER_MODE.equals("blacklist") && !NAPCAT_FILTER_MODE.equals("whitelist")) {
+                // 非法值回退默认
+                log.warn("[Config] napcat.filter.mode 值非法 ({}), 回退为 blacklist", NAPCAT_FILTER_MODE);
+            }
+
+            // 优先用新 key napcat.filter.groupIds，为空则回退旧 key napcat.filter.excludeGroupIds
+            String raw = getString("napcat.filter.groupIds", "");
+            if (raw.isBlank()) {
+                raw = getString("napcat.filter.excludeGroupIds", "");
+            }
+            if (!raw.isBlank()) {
                 java.util.Set<String> set = new java.util.HashSet<>();
                 for (String id : raw.split(",")) {
                     String trimmed = id.trim();
                     if (!trimmed.isEmpty()) set.add(trimmed);
                 }
-                NAPCAT_EXCLUDE_GROUP_IDS = java.util.Collections.unmodifiableSet(set);
+                NAPCAT_FILTER_GROUP_IDS = java.util.Collections.unmodifiableSet(set);
             } else {
-                NAPCAT_EXCLUDE_GROUP_IDS = java.util.Collections.emptySet();
+                NAPCAT_FILTER_GROUP_IDS = java.util.Collections.emptySet();
             }
         }
 

@@ -16,6 +16,7 @@ import static com.cna.Main.GlobalDiscordAdapter;
 import static com.cna.Main.GlobalNapcatAdapter;
 
 @Slf4j
+@Deprecated
 public class ChatAdaptersManager {
 
     // getHistory TTL cache：避免 Gatekeeper 每次都同步呼叫平台 API

@@ -1,5 +1,6 @@
 package com.cna.agent.AgentTask;
 
+@Deprecated
 public class UpdateThoughtsTask extends AbstractAgentTask {
 
     private final String taskText;

@@ -8,6 +8,7 @@ import com.cna.llm.LLManager;
 
 import java.util.Map;
 
+@Deprecated
 public class WebEventTaskHandler extends AbstractAgentTaskHandler {
 
     @Override

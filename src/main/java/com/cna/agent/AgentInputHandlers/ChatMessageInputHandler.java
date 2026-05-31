@@ -13,6 +13,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 @Slf4j
+@Deprecated
 public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInput> {
 
     protected LinkedHashMap<String, ChatTask> ChatTaskPreparationPool = new LinkedHashMap<>();

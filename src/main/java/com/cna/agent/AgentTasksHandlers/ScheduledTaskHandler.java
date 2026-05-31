@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import java.util.Map;
 
+@Deprecated
 public class ScheduledTaskHandler extends AbstractAgentTaskHandler {
 
     @Override

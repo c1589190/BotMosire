@@ -2,6 +2,7 @@ package com.cna.agent.AgentTask;
 
 import java.util.List;
 
+@Deprecated
 public class ConsoleChatTask extends AbstractAgentTask {
 
     private final String context;

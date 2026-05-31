@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
+@Deprecated
 public class LivingLoop implements MosireAPI {
     //private static final ObjectMapper sharedMapper = new ObjectMapper();
 

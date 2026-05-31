@@ -47,6 +47,7 @@ import java.util.stream.Collectors;
  *   discordid:{userId}            — 發送者
  */
 @Slf4j
+@Deprecated
 public class DiscordAdapter extends ListenerAdapter {
 
     private static final Logger logger = log;

@@ -13,6 +13,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 
 //测试Class
+@Deprecated
 public class BotGUI {
     private final JTextArea logArea;
     private final JTextField commandInput;

@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
  * 支持跨天时间段（如 22:00 ~ 06:00）。
  */
 @Slf4j
+@Deprecated
 public class SleepManager {
 
     private static final SleepManager INSTANCE = new SleepManager();

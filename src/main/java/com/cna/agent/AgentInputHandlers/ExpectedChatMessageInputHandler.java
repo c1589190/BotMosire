@@ -12,6 +12,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
+@Deprecated
 public class ExpectedChatMessageInputHandler extends ChatMessageInputHandler {
 
     public static class PendingTaskWrapper {

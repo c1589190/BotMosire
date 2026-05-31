@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Slf4j
+@Deprecated
 public abstract class AbstractAgentTaskHandler implements DefaultAgentTaskHandler {
 
     @Override
