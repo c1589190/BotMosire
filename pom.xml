@@ -6,7 +6,7 @@
 
     <groupId>com.cna</groupId>
     <artifactId>BotMosire</artifactId>
-    <version>Alpha26.3.0_TEST2</version>
+    <version>Alpha26.3.0_TEST3</version>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
@@ -158,6 +158,13 @@
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
             <version>1.17.2</version>
+        </dependency>
+
+        <!-- PDF text extraction -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
         </dependency>
 
     </dependencies>

@@ -9,20 +9,21 @@ import com.cna.agent.AgentTool.*;
 import com.cna.agent.AgentTool.io.*;
 import com.cna.agent.AgentTool.FinishAction;
 import com.cna.agent.AgentTasksHandlers.DefaultAgentTaskHandler;
-import com.cna.agent.CuriosityListManager;
 import com.cna.agent.FeelingResonanceAnalyzer;
 import com.cna.agent.code.DelegateComputerTaskTool;
 import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
+import com.cna.apcore.action.ChatMessageActionDeveloper;
+import com.cna.apcore.action.FileInputWatcher;
+import com.cna.apcore.attention.AttentionManager;
+import com.cna.apcore.feeling.FeelingsManager;
 import com.cna.apcore.model.ActionPredict;
 import com.cna.apcore.model.CognitiveAction;
 import com.cna.apcore.model.CognitivePrepareUnit;
-import com.cna.apcore.model.FeelingEntry;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
-import com.cna.db.FeelingDimensionManager;
 import com.cna.db.FeelingHypergraphManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -74,7 +75,6 @@ public class ActionLoop implements MosireAPI {
     // 统计计数器（调试用）
     private final AtomicInteger tickCount = new AtomicInteger(0);
     private final AtomicInteger inputProcessedCount = new AtomicInteger(0);
-    private final AtomicInteger actionProcessedCount = new AtomicInteger(0);
     private final AtomicInteger toolExecutedCount = new AtomicInteger(0);
     private final AtomicInteger experienceStoredCount = new AtomicInteger(0);
     private final AtomicInteger feelingStimulatedCount = new AtomicInteger(0);
@@ -88,13 +88,17 @@ public class ActionLoop implements MosireAPI {
     /** action_predicts_text 最大经验条数 */
     private static final int MAX_PREDICT_EXPERIENCES = 15;
 
-    // ★ 互斥感觉维度检测参数
-    /** 互斥相似度上限：低于此值视为"语义相斥" */
-    private static final double MUTUAL_EXCLUSION_SIMILARITY_THRESHOLD = 0.25;
-    /** 互斥候选最小激活次数：只有"已建立"的概念才纳入互斥考量 */
-    private static final int MUTUAL_EXCLUSION_MIN_ACTIVATION = 2;
-    /** 互斥候选最大展示数 */
-    private static final int MAX_MUTUAL_EXCLUSIONS = 10;
+    // ★ 感觉维度管理器（封装互斥检测、刺激处理、打分传播、谐振分析、违和积累）
+    private final FeelingsManager feelingsManager;
+
+    // ★ Chat 消息聚合器（按 source 分桶累积，攒够/等够再 flush 入池）
+    private final ChatMessageActionDeveloper chatDeveloper;
+
+    // ★ 注意力管理器（内源能量引擎，让自生成任务获得驱动力）
+    private final AttentionManager attentionManager;
+
+    // ★ 文件输入监控器（自动发现工作区新增的 txt/md 文件）
+    private final FileInputWatcher fileWatcher;
 
     private ActionLoop() {
         this.preparePool = new CognitivePreparePool();
@@ -115,6 +119,18 @@ public class ActionLoop implements MosireAPI {
             return t;
         });
         this.isProcessing = new AtomicBoolean(false);
+
+        // ★ 感觉维度管理器初始化
+        this.feelingsManager = new FeelingsManager(feelingsDB, experiencesDB, this::getEmbedding);
+
+        // ★ Chat 消息聚合器初始化
+        this.chatDeveloper = new ChatMessageActionDeveloper();
+
+        // ★ 注意力管理器初始化
+        this.attentionManager = new AttentionManager();
+
+        // ★ 文件输入监控器初始化
+        this.fileWatcher = new FileInputWatcher();
 
         // ── 自持工具箱初始化（不依赖 LivingLoop） ──
         initToolbox();
@@ -140,7 +156,6 @@ public class ActionLoop implements MosireAPI {
 
     /** 认知动作处理完成后的通知 */
     public record ActionNotification(
-            int actionNum,
             String actionSummary,
             String llmThoughts,
             int toolCallCount,
@@ -228,8 +243,7 @@ public class ActionLoop implements MosireAPI {
 
         preparePool.push(cpu);
         int count = inputProcessedCount.incrementAndGet();
-        log.info("[ActionLoop][MosireAPI] 📥 直接推送 Input → 准备池 (总计: {}): source={}, textLen={}, SE={:.3f}",
-                count, source, text.length(), se);
+        log.info("[ActionLoop][MosireAPI] 📥 直接推送 Input → 准备池 (总计: " + count + "): source=" + source + ", textLen=" + text.length() + ", SE=" + String.format("%.3f", se));
     }
 
     @Override
@@ -285,7 +299,9 @@ public class ActionLoop implements MosireAPI {
         // 文件系统工具
         registerToolInternal(new WriteFile());
         registerToolInternal(new ReadFile());
+        registerToolInternal(new ReadDocument());
         registerToolInternal(new CdWorkspace());
+        registerToolInternal(new DownloadFile());
 
         // 认知/记忆工具
         registerToolInternal(new GetMoreCurrentMemorys());
@@ -359,9 +375,18 @@ public class ActionLoop implements MosireAPI {
     /** 停止 */
     public void stop() {
         log.info("[ActionLoop] ⏹️ 正在停止 V4 认知循环...");
-        log.info("[ActionLoop] 📊 停止前统计 — Ticks: {}, Inputs: {}, Actions: {}, Tools: {}, Experiences: {}, Feelings: {}",
-                tickCount.get(), inputProcessedCount.get(), actionProcessedCount.get(),
+        log.info("[ActionLoop] 📊 停止前统计 — Ticks: {}, Inputs: {}, Tools: {}, Experiences: {}, Feelings: {}",
+                tickCount.get(), inputProcessedCount.get(),
                 toolExecutedCount.get(), experienceStoredCount.get(), feelingStimulatedCount.get());
+
+        // ★ 清空 ChatMessageActionDeveloper 中未 flush 的桶
+        List<CognitivePrepareUnit> remaining = chatDeveloper.flushAll();
+        for (CognitivePrepareUnit unit : remaining) {
+            preparePool.push(unit);
+        }
+        if (!remaining.isEmpty()) {
+            log.info("[ActionLoop] 📦 stop 时 flush {} 个残留桶到准备池", remaining.size());
+        }
 
         tickScheduler.shutdown();
         actionExecutor.shutdown();
@@ -393,17 +418,27 @@ public class ActionLoop implements MosireAPI {
             // ── 步骤 0: 直接处理 Main.AgentInputTasksQueue（不再依赖 LivingLoop） ──
             drainInputQueue();
 
+            // ── 步骤 0.5: 桌面巡视（池空闲时定期扫描当前目录）──
+            List<CognitivePrepareUnit> fileUnits = fileWatcher.survey(preparePool.size());
+            for (CognitivePrepareUnit unit : fileUnits) {
+                preparePool.push(unit);
+                inputProcessedCount.incrementAndGet();
+            }
+
             // ── 步骤 1: tickAll + 衰减/清理 ──
             preparePool.tickAll();
             int pruned = preparePool.decayAndPrune();
+
+            // ── 步骤 1.5: 注意力分配（内源能量注入）──
+            attentionManager.tick(preparePool.getAllUnits());
 
             if (log.isDebugEnabled()) {
                 log.debug("[ActionLoop] ⏰ Tick #{} — 池大小: {}, 本轮清理: {}, 正在处理: {}",
                         tick, preparePool.size(), pruned, isProcessing.get());
             } else if (tick % 10 == 0) {
                 // 每 10 个 tick 打印一次概况
-                log.info("[ActionLoop] 📊 Tick #{} 概况 — 池: {}, 已处理Input: {}, Actions: {}, Tools: {}, Exp: {}, Feel: {}",
-                        tick, preparePool.size(), inputProcessedCount.get(), actionProcessedCount.get(),
+                log.info("[ActionLoop] 📊 Tick #{} 概况 — 池: {}, 已处理Input: {}, Tools: {}, Exp: {}, Feel: {}",
+                        tick, preparePool.size(), inputProcessedCount.get(),
                         toolExecutedCount.get(), experienceStoredCount.get(), feelingStimulatedCount.get());
             }
 
@@ -416,9 +451,7 @@ public class ActionLoop implements MosireAPI {
                         FeelingHypergraphManager.getInstance()
                 );
                 if (action != null) {
-                    log.info("[ActionLoop] 🎯 Tick #{} — 选中 CognitiveAction: CF={:.3f}, Scale={}, Accident={:.3f}, CW={:.3f}",
-                            tick, action.getCognitiveFamiliarity(), action.getScale(),
-                            action.getAccidentDegree(), action.getContinueWeight());
+                    log.info("[ActionLoop] 🎯 Tick #" + tick + " — 选中 CognitiveAction: CF=" + String.format("%.3f", action.getCognitiveFamiliarity()) + ", Scale=" + action.getScale() + ", Accident=" + String.format("%.3f", action.getAccidentDegree()) + ", CW=" + String.format("%.3f", action.getContinueWeight()));
                     actionExecutor.submit(() -> {
                         try {
                             processAction(action);
@@ -443,8 +476,8 @@ public class ActionLoop implements MosireAPI {
     }
 
     /**
-     * 从 Main.AgentInputTasksQueue 直接拉取输入并转换为 CognitivePrepareUnit。
-     * 这是 V4 取代 LivingLoop handleCognitiveCycle 的核心方法。
+     * 从 Main.AgentInputTasksQueue 直接拉取输入，委托 ChatMessageActionDeveloper
+     * 按 source 分桶聚合，满足条件后 flush 为 CognitivePrepareUnit 入池。
      */
     private void drainInputQueue() {
         List<DefaultAgentInputUnit> batch = new ArrayList<>();
@@ -452,75 +485,29 @@ public class ActionLoop implements MosireAPI {
 
         if (batch.isEmpty()) return;
 
-        int batchSize = batch.size();
-        log.info("[ActionLoop] 📥 从 AgentInputTasksQueue 捕获 {} 条感知输入", batchSize);
+        log.info("[ActionLoop] 📥 从 AgentInputTasksQueue 捕获 {} 条感知输入", batch.size());
 
-        // 按来源分组
-        Map<String, List<DefaultAgentInputUnit>> grouped = new LinkedHashMap<>();
-        for (DefaultAgentInputUnit input : batch) {
-            String source = extractSource(input);
-            grouped.computeIfAbsent(source, k -> new ArrayList<>()).add(input);
-        }
+        // 委托 ChatMessageActionDeveloper 做分桶聚合
+        List<CognitivePrepareUnit> readyUnits = chatDeveloper.accumulate(batch);
 
-        if (log.isDebugEnabled()) {
-            log.debug("[ActionLoop] 输入分组: {} 个来源", grouped.size());
-            for (Map.Entry<String, List<DefaultAgentInputUnit>> e : grouped.entrySet()) {
-                log.debug("[ActionLoop]   来源 '{}': {} 条消息", e.getKey(), e.getValue().size());
-            }
-        }
-
-        // 按来源聚合 → CognitivePrepareUnit（优先合并同源已有单元）
-        for (Map.Entry<String, List<DefaultAgentInputUnit>> entry : grouped.entrySet()) {
-            String source = entry.getKey();
-            List<DefaultAgentInputUnit> inputs = entry.getValue();
-
-            // 聚合文本
-            StringBuilder combinedText = new StringBuilder();
-            int atCount = 0;
-            for (DefaultAgentInputUnit input : inputs) {
-                String text = extractText(input);
-                if (text != null && !text.isBlank()) {
-                    if (combinedText.length() > 0) combinedText.append("\n---\n");
-                    combinedText.append(text);
-                }
-                // 检查 @提及
-                if (text != null && (text.contains("@") || text.contains("atTargets"))) {
-                    atCount++;
-                }
-            }
-
-            String finalText = combinedText.toString();
-            if (finalText.isBlank()) {
-                log.debug("[ActionLoop] 来源 '{}' 聚合后文本为空，跳过", source);
-                continue;
-            }
-
-            // 计算 SE = 基础值 × (1 + log(消息数)) × @提及加成
-            double baseSE = 0.5;
-            double volumeFactor = 1.0 + Math.log1p(inputs.size()) * 0.5;
-            double newSE = baseSE * volumeFactor;
-            if (atCount > 0) {
-                newSE *= 1.0 + Math.min(0.5, atCount * 0.1);
-            }
-
-            // ★ 同源跨 tick 合并：检查池中是否已有同源单元
+        // 已就绪的单元入池（优先合并同源已有单元）
+        for (CognitivePrepareUnit unit : readyUnits) {
+            String source = unit.getSourceIds().isEmpty() ? "unknown" : unit.getSourceIds().get(0);
             CognitivePrepareUnit existing = preparePool.findBySource(source);
             if (existing != null) {
-                // 合并到已有单元：追加文本、取较高 SE、重置 tick、清除旧 UE 触发重算
-                existing.appendText(finalText);
-                existing.setSE(Math.max(existing.getStimulateEnergy(), newSE));
+                existing.appendText(unit.getText());
+                existing.setSE(Math.max(existing.getStimulateEnergy(), unit.getStimulateEnergy()));
                 existing.resetTick();
                 existing.clearUE();
                 int count = inputProcessedCount.incrementAndGet();
-                log.info("[ActionLoop] 🔗 合并同源输入 (总计: {}): source={}, messages={}, mergedTextLen={}, SE={:.3f}→{:.3f}",
-                        count, source, inputs.size(), finalText.length(),
-                        existing.getStimulateEnergy(), newSE);
+                log.info("[ActionLoop] 🔗 合并同源输入 (总计: " + count + "): source=" + source
+                        + ", SE=" + String.format("%.3f", existing.getStimulateEnergy()));
             } else {
-                CognitivePrepareUnit cpu = CognitivePrepareUnit.create(finalText, List.of(source), newSE);
-                preparePool.push(cpu);
+                preparePool.push(unit);
                 int count = inputProcessedCount.incrementAndGet();
-                log.info("[ActionLoop] 📨 新准备单元入池 (总计: {}): source={}, messages={}, textLen={}, SE={:.3f}, atCount={}",
-                        count, source, inputs.size(), finalText.length(), newSE, atCount);
+                log.info("[ActionLoop] 📨 新准备单元入池 (总计: " + count + "): source=" + source
+                        + ", textLen=" + unit.getText().length()
+                        + ", SE=" + String.format("%.3f", unit.getStimulateEnergy()));
             }
         }
     }
@@ -540,39 +527,28 @@ public class ActionLoop implements MosireAPI {
      * 4. 存储经验、更新感觉、应用打分、处理新单元和 boosts
      */
     private void processAction(CognitiveAction action) {
-        int actionNum = actionProcessedCount.incrementAndGet();
-        log.info("[ActionLoop] 🔄 开始处理 CognitiveAction #{}: {}", actionNum, action.buildSummary());
+        log.info("[ActionLoop] 🔄 处理 CognitiveAction: summary=" + action.buildSummary()
+                + ", poolSize=" + preparePool.size()
+                + ", CF=" + String.format("%.3f", action.getCognitiveFamiliarity())
+                + ", Scale=" + action.getScale()
+                + ", Accident=" + String.format("%.3f", action.getAccidentDegree())
+                + ", CW=" + String.format("%.3f", action.getContinueWeight())
+                + ", UE=" + (action.getUEDimIds() != null ? action.getUEDimIds().size() : 0));
 
         try {
             // 1. 加载用户模板 + 感觉谐振分析，构建数据模型
             String userTemplate = LLManager.loadPromptTemplate("prompts/V4_ACTION_LOOP_PROMPT.ftl");
 
-            // ★ 感觉谐振分析：对 action text 做超图 BFS + 拐点检测，
-            //    找出违和感觉维度，注入 prompt 供 LLM 反思。
-            FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance = null;
-            String feelingResonanceBlock = null;
-            try {
-                FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
-                FeelingHypergraphManager hgm = FeelingHypergraphManager.getInstance();
-                if (fdm != null && hgm != null) {
-                    FeelingResonanceAnalyzer analyzer = new FeelingResonanceAnalyzer(fdm, hgm, null);
-                    resonance = analyzer.analyze(action.getActionText());
-                    if (resonance != null) {
-                        feelingResonanceBlock = resonance.llmPromptBlock;
-                        log.info("[ActionLoop] 🔍 感觉谐振分析完成: {} 组, 有违和={}",
-                                resonance.groups.size(), resonance.hasDissonance());
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("[ActionLoop] 感觉谐振分析失败，跳过: {}", e.getMessage());
-            }
+            // ★ 感觉谐振分析（委托 FeelingsManager）
+            FeelingResonanceAnalyzer.ResonanceAnalysisResult resonance = feelingsManager.analyzeResonance(action.getActionText());
+            String feelingResonanceBlock = resonance != null ? resonance.llmPromptBlock : null;
 
-            // ★ 互斥感觉维度检测：找出与 actionText 语义相斥的已有感觉维度
+            // ★ 互斥感觉维度检测（委托 FeelingsManager）
             List<Map<String, Object>> mutualExclusions = List.of();
             try {
                 double[] actionTextEmb = getEmbedding(action.getActionText());
                 if (actionTextEmb != null) {
-                    mutualExclusions = detectMutualExclusions(actionTextEmb, feelingsDB);
+                    mutualExclusions = feelingsManager.detectMutualExclusions(actionTextEmb);
                     if (!mutualExclusions.isEmpty()) {
                         log.info("[ActionLoop] ⚔️ 互斥感觉检测: {} 个互斥候选 → {}",
                                 mutualExclusions.size(),
@@ -616,6 +592,14 @@ public class ActionLoop implements MosireAPI {
                 return;
             }
 
+            // ★ 错误响应检测：LLM 调用失败时（API 错误/网络异常/超时等），
+            //    content 会以特定错误前缀开头。此时上下文缓存可能已损坏，必须清理。
+            if (result.isError()) {
+                log.error("[ActionLoop] ❌ LLM 返回错误响应 (耗时 {}ms): {}", llmElapsedMs, result.getContent());
+                LLManager.clearCache();
+                return;
+            }
+
             String llmContent = result.getContent() != null ? result.getContent() : "";
             log.info("[ActionLoop] 📡 LLM 响应 (耗时 {}ms): isToolCall={}, contentLen={}, toolCalls={}",
                     llmElapsedMs, result.isToolCall(), llmContent.length(),
@@ -626,37 +610,22 @@ public class ActionLoop implements MosireAPI {
                         llmContent.length() > 200 ? llmContent.substring(0, 200) + "..." : llmContent);
             }
 
-            // 3. 尝试从 content 解析 JSON 元数据
-            JsonNode meta = tryParseMeta(llmContent);
-            String thoughts;
+            // 3. 执行工具调用 — finish_action 放最后：先提取其数据，执行其他工具，最后结算
+            //    ★ 元数据主路径：thoughts/feelings/scoring/boosts 从 finish_action 工具参数提取
+            //    ★ fallback：仅当无原生 tool_calls 时，才解析 content JSON 作为备选
+            String thoughts = "";
             List<String> toolResults = new ArrayList<>();
-
-            if (meta != null) {
-                thoughts = meta.path("thoughts").asText("");
-                log.info("[ActionLoop] ✅ 成功解析 LLM JSON 元数据: thoughtsLen={}, hasToolCalls={}, hasScoring={}, hasBoosts={}, hasNewUnit={}",
-                        thoughts.length(),
-                        meta.has("tool_calls") && meta.get("tool_calls").isArray(),
-                        meta.has("experience_scoring") && meta.get("experience_scoring").isArray(),
-                        meta.has("continue_weight_boosts") && meta.get("continue_weight_boosts").isArray(),
-                        meta.has("new_prepare_unit") && !meta.get("new_prepare_unit").isNull());
-                if (log.isDebugEnabled()) {
-                    log.debug("[ActionLoop] thoughts: {}",
-                            thoughts.length() > 120 ? thoughts.substring(0, 120) + "..." : thoughts);
-                }
-            } else {
-                // content 不是 JSON，整体当 thoughts
-                thoughts = llmContent;
-                log.info("[ActionLoop] LLM content 非 JSON 格式，整体视为 thoughts ({} chars)", thoughts.length());
-            }
-
-            // 4. 执行工具调用 — finish_action 放最后：先提取其数据，执行其他工具，最后结算
             int toolCallCount = 0;
             boolean hasFinishAction = false;
             JsonNode finishActionArgs = null;
             String finishActionCallId = null;
-
-            // ★ action_feelings 解析结果：LLM 通过 finish_action 回报的本轮涉及感觉维度 ID 列表
             List<Integer> resolvedDimIds = null;
+
+            // 元数据暂存（从 finish_action 参数或 fallback JSON 提取）
+            JsonNode stimulatedFeelingsNode = null;
+            JsonNode experienceScoringNode = null;
+            JsonNode newPrepareUnitNode = null;
+            JsonNode boostNode = null;
 
             if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
                 // —— 分类：finish_action vs 其他工具 ——
@@ -669,10 +638,18 @@ public class ActionLoop implements MosireAPI {
                         String fnArgs = tc.path("function").path("arguments").asText();
                         try {
                             finishActionArgs = mapper.readTree(fnArgs);
-                            JsonNode scoring = finishActionArgs.path("experience_scoring");
-                            int scoringCount = scoring.isArray() ? scoring.size() : 0;
-                            log.info("[ActionLoop] 📋 检测到 finish_action ({} 条经验打分)，暂存数据，将在其他工具之后执行",
-                                    scoringCount);
+                            // ★ 从 finish_action 参数中提前提取元数据（主路径）
+                            thoughts = finishActionArgs.path("thoughts").asText("");
+                            stimulatedFeelingsNode = finishActionArgs.path("stimulated_feelings");
+                            experienceScoringNode = finishActionArgs.path("experience_scoring");
+                            newPrepareUnitNode = finishActionArgs.path("new_prepare_unit");
+                            boostNode = finishActionArgs.path("continue_weight_boosts");
+                            int scoringCount = experienceScoringNode.isArray() ? experienceScoringNode.size() : 0;
+                            log.info("[ActionLoop] 📋 检测到 finish_action — thoughts={}chars, scoring={}条, feelings={}, boosts={}, newUnit={}",
+                                    thoughts.length(), scoringCount,
+                                    stimulatedFeelingsNode.isArray() ? stimulatedFeelingsNode.size() : 0,
+                                    boostNode.isArray() ? boostNode.size() : 0,
+                                    !newPrepareUnitNode.isNull() && !newPrepareUnitNode.isMissingNode());
                         } catch (Exception e) {
                             log.warn("[ActionLoop] finish_action 参数解析失败: {}", e.getMessage());
                         }
@@ -714,8 +691,21 @@ public class ActionLoop implements MosireAPI {
                             log.info("[ActionLoop]   ✅ 工具 [{}] 完成 ({}ms): {}",
                                     fnName, toolElapsedMs,
                                     execResult.length() > 80 ? execResult.substring(0, 80) + "..." : execResult);
+                        } catch (com.fasterxml.jackson.core.JsonParseException e) {
+                            // JSON 解析失败：LLM 生成的 arguments 不是合法 JSON，把原始参数带上让它能自我纠正
+                            String rawArgsPreview = fnArgs.length() > 500
+                                    ? fnArgs.substring(0, 500) + "...[截断]"
+                                    : fnArgs;
+                            execResult = "[JSON解析失败] 你传入的 arguments 不是合法 JSON，请检查格式。\n"
+                                    + "错误位置: " + e.getOriginalMessage() + "\n"
+                                    + "你传入的内容:\n" + rawArgsPreview;
+                            toolResults.add("[" + fnName + "] JSON解析失败: " + e.getOriginalMessage());
+                            log.warn("[ActionLoop]   ⚠️ 工具 [{}] JSON 解析失败: {} | rawArgs={}",
+                                    fnName, e.getOriginalMessage(),
+                                    fnArgs.length() > 200 ? fnArgs.substring(0, 200) + "..." : fnArgs);
                         } catch (Exception e) {
-                            execResult = "ERROR: " + e.getMessage();
+                            // 工具执行异常：参数解析成功但执行过程中出错
+                            execResult = "[执行失败] 工具 " + fnName + " 执行时出错: " + e.getMessage();
                             toolResults.add("[" + fnName + "] 异常: " + execResult);
                             log.error("[ActionLoop]   ❌ 工具 [{}] 执行异常: {}", fnName, e.getMessage(), e);
                         }
@@ -748,61 +738,39 @@ public class ActionLoop implements MosireAPI {
                             // 将 finish_action 结果也压入上下文
                             LLManager.feedToolResult(UUID.randomUUID(),finishActionCallId, "finish_action", execResult);
 
-                            // ★ LLM 自主后续行动：如果提供了 next_action_text，注入准备池
-                            String nextActionText = finishActionArgs.path("next_action_text").asText();
-                            if (nextActionText != null && !nextActionText.isBlank()) {
-                                double inheritedSE = action.getSourceUnit().getStimulateEnergy() * 0.7;
-                                CognitivePrepareUnit nextUnit = CognitivePrepareUnit.create(
-                                        nextActionText,
-                                        action.getSourceUnit().getSourceIds(),
-                                        inheritedSE
-                                );
-                                preparePool.push(nextUnit);
-                                log.info("[ActionLoop] 🔄 LLM 通过 finish_action 创建后续准备单元: SE={:.3f}, text={}",
-                                        inheritedSE, nextActionText.length() > 80
-                                                ? nextActionText.substring(0, 80) + "..." : nextActionText);
-                            }
-
-                            // ★ 处理 action_feelings：LLM 回报的本轮涉及所有感觉维度
-                            JsonNode actionFeelings = finishActionArgs.path("action_feelings");
-                            if (actionFeelings.isArray() && actionFeelings.size() > 0) {
-                                resolvedDimIds = new ArrayList<>();
-                                int existingCount = 0;
-                                int newCount = 0;
-                                for (JsonNode af : actionFeelings) {
-                                    int dimId = af.path("dim_id").asInt(-1);
-                                    String concept = af.path("concept").asText("");
-                                    String embText = af.path("embedding_text").asText("");
-                                    String relation = af.path("relation").asText("");
-
-                                    if (dimId > 0) {
-                                        // 已有维度：验证存在 → incrementActivation
-                                        FeelingEntry existing = feelingsDB.getById(dimId);
-                                        if (existing != null) {
-                                            feelingsDB.incrementActivation(dimId);
-                                            resolvedDimIds.add(dimId);
-                                            existingCount++;
-                                        } else {
-                                            log.warn("[ActionLoop] action_feelings 引用不存在的 dim_id={}，跳过", dimId);
-                                        }
-                                    } else if (!concept.isBlank()) {
-                                        // 新维度：生成 embedding → insertFeeling (dedup) → 得到真实 ID
-                                        String textForEmb = !embText.isBlank() ? embText : concept;
-                                        double[] emb = getEmbedding(textForEmb);
-                                        if (emb != null) {
-                                            int realId = feelingsDB.insertFeeling(concept, emb);
-                                            if (realId > 0) {
-                                                resolvedDimIds.add(realId);
-                                                newCount++;
-                                                log.info("[ActionLoop]   🆕 action_feeling 新维度: '{}' → id={}, relation={}",
-                                                        concept, realId, relation);
-                                            }
-                                        }
-                                    }
+                            // ★ LLM 自主后续行动规划：从 next_actions 数组创建多个准备单元注入池中
+                            JsonNode nextActions = finishActionArgs.path("next_actions");
+                            if (nextActions.isArray()) {
+                                double baseSE = action.getSourceUnit().getStimulateEnergy() * 0.7;
+                                int createdCount = 0;
+                                for (JsonNode na : nextActions) {
+                                    String taskText = na.path("text").asText();
+                                    if (taskText == null || taskText.isBlank()) continue;
+                                    double priority = na.path("priority").asDouble(0.5);
+                                    priority = Math.max(0.1, Math.min(1.0, priority)); // clamp [0.1, 1.0]
+                                    double se = baseSE * priority;
+                                    CognitivePrepareUnit nextUnit = CognitivePrepareUnit.create(
+                                            taskText,
+                                            action.getSourceUnit().getSourceIds(),
+                                            se
+                                    );
+                                    // ★ 标记为内源任务：注意力系统会对其分配额外能量
+                                    nextUnit.setEndogenous(true);
+                                    preparePool.push(nextUnit);
+                                    createdCount++;
+                                    log.info("[ActionLoop] 🔄 后续任务 #{}: SE=" + String.format("%.3f", se)
+                                            + ", priority=" + String.format("%.2f", priority)
+                                            + ", text=" + (taskText.length() > 60
+                                                    ? taskText.substring(0, 60) + "..." : taskText));
                                 }
-                                log.info("[ActionLoop] 📋 action_feelings 处理完成: {} 已有 + {} 新增 = {} 个感觉维度",
-                                        existingCount, newCount, resolvedDimIds.size());
+                                if (createdCount > 0) {
+                                    log.info("[ActionLoop] 📋 LLM 通过 finish_action 规划了 " + createdCount + " 个后续任务");
+                                }
                             }
+
+                            // ★ 处理 action_feelings（委托 FeelingsManager）
+                            JsonNode actionFeelings = finishActionArgs.path("action_feelings");
+                            resolvedDimIds = feelingsManager.processActionFeelings(actionFeelings);
                         } catch (Exception e) {
                             String execResult = "ERROR: " + e.getMessage();
                             toolResults.add("[finish_action] 异常: " + execResult);
@@ -810,24 +778,84 @@ public class ActionLoop implements MosireAPI {
                         }
                     }
                 } else if (!hasFinishAction) {
-                    log.info("[ActionLoop] ⚠️ 本轮未调用 finish_action，认知周期无正式结算");
-                }
-            } else if (meta != null) {
-                // fallback：如果原生 tool_calls 为空，尝试从 JSON meta 的 tool_calls 字段执行
-                JsonNode metaToolCalls = meta.get("tool_calls");
-                if (metaToolCalls != null && metaToolCalls.isArray()) {
-                    int metaCallCount = metaToolCalls.size();
-                    log.info("[ActionLoop] 🔨 从 JSON meta 执行 {} 个工具调用 (fallback)", metaCallCount);
-                    for (JsonNode tc : metaToolCalls) {
-                        String r = executeToolCall(tc);
-                        toolResults.add(r);
+                    // LLM 做了工具调用但没调 finish_action（如在 get_chat_history 后需要
+                    // 下一轮继续处理），自动重建当前任务入池，避免任务丢失。
+                    if (toolCallCount > 0) {
+                        double continuedSE = action.getSourceUnit().getStimulateEnergy() * 0.9;
+                        CognitivePrepareUnit continued = CognitivePrepareUnit.create(
+                                action.getActionText(),
+                                action.getSourceUnit().getSourceIds(),
+                                continuedSE
+                        );
+                        continued.setEndogenous(true);
+                        preparePool.push(continued);
+                        log.info("[ActionLoop] 🔄 本轮未结算但有 " + toolCallCount + " 个工具调用，自动续命任务入池: SE="
+                                + String.format("%.3f", continuedSE)
+                                + ", text=" + (action.getActionText().length() > 60
+                                        ? action.getActionText().substring(0, 60) + "..." : action.getActionText()));
+                    } else {
+                        log.info("[ActionLoop] ⚠️ 本轮未调用 finish_action，认知周期无正式结算");
                     }
+                }
+            } else {
+                // ★ fallback：无原生 tool_calls 时，尝试从 content JSON 解析元数据和工具调用
+                JsonNode metaFallback = tryParseMeta(llmContent);
+                if (metaFallback != null) {
+                    // 从 fallback JSON 提取元数据
+                    if (thoughts.isEmpty()) {
+                        thoughts = metaFallback.path("thoughts").asText("");
+                    }
+                    if (stimulatedFeelingsNode == null || !stimulatedFeelingsNode.isArray()) {
+                        stimulatedFeelingsNode = metaFallback.get("stimulated_feelings");
+                    }
+                    if (experienceScoringNode == null || !experienceScoringNode.isArray()) {
+                        experienceScoringNode = metaFallback.get("experience_scoring");
+                    }
+                    if (newPrepareUnitNode == null || newPrepareUnitNode.isNull() || newPrepareUnitNode.isMissingNode()) {
+                        newPrepareUnitNode = metaFallback.get("new_prepare_unit");
+                    }
+                    if (boostNode == null || !boostNode.isArray()) {
+                        boostNode = metaFallback.get("continue_weight_boosts");
+                    }
+
+                    // 从 fallback JSON 执行工具调用
+                    JsonNode metaToolCalls = metaFallback.get("tool_calls");
+                    if (metaToolCalls != null && metaToolCalls.isArray()) {
+                        int metaCallCount = metaToolCalls.size();
+                        log.info("[ActionLoop] 🔨 从 JSON meta 执行 {} 个工具调用 (fallback)", metaCallCount);
+                        for (JsonNode tc : metaToolCalls) {
+                            String r = executeToolCall(tc);
+                            toolResults.add(r);
+                        }
+                    }
+                    log.info("[ActionLoop] ✅ fallback JSON 元数据解析完成: thoughts={}chars", thoughts.length());
+                } else if (thoughts.isEmpty()) {
+                    // 连 fallback JSON 也没有，content 整体当 thoughts
+                    thoughts = llmContent;
+                    log.info("[ActionLoop] LLM content 非 JSON 格式，整体视为 thoughts ({} chars)", thoughts.length());
                 }
             }
 
-            // 5. 处理刺激的感觉维度
-            List<Integer> stimulatedDimIds = meta != null
-                    ? processStimulatedFeelings(meta)
+            // ★ 工具结果聚合：将本轮所有工具执行结果拼接为一个准备单元注入池中，
+            //    供后续认知周期参考，形成"行动→结果→反思"的闭环。
+            if (!toolResults.isEmpty()) {
+                StringBuilder aggregated = new StringBuilder();
+                aggregated.append("【本轮工具执行汇总】\n");
+                for (String tr : toolResults) {
+                    aggregated.append(tr).append("\n");
+                }
+                CognitivePrepareUnit toolSummary = CognitivePrepareUnit.create(
+                        aggregated.toString(),
+                        action.getSourceUnit().getSourceIds(),
+                        action.getSourceUnit().getStimulateEnergy() * 0.3
+                );
+                preparePool.push(toolSummary);
+                log.info("[ActionLoop] 📦 工具执行汇总已注入准备池: " + toolResults.size() + " 条结果, SE=" + String.format("%.3f", action.getSourceUnit().getStimulateEnergy() * 0.3));
+            }
+
+            // 5. 处理刺激的感觉维度（委托 FeelingsManager）
+            List<Integer> stimulatedDimIds = stimulatedFeelingsNode != null
+                    ? feelingsManager.processStimulatedFeelings(stimulatedFeelingsNode)
                     : new ArrayList<>();
 
             // 6. 存储经验
@@ -843,42 +871,31 @@ public class ActionLoop implements MosireAPI {
                 expDimIds.addAll(action.getUEDimIds());
                 log.debug("[ActionLoop] 使用 stimulated+UE dims ({}) 存储经验 (fallback)", expDimIds.size());
             }
-            int expId = storeExperience(action, thoughts, expDimIds, toolResults,
-                    meta != null && !meta.path("new_prepare_unit").isNull()
-                            ? meta.path("new_prepare_unit").path("text").asText() : null);
+            String newPrepText = (newPrepareUnitNode != null && !newPrepareUnitNode.isNull() && !newPrepareUnitNode.isMissingNode())
+                    ? newPrepareUnitNode.path("text").asText() : null;
+            int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText);
 
-            // 7. 应用经验打分
-            if (meta != null) {
-                applyExperienceScoring(meta);
+            // 7. 应用经验打分（委托 FeelingsManager）
+            if (experienceScoringNode != null) {
+                feelingsManager.applyExperienceScoring(experienceScoringNode);
             }
 
             // 8. 处理新的准备单元
-            if (meta != null) {
-                processNewPrepareUnit(meta, action);
+            if (newPrepareUnitNode != null && !newPrepareUnitNode.isNull() && !newPrepareUnitNode.isMissingNode()) {
+                processNewPrepareUnit(newPrepareUnitNode, action);
             }
 
             // 9. 应用 ContinueWeight boosts
-            if (meta != null) {
-                applyBoosts(meta);
+            if (boostNode != null) {
+                applyBoosts(boostNode);
             }
 
-            // ★ 违和感积累：将有违和的谐振分析结果持久化到好奇心列表
-            if (resonance != null && resonance.hasDissonance()) {
-                try {
-                    CuriosityListManager clm = CuriosityListManager.getInstance();
-                    if (clm != null) {
-                        clm.accumulateFromResonance(resonance, action.getActionText());
-                        log.info("[ActionLoop] 📝 违和感已积累到好奇心列表");
-                    }
-                } catch (Exception e) {
-                    log.warn("[ActionLoop] 违和感积累失败: {}", e.getMessage());
-                }
-            }
+            // ★ 违和感积累（委托 FeelingsManager）
+            feelingsManager.accumulateDissonance(resonance, action.getActionText());
 
             // ── 通知控制台监听器 ──
             if (!consoleListeners.isEmpty()) {
                 ActionNotification notification = new ActionNotification(
-                        actionNum,
                         action.buildSummary(),
                         thoughts != null ? thoughts : "",
                         toolCallCount,
@@ -897,11 +914,11 @@ public class ActionLoop implements MosireAPI {
                 }
             }
 
-            log.info("[ActionLoop] ✅ CognitiveAction #{} 处理完成 — 工具执行:{}/{}, 经验ID:{}, 刺激维度:{}, 池大小:{}",
-                    actionNum, toolResults.size(), toolCallCount, expId, stimulatedDimIds.size(), preparePool.size());
+            log.info("[ActionLoop] ✅ CognitiveAction 处理完成 — 工具执行:{}/{}, 经验ID:{}, 刺激维度:{}, 池大小:{}",
+                    toolResults.size(), toolCallCount, expId, stimulatedDimIds.size(), preparePool.size());
 
         } catch (Exception e) {
-            log.error("[ActionLoop] ❌ processAction #{} 异常", actionNum, e);
+            log.error("[ActionLoop] ❌ processAction 异常", e);
         }
     }
 
@@ -939,6 +956,19 @@ public class ActionLoop implements MosireAPI {
         data.put("ue_concepts", action.getUEConcepts());
         data.put("ue_dim_ids", action.getUEDimIds());
         data.put("now_time", Utils.getNowPrecise());
+
+        // ★ 选择上下文：告诉 LLM 为什么这个单元被选中，各项因子的贡献
+        CognitivePrepareUnit src = action.getSourceUnit();
+        data.put("selection_se", src.getStimulateEnergy());
+        data.put("selection_attention", src.getAttentionEnergy());
+        data.put("selection_ue", src.getUnderstandEnergy());
+        data.put("selection_tick", src.getTick());
+        data.put("selection_total_energy", src.getStimulateEnergy() + src.getAttentionEnergy());
+        data.put("selection_is_endogenous", src.isEndogenous());
+
+        // 生成可读的选择原因
+        String selectionReason = buildSelectionReason(src, action);
+        data.put("selection_reason", selectionReason);
 
         // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {
@@ -979,47 +1009,50 @@ public class ActionLoop implements MosireAPI {
     }
 
     /**
-     * 检测与当前 action text 语义互斥的已有感觉维度。
-     *
-     * 算法：
-     * 1. 从 FeelingsDB 获取所有感觉维度
-     * 2. 计算每个维度 embedding 与 actionTextEmb 的余弦相似度
-     * 3. 取相似度最低（< THRESHOLD）且激活次数 >= MIN_ACTIVATION 的维度
-     * 4. 返回 top-N 作为"互斥候选"——这些是系统中已建立的概念，
-     *    但与当前输入高度不匹配，可能代表矛盾或对立的认知方向
-     *
-     * @param actionTextEmb action 文本的 embedding
-     * @param db            感觉维度数据库
-     * @return 互斥候选列表，每项含 dim_id, concept, similarity, activation_count
+     * 为 LLM 生成可读的"为什么这个单元被选中"解释。
      */
-    private List<Map<String, Object>> detectMutualExclusions(double[] actionTextEmb, FeelingsDB db) {
-        List<FeelingEntry> allFeelings = db.getAll();
-        if (allFeelings.isEmpty()) return List.of();
+    private String buildSelectionReason(CognitivePrepareUnit src, CognitiveAction action) {
+        double se = src.getStimulateEnergy();
+        double attn = src.getAttentionEnergy();
+        double ue = src.getUnderstandEnergy();
+        int tick = src.getTick();
+        double cw = src.getContinueWeight();
+        boolean endogenous = src.isEndogenous();
 
-        // 计算每个感觉维度与 action 文本的相似度，按升序排列
-        List<FeelingEntry> sorted = new ArrayList<>(allFeelings);
-        sorted.sort((a, b) -> Double.compare(
-                CognitiveDB.cosineSimilarity(actionTextEmb, a.getEmbedding()),
-                CognitiveDB.cosineSimilarity(actionTextEmb, b.getEmbedding())));
+        StringBuilder reason = new StringBuilder();
 
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (FeelingEntry f : sorted) {
-            double sim = CognitiveDB.cosineSimilarity(actionTextEmb, f.getEmbedding());
-            // 相似度超过阈值 → 不再互斥，停止
-            if (sim >= MUTUAL_EXCLUSION_SIMILARITY_THRESHOLD) break;
-            // 只纳入"已建立"的概念（激活次数足够）
-            if (f.getActivationCount() < MUTUAL_EXCLUSION_MIN_ACTIVATION) continue;
-
-            Map<String, Object> entry = new HashMap<>();
-            entry.put("dim_id", f.getId());
-            entry.put("concept", f.getConcept());
-            entry.put("similarity", Math.round(sim * 1000.0) / 1000.0); // 保留3位
-            entry.put("activation_count", f.getActivationCount());
-            result.add(entry);
-
-            if (result.size() >= MAX_MUTUAL_EXCLUSIONS) break;
+        // 主导因子判断
+        if (endogenous && attn > se) {
+            reason.append("这是一个你之前规划的内源任务，经过注意力系统 ");
+            reason.append(String.format("%.0f", attn / (se + attn) * 100));
+            reason.append("% 的能量注入后被选中。");
+        } else if (se > 1.0) {
+            reason.append("外部刺激强烈（SE=" + String.format("%.2f", se) + "），来自外界的输入驱动了本轮选择。");
+        } else if (tick > 10) {
+            reason.append("这个单元已在池中等待 " + tick + " 轮未被处理，累积的紧迫度使其被选中。");
+        } else if (ue > 3.0) {
+            reason.append("该任务与你的感觉维度网络高度匹配（UE=" + String.format("%.1f", ue) + "），说明你对这个领域有丰富的认知基础。");
+        } else if (cw > 1.0) {
+            reason.append("你之前通过 boost 手动提升了这个单元的权重，使其优先被选中。");
+        } else if (attn > 0.3) {
+            reason.append("注意力系统在多个 tick 中持续关注此单元，累积了足够的能量。");
+        } else {
+            reason.append("综合多项选择因子后，此单元得分最高。");
         }
-        return result;
+
+        // 补充认知评价
+        double cf = action.getCognitiveFamiliarity();
+        double accident = action.getAccidentDegree();
+        if (cf > 3.0) {
+            reason.append(" 你对这个任务非常熟悉（CF=" + String.format("%.1f", cf) + "），可以依赖先验经验快速处理。");
+        } else if (cf < 0.5) {
+            reason.append(" 这是一个相对新颖的任务（CF=" + String.format("%.2f", cf) + "），需要开放心态探索。");
+        }
+        if (accident > 0.3) {
+            reason.append(" 意外度较高（" + String.format("%.2f", accident) + "），实际输入与预期有偏差，需要重新评估。");
+        }
+
+        return reason.toString();
     }
 
     private ArrayNode buildToolsArray() {
@@ -1146,92 +1179,17 @@ public class ActionLoop implements MosireAPI {
             log.info("[ActionLoop] 工具 [{}] 执行完毕 (fallback): {}", functionName,
                     result != null && result.length() > 80 ? result.substring(0, 80) + "..." : result);
             return "[" + functionName + "]: " + result;
+        } catch (com.fasterxml.jackson.core.JsonParseException e) {
+            String rawArgsPreview = argumentsStr.length() > 500
+                    ? argumentsStr.substring(0, 500) + "...[截断]"
+                    : argumentsStr;
+            log.warn("[ActionLoop] 工具 [{}] JSON 解析失败 (fallback): {}", functionName, e.getOriginalMessage());
+            return "[JSON解析失败] 你传入的 arguments 不是合法 JSON，请检查格式。\n"
+                    + "错误位置: " + e.getOriginalMessage() + "\n"
+                    + "你传入的内容:\n" + rawArgsPreview;
         } catch (Exception e) {
             log.error("[ActionLoop] 工具 [{}] 执行异常 (fallback)", functionName, e);
-            return "[" + functionName + "] 异常: " + e.getMessage();
-        }
-    }
-
-    // ==========================================
-    // Step 6: 处理刺激的感觉维度
-    // ==========================================
-
-    /**
-     * 处理 LLM 返回的 stimulated_feelings。
-     * 对每个感觉维度：先 dedup（embedding），再插入或增加激活次数。
-     *
-     * @return 所有关联的感觉维度 ID 列表
-     */
-    private List<Integer> processStimulatedFeelings(JsonNode responseJson) {
-        List<Integer> dimIds = new ArrayList<>();
-        JsonNode feelings = responseJson.get("stimulated_feelings");
-        if (feelings == null || !feelings.isArray()) {
-            log.debug("[ActionLoop] 无 stimulated_feelings");
-            return dimIds;
-        }
-
-        int count = feelings.size();
-        log.info("[ActionLoop] 🎯 处理 {} 个刺激感觉维度", count);
-
-        for (JsonNode f : feelings) {
-            String concept = f.path("concept").asText();
-            String embText = f.path("embedding_text").asText(concept);
-
-            if (concept.isBlank()) continue;
-
-            double[] emb = getEmbedding(embText);
-            int id = feelingsDB.insertFeeling(concept, emb);
-            if (id > 0) {
-                feelingsDB.incrementActivation(id);
-                dimIds.add(id);
-                feelingStimulatedCount.incrementAndGet();
-                log.debug("[ActionLoop]   刺激感觉: '{}' id={}", concept, id);
-            }
-        }
-
-        if (!dimIds.isEmpty()) {
-            log.info("[ActionLoop] ✅ 本轮刺激 {} 个感觉维度 (总计: {})",
-                    dimIds.size(), feelingStimulatedCount.get());
-        }
-        return dimIds;
-    }
-
-    // ==========================================
-    // Step 8: 应用经验打分
-    // ==========================================
-
-    private void applyExperienceScoring(JsonNode responseJson) {
-        JsonNode scorings = responseJson.get("experience_scoring");
-        if (scorings == null || !scorings.isArray()) {
-            log.debug("[ActionLoop] 无 experience_scoring");
-            return;
-        }
-
-        int count = scorings.size();
-        log.info("[ActionLoop] 📝 应用 {} 条经验打分", count);
-
-        for (JsonNode s : scorings) {
-            int expId = s.path("experience_id").asInt(-1);
-            double score = s.path("score").asDouble(0.0);
-
-            if (expId < 0) continue;
-
-            // 限制 LLM 只用 1/0/-1
-            double clamped = score > 0 ? 1.0 : (score < 0 ? -1.0 : 0.0);
-
-            // 更新经验 HelpfulDegree
-            experiencesDB.updateHelpfulDegree(expId, clamped);
-
-            // 传播准确度到关联的感觉维度
-            ExperiencesDB.ExperienceEntry exp = experiencesDB.getById(expId);
-            if (exp != null && !exp.feelingDimIds.isEmpty()) {
-                double delta = clamped / exp.feelingDimIds.size();
-                for (int dimId : exp.feelingDimIds) {
-                    feelingsDB.propagateAccuracy(dimId, delta);
-                }
-                log.info("[ActionLoop]   经验 id={} 打分={}, 准确度传播到 {} 个感觉维度 (delta={:.4f})",
-                        expId, clamped, exp.feelingDimIds.size(), delta);
-            }
+            return "[" + functionName + "] 执行失败: " + e.getMessage();
         }
     }
 
@@ -1239,9 +1197,8 @@ public class ActionLoop implements MosireAPI {
     // Step 9: 处理新的准备单元
     // ==========================================
 
-    private void processNewPrepareUnit(JsonNode responseJson, CognitiveAction currentAction) {
-        JsonNode newUnit = responseJson.get("new_prepare_unit");
-        if (newUnit == null || newUnit.isNull()) {
+    private void processNewPrepareUnit(JsonNode newUnit, CognitiveAction currentAction) {
+        if (newUnit == null || newUnit.isNull() || newUnit.isMissingNode()) {
             log.debug("[ActionLoop] 无 new_prepare_unit");
             return;
         }
@@ -1266,16 +1223,14 @@ public class ActionLoop implements MosireAPI {
         newCPU.setSE(currentAction.getSourceUnit().getStimulateEnergy() * 0.7);
 
         preparePool.push(newCPU);
-        log.info("[ActionLoop] 📝 LLM 创建新准备单元: {} (继承SE={:.3f})",
-                newCPU, newCPU.getStimulateEnergy());
+        log.info("[ActionLoop] 📝 LLM 创建新准备单元: " + newCPU + " (继承SE=" + String.format("%.3f", newCPU.getStimulateEnergy()) + ")");
     }
 
     // ==========================================
     // Step 10: 应用 ContinueWeight boosts
     // ==========================================
 
-    private void applyBoosts(JsonNode responseJson) {
-        JsonNode boosts = responseJson.get("continue_weight_boosts");
+    private void applyBoosts(JsonNode boosts) {
         if (boosts == null || !boosts.isArray()) {
             log.debug("[ActionLoop] 无 continue_weight_boosts");
             return;
@@ -1290,14 +1245,22 @@ public class ActionLoop implements MosireAPI {
 
             if (uuidStr.isBlank()) continue;
 
+            // ★ 尝试精确匹配 → 前缀匹配（LLM 可能从池摘要中复制了截断的 UUID）
+            boolean ok = false;
             try {
                 UUID uuid = UUID.fromString(uuidStr);
-                boolean ok = preparePool.boostContinueWeight(uuid, boost);
-                if (ok) {
-                    log.info("[ActionLoop]   ✅ boost {} CW +{}", uuidStr.substring(0, 8), boost);
-                }
+                ok = preparePool.boostContinueWeight(uuid, boost);
             } catch (IllegalArgumentException e) {
-                log.warn("[ActionLoop]   无效的 UUID: {}", uuidStr);
+                // UUID 不完整（如 LLM 复制了截断的 8 位前缀），尝试前缀匹配
+                ok = preparePool.boostContinueWeightByPrefix(uuidStr, boost);
+            }
+
+            if (ok) {
+                log.info("[ActionLoop]   ✅ boost {} CW +{}",
+                        uuidStr.length() > 16 ? uuidStr.substring(0, 8) + "..." : uuidStr, boost);
+            } else {
+                // 单元可能已被选中或过期，属正常时序，无需 warn
+                log.debug("[ActionLoop]   boost 跳过（单元已不在池中）: {}", uuidStr);
             }
         }
     }
@@ -1340,7 +1303,6 @@ public class ActionLoop implements MosireAPI {
         Map<String, Integer> stats = new LinkedHashMap<>();
         stats.put("ticks", tickCount.get());
         stats.put("inputsProcessed", inputProcessedCount.get());
-        stats.put("actionsProcessed", actionProcessedCount.get());
         stats.put("toolsExecuted", toolExecutedCount.get());
         stats.put("experiencesStored", experienceStoredCount.get());
         stats.put("feelingsStimulated", feelingStimulatedCount.get());

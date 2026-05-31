@@ -46,6 +46,20 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     // 最近聊天历史（由 adapter 在创建 Input 时注入，ActionLoop 无需关心）
     private String recentHistory = "";
 
+    // ★ 文件附件信息（NapcatAdapter 收到文件消息时填充）
+    @Getter
+    private List<FileAttachment> fileAttachments = Collections.emptyList();
+
+    /** 文件附件记录 */
+    public record FileAttachment(
+            String fileName,
+            String fileId,       // Napcat file_id，用于调用 /get_file API
+            long fileSize,
+            int busid,           // 群文件业务 ID，调用 /get_group_file_url 时需要
+            String virtualLink,  // 虚拟链接，如 napcat://group/12345/file/abc123/报告.pdf
+            String realUrl       // 事件中直接携带的真实 URL（如果有）
+    ) {}
+
     // ========== 兼容旧构造器（DiscordAdapter 等未适配的调用方继续使用） ==========
 
     public ChatMessageInput(String source, String source_name, String role, String role_name, String content) {
@@ -89,6 +103,11 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     /** 由 adapter 在创建 Input 时注入最近聊天历史 */
     public void setRecentHistory(String history) {
         this.recentHistory = history != null ? history : "";
+    }
+
+    /** 由 adapter 在创建 Input 时注入文件附件列表 */
+    public void setFileAttachments(List<FileAttachment> attachments) {
+        this.fileAttachments = attachments != null ? List.copyOf(attachments) : Collections.emptyList();
     }
 
     @Override
@@ -138,6 +157,25 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
         }
 
         ret.append(" 发送了: {\n").append(this.content).append("\n};");
+
+        // ★ 文件附件下载链接
+        if (!fileAttachments.isEmpty()) {
+            ret.append("\n📎 附带文件 (").append(fileAttachments.size()).append("个):");
+            for (FileAttachment fa : fileAttachments) {
+                String sizeStr = fa.fileSize > 1_000_000
+                        ? String.format("%.1fMB", fa.fileSize / 1_000_000.0)
+                        : fa.fileSize > 1_000 ? String.format("%.1fKB", fa.fileSize / 1_000.0)
+                        : fa.fileSize + "B";
+                ret.append("\n  - ").append(fa.fileName).append(" (").append(sizeStr).append(")");
+                if (fa.realUrl != null && !fa.realUrl.isBlank()) {
+                    ret.append("\n    🔗 真实链接: ").append(fa.realUrl);
+                } else {
+                    ret.append("\n    📥 下载链接: ").append(fa.virtualLink);
+                }
+            }
+            ret.append("\n💡 你可以用 download_chat_file 工具下载这些文件。");
+        }
+
         return ret.toString();
     }
 

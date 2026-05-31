@@ -71,6 +71,51 @@ public class CoreConfig {
     public static final double DEDUP_THRESHOLD;
 
     // ==========================================
+    // 文件输入监控参数（FileInputWatcher）
+    // ==========================================
+
+    /** 桌面巡视间隔（tick 数），池空闲时每隔这么多 tick 注入一次目录快照 */
+    public static final int FILE_SURVEY_INTERVAL_TICKS;
+
+    /** 空闲判断阈值：池大小低于此值才触发桌面巡视 */
+    public static final int FILE_IDLE_POOL_THRESHOLD;
+
+    /** 桌面巡视产生单元的基础 SE */
+    public static final double FILE_INPUT_BASE_SE;
+
+    // ==========================================
+    // 注意力机制参数（AttentionManager）
+    // ==========================================
+
+    /** 注意力资源池上限 */
+    public static final double ATTENTION_POOL_MAX;
+
+    /** 每 tick 注意力资源恢复量 */
+    public static final double ATTENTION_REGEN_PER_TICK;
+
+    /** 每 tick 最多关注多少个单元 */
+    public static final int ATTENTION_MAX_ATTEND_UNITS;
+
+    /** 每 tick 注意力衰减系数（未被持续关注的单元注意力消退速度） */
+    public static final double ATTENTION_DECAY_PER_TICK;
+
+    // ==========================================
+    // Chat消息聚合参数（ChatMessageActionDeveloper）
+    // ==========================================
+
+    /** 每个 source 桶最少攒几条消息才 flush */
+    public static final int CHAT_BATCH_MIN_MESSAGES;
+
+    /** 每个 source 桶最多等待多少毫秒后强制 flush */
+    public static final long CHAT_BATCH_MAX_WAIT_MS;
+
+    /** flush 后同一 source 的冷却时间（毫秒） */
+    public static final long CHAT_BATCH_COOLDOWN_MS;
+
+    /** 私聊消息的最低 flush 消息数（低于群聊阈值，更快响应） */
+    public static final int CHAT_BATCH_PRIVATE_MIN_MESSAGES;
+
+    // ==========================================
     // 调度参数
     // ==========================================
 
@@ -118,6 +163,23 @@ public class CoreConfig {
         // —— 去重 ——
         DEDUP_THRESHOLD           = getDouble("v4.core.dedupThreshold", 0.85);
 
+        // —— 桌面巡视 ——
+        FILE_SURVEY_INTERVAL_TICKS = getInt("v4.file.surveyIntervalTicks", 8);
+        FILE_IDLE_POOL_THRESHOLD   = getInt("v4.file.idlePoolThreshold", 2);
+        FILE_INPUT_BASE_SE         = getDouble("v4.file.inputBaseSE", 0.6);
+
+        // —— 注意力机制 ——
+        ATTENTION_POOL_MAX           = getDouble("v4.attention.poolMax", 100.0);
+        ATTENTION_REGEN_PER_TICK     = getDouble("v4.attention.regenPerTick", 5.0);
+        ATTENTION_MAX_ATTEND_UNITS   = getInt("v4.attention.maxAttendUnits", 5);
+        ATTENTION_DECAY_PER_TICK     = getDouble("v4.attention.decayPerTick", 0.05);
+
+        // —— Chat 消息聚合 ——
+        CHAT_BATCH_MIN_MESSAGES        = getInt("v4.chat.batchMinMessages", 3);
+        CHAT_BATCH_MAX_WAIT_MS         = getLong("v4.chat.batchMaxWaitMs", 5000);
+        CHAT_BATCH_COOLDOWN_MS         = getLong("v4.chat.batchCooldownMs", 3000);
+        CHAT_BATCH_PRIVATE_MIN_MESSAGES = getInt("v4.chat.batchPrivateMinMessages", 1);
+
         // —— 调度 ——
         COGNITIVE_TICK_MS         = getInt("v4.core.cognitiveTickMs", 2000);
         SINGLE_BOOST_CAP           = getDouble("v4.core.singleBoostCap", 1.0);
@@ -137,6 +199,18 @@ public class CoreConfig {
 
     private static String getString(String key, String defaultValue) {
         return props.getProperty(key, defaultValue);
+    }
+
+    private static long getLong(String key, long defaultValue) {
+        String val = props.getProperty(key);
+        if (val != null && !val.isBlank()) {
+            try {
+                return Long.parseLong(val.trim());
+            } catch (NumberFormatException e) {
+                log.warn("[CoreConfig] {} = {} 不是合法整数，使用默认值 {}", key, val, defaultValue);
+            }
+        }
+        return defaultValue;
     }
 
     private static int getInt(String key, int defaultValue) {

@@ -137,7 +137,7 @@ public class CognitivePreparePool {
             pool.remove(best);
         }
 
-        log.info("[Pool] 选中单元: {} (score={:.3f})", best, bestScore);
+        log.info("[Pool] 选中单元: " + best + " (score=" + String.format("%.3f", bestScore) + ")");
 
         // 转换为 CognitiveAction
         CognitiveAction action = CognitiveAction.from(best);
@@ -158,9 +158,10 @@ public class CognitivePreparePool {
         }
         // ActionPressure 暂为 0（TODO）
 
-        log.info("[Pool] 转换为 CognitiveAction — CF={:.3f}, Scale={}, Accident={:.3f}, Predicts={}",
-                action.getCognitiveFamiliarity(), action.getScale(),
-                action.getAccidentDegree(), action.getActionPredicts().size());
+        log.info("[Pool] 转换为 CognitiveAction — CF=" + String.format("%.3f", action.getCognitiveFamiliarity())
+                + ", Scale=" + action.getScale()
+                + ", Accident=" + String.format("%.3f", action.getAccidentDegree())
+                + ", Predicts=" + action.getActionPredicts().size());
 
         return action;
     }
@@ -289,12 +290,11 @@ public class CognitivePreparePool {
                     .noveltyWeight(1.0)
                     .embedding(embedder.apply(unit.getText()))
                     .build());
-            log.debug("[Pool] UE 冷启动兜底: SE={:.3f} → UE=0.6 (合成节点)", unit.getStimulateEnergy());
+            log.debug("[Pool] UE 冷启动兜底: SE=" + String.format("%.3f", unit.getStimulateEnergy()) + " → UE=0.6 (合成节点)");
         }
 
         unit.setUE(totalUE, allUEUnits);
-        log.debug("[Pool] UE 计算完成: {} UE={:.3f}, UEUnits={}",
-                unit, totalUE, allUEUnits.size());
+        log.debug("[Pool] UE 计算完成: " + unit + " UE=" + String.format("%.3f", totalUE) + ", UEUnits=" + allUEUnits.size());
     }
 
     /** 获取 top-N UEUnit 的 dimId 列表 */
@@ -307,6 +307,30 @@ public class CognitivePreparePool {
                 .map(UEUnit::getDimId)
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * 通过 UUID 前缀匹配提升 ContinueWeight。
+     * LLM 可能从池摘要中复制了截断的 UUID（如前 8 位），需要前缀匹配兜底。
+     */
+    public boolean boostContinueWeightByPrefix(String prefix, double boost) {
+        if (prefix == null || prefix.isBlank()) return false;
+        String lower = prefix.toLowerCase();
+        double cap = Math.min(CoreConfig.SINGLE_BOOST_CAP, CoreConfig.MAX_CONTINUE_WEIGHT);
+        double effectiveBoost = Math.min(boost, cap);
+
+        synchronized (poolLock) {
+            for (CognitivePrepareUnit unit : pool) {
+                String fullUuid = unit.getUuid().toString().toLowerCase();
+                if (fullUuid.startsWith(lower)) {
+                    unit.boostContinueWeight(effectiveBoost, CoreConfig.MAX_CONTINUE_WEIGHT);
+                    log.info("[Pool] LLM boost (prefix) unit {} ContinueWeight +{} = {}",
+                            fullUuid.substring(0, 8), effectiveBoost, unit.getContinueWeight());
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** 提升指定单元的 ContinueWeight */
@@ -324,7 +348,7 @@ public class CognitivePreparePool {
                 }
             }
         }
-        log.warn("[Pool] boostContinueWeight: 未找到 UUID={}", uuid.toString().substring(0, 8));
+        log.debug("[Pool] boostContinueWeight: 单元已被选中或过期 UUID={}", uuid.toString().substring(0, 8));
         return false;
     }
 
@@ -393,10 +417,14 @@ public class CognitivePreparePool {
             } else {
                 displayText = text;
             }
-            sb.append(String.format("  - [%s] '%s' SE=%.2f UE=%.2f tick=%d cw=%.2f\n",
-                    u.getUuid().toString().substring(0, 8),
+            String tag = u.isEndogenous() ? "[内源]" : "";
+            String uuidStr = u.getUuid().toString();
+            sb.append(String.format("  - %s[%s] '%s' SE=%.2f attn=%.2f UE=%.2f tick=%d cw=%.2f\n",
+                    tag,
+                    uuidStr,
                     displayText,
-                    u.getStimulateEnergy(), u.getUnderstandEnergy(),
+                    u.getStimulateEnergy(), u.getAttentionEnergy(),
+                    u.getUnderstandEnergy(),
                     u.getTick(), u.getContinueWeight()));
         }
         return sb.toString();

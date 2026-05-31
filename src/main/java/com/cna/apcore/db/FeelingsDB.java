@@ -214,8 +214,8 @@ public class FeelingsDB {
             pstmt.setDouble(1, newAccuracy);
             pstmt.setInt(2, id);
             pstmt.executeUpdate();
-            log.debug("[FeelingsDB] id={} accuracy: {:.3f} -> {:.3f} (delta={:+.3f})",
-                    id, entry.getAccuracy(), newAccuracy, delta);
+            log.debug("[FeelingsDB] id=" + id + " accuracy: " + String.format("%.3f", entry.getAccuracy())
+                    + " -> " + String.format("%.3f", newAccuracy) + " (delta=" + String.format("%+.3f", delta) + ")");
         } catch (SQLException e) {
             log.error("[FeelingsDB] 传播准确度失败 id={}", id, e);
         }

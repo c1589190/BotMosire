@@ -146,7 +146,8 @@ public class NapcatAdapter extends WebSocketClient {
             boolean hasImage,
             int imageCount,
             int faceCount,
-            String richSummary
+            String richSummary,
+            java.util.List<ChatMessageInput.FileAttachment> fileAttachments
     ) {}
 
     /** bot 自身 QQ 号，启动时通过 get_login_info 获取 */
@@ -202,11 +203,11 @@ public class NapcatAdapter extends WebSocketClient {
      */
     private ParsedMessage parseMessageContent(JsonNode messageNode, boolean shouldParseVision, long selfId) {
         if (messageNode == null || messageNode.isMissingNode())
-            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "");
+            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "", java.util.List.of());
         if (messageNode.isTextual())
-            return new ParsedMessage(messageNode.asText().trim(), 0, false, java.util.List.of(), false, false, 0, 0, "");
+            return new ParsedMessage(messageNode.asText().trim(), 0, false, java.util.List.of(), false, false, 0, 0, "", java.util.List.of());
         if (!messageNode.isArray())
-            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "");
+            return new ParsedMessage("", 0, false, java.util.List.of(), false, false, 0, 0, "", java.util.List.of());
 
         StringBuilder parsedContent = new StringBuilder();
         long quotedId = 0;
@@ -215,6 +216,7 @@ public class NapcatAdapter extends WebSocketClient {
         boolean hasForward = false;
         int imageCount = 0;
         int faceCount = 0;
+        java.util.List<ChatMessageInput.FileAttachment> fileAttachments = new java.util.ArrayList<>();
 
         for (JsonNode segment : messageNode) {
             String type = segment.path("type").asText("");
@@ -338,9 +340,32 @@ public class NapcatAdapter extends WebSocketClient {
                 // ── 文件 ──
                 case "file":
                     String fileName = data.path("name").asText("");
+                    String fileId = data.path("file_id").asText("");
+                    long fileSize = data.path("size").asLong(0);
+                    int busid = data.path("busid").asInt(0);
+                    String realUrl = data.path("url").asText("");
                     parsedContent.append("[文件");
                     if (!fileName.isBlank()) parsedContent.append(": ").append(fileName);
+                    if (fileSize > 0) {
+                        String sizeStr = fileSize > 1_000_000
+                                ? String.format("%.1fMB", fileSize / 1_000_000.0)
+                                : fileSize > 1_000 ? String.format("%.1fKB", fileSize / 1_000.0)
+                                : fileSize + "B";
+                        parsedContent.append(" ").append(sizeStr);
+                    }
                     parsedContent.append("]");
+                    // ★ 提取文件元数据，构建虚拟链接供 LLM 下载
+                    if (!fileId.isBlank() || !realUrl.isBlank()) {
+                        String virtualLink = buildVirtualFileLink(fileId, fileName, fileSize);
+                        ChatMessageInput.FileAttachment fa = new ChatMessageInput.FileAttachment(
+                                fileName, fileId, fileSize, busid, virtualLink,
+                                realUrl.isBlank() ? null : realUrl);
+                        fileAttachments.add(fa);
+                        // 将虚拟链接注册到映射表，供 download_chat_file 工具查找
+                        if (!fileId.isBlank()) {
+                            NapcatFileLinkRegistry.register(virtualLink, fileId, busid, fileName, fileSize);
+                        }
+                    }
                     break;
 
                 // ── Markdown（Napcat 扩展） ──
@@ -374,7 +399,8 @@ public class NapcatAdapter extends WebSocketClient {
                 parsedContent.toString().trim(), quotedId,
                 isAtMe, atTargets, hasForward,
                 imageCount > 0, imageCount, faceCount,
-                richSummary
+                richSummary,
+                fileAttachments
         );
     }
 
@@ -447,6 +473,10 @@ public class NapcatAdapter extends WebSocketClient {
             );
             // 注入最近聊天历史，让 ActionLoop 拿到完整的带环境上下文
             input.setRecentHistory(ChatAdaptersManager.getHistory("qq_group:" + groupId, ConfigsManager.CHATHISTORY_VIEW_AMOUNT));
+            // ★ 注入文件附件（含下载链接）
+            if (!parsed.fileAttachments().isEmpty()) {
+                input.setFileAttachments(parsed.fileAttachments());
+            }
             Main.offerInput(input, "QQ群:" + groupId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 群消息推入主线队列失败", t);
@@ -483,10 +513,22 @@ public class NapcatAdapter extends WebSocketClient {
                     parsed.richSummary()
             );
             input.setRecentHistory(ChatAdaptersManager.getHistory("qq_private:" + senderId, ConfigsManager.CHATHISTORY_VIEW_AMOUNT));
+            // ★ 注入文件附件（含下载链接）
+            if (!parsed.fileAttachments().isEmpty()) {
+                input.setFileAttachments(parsed.fileAttachments());
+            }
             Main.offerInput(input, "QQ私聊:" + senderId);
         } catch (Throwable t) {
             log.error("[拦截追踪] 私聊消息推入主线队列失败", t);
         }
+    }
+
+    /** 构建虚拟文件链接 */
+    private static String buildVirtualFileLink(String fileId, String fileName, long fileSize) {
+        // 去掉 fileId 前后可能附带的斜杠，避免 napcat://file//xxx 双斜杠
+        String cleanId = fileId.replaceAll("^/+|/+$", "");
+        String safeName = fileName.replaceAll("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]", "_");
+        return "napcat://file/" + cleanId + "/" + safeName;
     }
 
     // ==========================================

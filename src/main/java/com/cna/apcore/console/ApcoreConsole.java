@@ -100,7 +100,7 @@ public class ApcoreConsole {
         if (!verbose) return;
 
         System.out.println();
-        System.out.printf("[LLM #%d] %dms | 触发: %s%n", n.actionNum(), n.llmElapsedMs(), truncateToWidth(n.actionSummary(), 80));
+        System.out.printf("[LLM] %dms | 触发: %s%n", n.llmElapsedMs(), truncateToWidth(n.actionSummary(), 80));
 
         if (n.llmThoughts() != null && !n.llmThoughts().isBlank()) {
             System.out.println("  thoughts:");

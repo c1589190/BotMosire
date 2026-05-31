@@ -1,158 +1,80 @@
 <#-- ============================================================================
  V4 认知动作循环 — 用户提示词模板
- 变量来源: ActionLoop.buildActionPrompt() 构建的 dataModel
+ 变量来源: ActionLoop.buildActionPromptData() 构建的 dataModel
  渲染引擎: FreeMarker (由 LLManager.render() 执行)
 
- 此模板会被注入当前认知动作的上下文数据，然后发送给 LLM。
- 系统指令部分请参见 prompts/V4_ACTION_SYSTEM_PROMPT.md。
+ 精简版：移除冗余的格式化内容和工具调用说明。
+ 工具定义由 API 原生 function calling 承载（tools 参数）。
+ 系统指令请参见 prompts/V4_ACTION_SYSTEM_PROMPT.md。
  ============================================================================ -->
 
-══════════════════════════════════════════════════════════════
-📋 当前认知动作上下文
-══════════════════════════════════════════════════════════════
-
-🕐 时间：${now_time}
-
-<#-- ── 消息来源 ── -->
+<#-- ── 来源感知 ── -->
 <#if source_ids?size gt 0>
-📡 来源：<#list source_ids as s>${s}<#sep>, </#sep></#list>
+## 来源
+<#list source_ids as s>${s}<#sep>, </#sep></#list>
+<#if source_ids?filter(s -> s?contains("private"))?size gt 0>
+⚠️ 包含私聊消息 — 需要你主动关注和回复。
+</#if>
 </#if>
 
-## 动作文本（ActionText）—— 这是你要处理的核心内容
+## 当前时间
+${now_time}
 
+## 动作文本（核心内容）
 ${action_text}
 
-<#-- ── 认知状态仪表盘 ── -->
+<#-- ── 选择上下文：告诉 LLM 它为什么被选中 ── -->
+<#if selection_reason?has_content>
+## 本轮为何被选中
+${selection_reason}
 
-──────────────────────────────────────────────────────────────
-📊 认知状态仪表盘
-──────────────────────────────────────────────────────────────
+选择因子明细: SE=${selection_se?string("0.000")} (外部刺激) + attn=${selection_attention?string("0.000")} (注意力注入) = ${selection_total_energy?string("0.000")} 总能量 × UE=${selection_ue?string("0.00")} × tick=${selection_tick} × CW=${continue_weight?string("0.000")}
+<#if selection_is_endogenous>⚠️ 这是你之前通过 next_actions 规划的内源任务。</#if>
+</#if>
 
-| 维度 | 数值 | 解读 |
-|------|------|------|
-| 认知熟悉度 (CF) | ${cognitive_familiarity?string("0.000")} | <#if cognitive_familiarity gt 0.6>🔵 很熟悉 — 可以信赖先验经验<#elseif cognitive_familiarity gt 0.3>🟡 有些熟悉 — 结合经验和当前具体情况判断<#elseif cognitive_familiarity gt 0.1>🟠 不太熟悉 — 谨慎分析，不要盲信先验经验<#else>🔴 几乎全新 — 以开放心态探索</#if> |
-| 规模 (Scale) | ${scale} | <#if scale gt 5>📦 复杂问题 — 多角度思考，可能需要多轮处理<#elseif scale gt 2>📦 中等复杂度 — 正常处理<#else>📦 简单 — 快速决策</#if> |
-| 意外度 (Accident) | ${accident_degree?string("0.000")} | <#if accident_degree gt 0.2>⚠️ 有意料之外的信息 — 重新评估<#elseif accident_degree gt -0.2>➡️ 符合预期<#else>✅ 高度符合预期 — 可参考历史处理方式</#if> |
-| 行动压力 (Pressure) | ${action_pressure?string("0.000")} | <#if action_pressure gt 0.7>🔴 紧迫 — 快速有效行动<#elseif action_pressure gt 0.3>🟡 正常节奏<#else>🟢 从容 — 可深度分析</#if> |
-| 持续权重 (CW) | ${continue_weight?string("0.000")} | <#if continue_weight gt 0.7>🟢 生命力充足<#elseif continue_weight gt 0.3>🟡 中等 — 如果该单元重要请考虑 boost<#else>🔴 即将淘汰 — 若仍有价值请尽快 boost</#if> |
+<#-- ── 认知状态（紧凑格式） ── -->
+## 认知状态
+CF=${cognitive_familiarity?string("0.000")} Scale=${scale} Accident=${accident_degree?string("0.000")} Pressure=${action_pressure?string("0.000")} CW=${continue_weight?string("0.000")}
+<#if cognitive_familiarity gt 0.6>很熟悉<#elseif cognitive_familiarity gt 0.3>有些熟悉<#elseif cognitive_familiarity gt 0.1>不太熟悉<#else>几乎全新</#if> | <#if accident_degree gt 0.2>有意料之外的信息<#elseif accident_degree gt -0.2>符合预期<#else>高度符合预期</#if> | <#if action_pressure gt 0.7>紧迫<#elseif action_pressure gt 0.3>正常<#else>从容</#if>
 
 <#-- ── 关联感觉维度 ── -->
-
-──────────────────────────────────────────────────────────────
-💡 关联感觉维度（系统从感觉超图中检索到的相关概念）
-──────────────────────────────────────────────────────────────
-
 <#if ue_concepts?size gt 0>
-  <#list ue_concepts as c>
-  • ${c}
-  </#list>
-  <#if ue_dim_ids?size gt 0>
-  对应数据库ID: [${ue_dim_ids?join(", ")}]
-  </#if>
-<#else>
-  ⚠️ 没有关联的感觉维度。这是一个全新领域的动作，你可以创建新的感觉维度。
+## 关联感觉维度
+<#list ue_concepts as c>
+- ${c}
+</#list>
+<#if ue_dim_ids?size gt 0>
+维度ID: [${ue_dim_ids?join(", ")}]
+</#if>
 </#if>
 
 <#-- ── 感觉谐振分析（违和检测） ── -->
 <#if feeling_resonance?has_content>
-
-──────────────────────────────────────────────────────────────
-🔍 感觉谐振分析（系统自动检测的感觉违和度）
-──────────────────────────────────────────────────────────────
-
+## 感觉谐振分析
 ${feeling_resonance}
-
-  ⚠️ 请在 thoughts 中反思上述违和感：为什么这些感觉与当前输入的模式不一致？
-     这可能意味着情境发生了变化、用户的意图被误解、或者出现了新的认知维度。
-     如果你认为违和感指向值得探索的方向，可以在 stimulated_feelings 中创建新的感觉维度。
+⚠️ 请在 finish_action 的 thoughts 中反思这些违和感。
 </#if>
 
-<#-- ── 互斥感觉维度（与当前动作语义相斥的已有感觉） ── -->
+<#-- ── 互斥感觉维度 ── -->
 <#if mutual_exclusions?? && mutual_exclusions?size gt 0>
-
-──────────────────────────────────────────────────────────────
-⚔️ 互斥感觉维度（与当前动作语义相斥的已有感觉）
-──────────────────────────────────────────────────────────────
-
-以下感觉维度与当前动作文本的语义相似度极低，它们是你认知体系中"已建立"的概念，
-但与当前输入高度不匹配——可能代表矛盾、对立或需要重新审视的认知方向：
-
+## 互斥感觉维度（与当前输入语义相斥的已有概念）
 <#list mutual_exclusions as mx>
-  - [ID:${mx.dim_id}] **${mx.concept}** (相似度=${mx.similarity?string("0.000")}, 激活${mx.activation_count}次)
+- [ID:${mx.dim_id}] ${mx.concept} (相似度=${mx.similarity?string("0.000")}, 激活${mx.activation_count}次)
 </#list>
-
-⚠️ 请在 thoughts 中重点分析这些互斥感觉与当前动作文本的关系：
-  - 它们是否真的与当前情境互斥？还是只是不相关？
-  - 当前情境是否同时包含了矛盾的元素（如用户既满意又不满）？
-  - 本轮处理后，哪些感觉被确认相关、哪些被排除？
-
-📌 在 finish_action 的 action_feelings 字段中，列出本轮实际涉及的所有感觉维度
-  （包括被触发的已有维度、确认无关的互斥维度、以及新发现的感觉）。
-  系统会根据你列出的维度 ID 构建经验检索的"富 key"。
+请在 thoughts 中分析这些互斥关系，在 action_feelings 中列出本轮实际涉及的感觉维度。
 </#if>
 
 <#-- ── 先验经验 ── -->
-
-──────────────────────────────────────────────────────────────
-📚 先验经验（从经验库按感觉维度检索的历史经验）
-──────────────────────────────────────────────────────────────
-
+## 先验经验
 <#if action_predicts_text?has_content>
 ${action_predicts_text}
-
-  ⚠️ 请对这些经验逐一打分（1=有帮助, 0=中性, -1=没帮助）。你的打分会影响未来经验检索的准确度。
+请在 finish_action 中对这些经验打分（1=有帮助, 0=中性, -1=没帮助）。
 <#else>
-  📭 没有检索到相关的先验经验。这可能是新领域的问题。
+无相关先验经验。
 </#if>
 
 <#-- ── 认知准备池概况 ── -->
-
 ${pool_summary}
 
-══════════════════════════════════════════════════════════════
-📝 请返回以下 JSON 结构（直接输出纯 JSON，不包裹代码块）
-══════════════════════════════════════════════════════════════
-
-{
-  "thoughts": "你的推理过程：分析当前情境 → 评估先验经验的价值 → 解释你的行动决策",
-  "tool_calls": [
-    {
-      "id": "call_N",
-      "type": "function",
-      "function": {
-        "name": "工具名称",
-        "arguments": "{\"参数名\": \"参数值\"}"
-      }
-    }
-  ],
-  "stimulated_feelings": [
-    {
-      "concept": "简短的语义标签（5-15字）",
-      "embedding_text": "更详细的描述文本，包含上下文细节，用于生成向量嵌入"
-    }
-  ],
-  "new_prepare_unit": {
-    "text": "需要后续处理的事项描述",
-    "sourceIds": ["来源ID"]
-  },
-  "experience_scoring": [
-    {
-      "experience_id": 经验ID（整数）,
-      "score": 1
-    }
-  ],
-  "continue_weight_boosts": [
-    {
-      "unit_uuid": "准备池中单元的UUID",
-      "boost": 0.6
-    }
-  ]
-}
-
-提醒：
-  - tool_calls 的第一个元素必须是 finish_action（即使 experience_scoring 为空也必须调用）
-  - 没有经验时，finish_action 的 arguments 传 {"experience_scoring": []}
-  - new_prepare_unit 不需要时传 null，不要省略该字段
-  - experience_scoring 中的 experience_id 必须与上面先验经验中的 ID 一致
-  - continue_weight_boosts 中 boost 推荐范围 0.3~1.0，不确定时传空数组 []
-  - 只输出 JSON，不要有任何前言、后语或解释
+## 指令
+使用提供的 function calling 工具。finish_action 必须作为本轮最后一个工具调用，在其中传递 thoughts（你的推理过程）、experience_scoring（经验打分）、stimulated_feelings（激活的感觉维度）、new_prepare_unit（后续事项，无需时传 null）、continue_weight_boosts（注意力调节）。

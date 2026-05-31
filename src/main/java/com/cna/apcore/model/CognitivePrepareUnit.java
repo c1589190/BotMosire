@@ -25,6 +25,8 @@ public class CognitivePrepareUnit {
     private int tick;                         // 未被选中的轮数
     private List<UEUnit> ueUnits;             // UE 计算涉及的所有感觉节点
     private double continueWeight;            // 持续权重，初始 1，每 tick 衰减，LLM 可 boost
+    private double attentionEnergy;           // 注意力赋能累积（内源能量，与 SE 加算）
+    private boolean endogenous;               // 是否来自 LLM 自生成（next_actions 创建）
 
     private CognitivePrepareUnit(String text, List<String> sourceIds, double stimulateEnergy) {
         this.uuid = UUID.randomUUID();
@@ -35,6 +37,8 @@ public class CognitivePrepareUnit {
         this.tick = 0;
         this.ueUnits = new ArrayList<>();
         this.continueWeight = 1.0;
+        this.attentionEnergy = 0.0;
+        this.endogenous = false;
         this.createdAtMs = System.currentTimeMillis();
     }
 
@@ -98,17 +102,38 @@ public class CognitivePrepareUnit {
     }
 
     /**
-     * 选择得分 = SE × UE × tick
-     * SE×UE 必须先超过 baselineThreshold 才有效，否则返回 0。
+     * 选择得分 = (SE + attentionEnergy) × UE × tick × CW
+     * 总能量 = 外源刺激能量 + 内源注意力累积能量。
+     * 总能量 × UE 必须先超过 baselineThreshold 才有效，否则返回 0。
      */
     public double selectionScore(double baselineThreshold) {
-        double baseEnergy = stimulateEnergy * understandEnergy;
+        double totalEnergy = stimulateEnergy + attentionEnergy;
+        double baseEnergy = totalEnergy * understandEnergy;
         if (baseEnergy < baselineThreshold) {
             return 0.0;
         }
         // tick 至少为 1 以保证新单元也能参与比较
         int effectiveTick = Math.max(1, tick);
         return baseEnergy * effectiveTick * continueWeight;
+    }
+
+    /** 累加注意力能量 */
+    public void addAttentionEnergy(double delta) {
+        this.attentionEnergy = Math.max(0.0, this.attentionEnergy + delta);
+    }
+
+    /** 衰减注意力能量（未被持续关注时消退） */
+    public void decayAttentionEnergy(double factor) {
+        this.attentionEnergy = Math.max(0.0, this.attentionEnergy * (1.0 - factor));
+    }
+
+    /** 标记为内源自生成任务 */
+    public void setEndogenous(boolean endogenous) {
+        this.endogenous = endogenous;
+    }
+
+    public boolean isEndogenous() {
+        return endogenous;
     }
 
     @Override
