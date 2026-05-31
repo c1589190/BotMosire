@@ -1,5 +1,6 @@
 package com.cna.apcore.attention;
 
+import com.cna.apcore.MentalStateLogger;
 import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.model.CognitivePrepareUnit;
 import lombok.extern.slf4j.Slf4j;
@@ -106,6 +107,11 @@ public class AttentionManager {
             allocated += share;
             attentionPool -= share;
 
+            // ★ 心智日志：单条注意力分配
+            MentalStateLogger.getInstance().attentionAllocated(
+                    s.unit.getUuid().toString(), share, s.attractiveness,
+                    s.unit.getUnitFatigue(), s.unit.isEndogenous());
+
             if (log.isDebugEnabled()) {
                 String label = s.unit.isEndogenous() ? "[内源]" : "[外源]";
                 log.debug("[Attention]   → " + label + " " + s.unit.getUuid().toString().substring(0, 8)
@@ -123,6 +129,10 @@ public class AttentionManager {
                 + " → " + n + "个单元 (" + endogenousAttended + "内源)"
                 + ", 池余 " + String.format("%.2f", attentionPool) + "/" + String.format("%.2f", poolMax)
                 + ", " + decayedCount + "单元注意力衰减");
+
+        // ★ 心智日志：注意力整体状态
+        MentalStateLogger.getInstance().attentionTick(
+                regenerated, allocated, attentionPool, n, endogenousAttended, decayedCount);
     }
 
     /**
@@ -155,10 +165,9 @@ public class AttentionManager {
             attr += Math.min(0.30, (cw - 1.0) * 0.3);
         }
 
-        // 内源任务：LLM 自主规划的任务，天然需要注意力滋养
-        if (unit.isEndogenous()) {
-            attr += 0.15;
-        }
+        // ★ 疲劳惩罚：高疲劳单元降低注意力吸引力，注意力倾向新鲜话题
+        double fatigue = unit.getUnitFatigue();
+        attr *= (1.0 - fatigue * 0.7);
 
         // tick 紧迫度：等待超过 5 tick 的单元，越等越"急"
         int tick = unit.getTick();

@@ -2,6 +2,7 @@ package com.cna.apcore.feeling;
 
 import com.cna.agent.CuriosityListManager;
 import com.cna.agent.FeelingResonanceAnalyzer;
+import com.cna.apcore.MentalStateLogger;
 import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
@@ -129,6 +130,13 @@ public class FeelingsManager {
                 feelingsDB.incrementActivation(id);
                 dimIds.add(id);
                 log.debug("[FeelingsManager]   刺激感觉: '{}' id={}", concept, id);
+
+                // ★ 心智日志：感觉刺激
+                FeelingEntry entry = feelingsDB.getById(id);
+                MentalStateLogger.getInstance().feelingStimulated(
+                        id, concept, true,
+                        entry != null ? FeelingsDB.noveltyCurve(entry.getActivationCount()) : 1.0,
+                        entry != null ? entry.getActivationCount() : 1);
             }
         }
 
@@ -173,6 +181,7 @@ public class FeelingsManager {
                     feelingsDB.incrementActivation(dimId);
                     resolvedDimIds.add(dimId);
                     existingCount++;
+                    MentalStateLogger.getInstance().feelingAction(dimId, existing.getConcept(), relation);
                 } else {
                     log.warn("[FeelingsManager] action_feelings 引用不存在的 dim_id={}，跳过", dimId);
                 }
@@ -187,6 +196,7 @@ public class FeelingsManager {
                         newCount++;
                         log.info("[FeelingsManager]   🆕 action_feeling 新维度: '{}' → id={}, relation={}",
                                 concept, realId, relation);
+                        MentalStateLogger.getInstance().feelingAction(realId, concept, relation);
                     }
                 }
             }
@@ -234,6 +244,9 @@ public class FeelingsManager {
                 }
                 log.info("[FeelingsManager]   经验 id=" + expId + " 打分=" + clamped
                         + ", 准确度传播到 " + exp.feelingDimIds.size() + " 个感觉维度 (delta=" + String.format("%.4f", delta) + ")");
+
+                MentalStateLogger.getInstance().feelingExperienceScored(
+                        expId, clamped, exp.feelingDimIds.size());
             }
         }
     }
@@ -258,6 +271,18 @@ public class FeelingsManager {
                 if (resonance != null) {
                     log.info("[FeelingsManager] 🔍 感觉谐振分析完成: {} 组, 有违和={}",
                             resonance.groups.size(), resonance.hasDissonance());
+
+                    // ★ 心智日志：谐振分析
+                    int dissonantCount = (int) resonance.groups.stream()
+                            .mapToLong(g -> g.getDissonant().size()).sum();
+                    int consonantCount = (int) resonance.groups.stream()
+                            .mapToLong(g -> g.getConsonant().size()).sum();
+                    double maxDissonanceScore = resonance.groups.stream()
+                            .flatMap(g -> g.getDissonant().stream())
+                            .mapToDouble(ds -> ds.similarity)
+                            .max().orElse(0.0);
+                    MentalStateLogger.getInstance().feelingResonance(
+                            dissonantCount, consonantCount, maxDissonanceScore);
                 }
                 return resonance;
             }
@@ -284,6 +309,16 @@ public class FeelingsManager {
             if (clm != null) {
                 clm.accumulateFromResonance(resonance, actionText);
                 log.info("[FeelingsManager] 📝 违和感已积累到好奇心列表");
+
+                // ★ 心智日志：违和感积累
+                int dissonantGroupCount = (int) resonance.groups.stream()
+                        .filter(g -> g.hasDissonance()).count();
+                double peakDissonance = resonance.groups.stream()
+                        .flatMap(g -> g.getDissonant().stream())
+                        .mapToDouble(ds -> ds.similarity)
+                        .max().orElse(0.0);
+                MentalStateLogger.getInstance().feelingDissonanceAccumulated(
+                        dissonantGroupCount, peakDissonance);
             }
         } catch (Exception e) {
             log.warn("[FeelingsManager] 违和感积累失败: {}", e.getMessage());

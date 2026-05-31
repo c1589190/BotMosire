@@ -18,6 +18,7 @@ import com.cna.apcore.db.FeelingsDB;
 import com.cna.apcore.action.ChatMessageActionDeveloper;
 import com.cna.apcore.action.FileInputWatcher;
 import com.cna.apcore.attention.AttentionManager;
+import com.cna.apcore.attention.FatigueManager;
 import com.cna.apcore.feeling.FeelingsManager;
 import com.cna.apcore.model.ActionPredict;
 import com.cna.apcore.model.CognitiveAction;
@@ -97,6 +98,9 @@ public class ActionLoop implements MosireAPI {
     // ★ 注意力管理器（内源能量引擎，让自生成任务获得驱动力）
     private final AttentionManager attentionManager;
 
+    // ★ 语义疲劳管理器（让"刚处理过类似内容"的任务自然被压制）
+    private final FatigueManager fatigueManager;
+
     // ★ 文件输入监控器（自动发现工作区新增的 txt/md 文件）
     private final FileInputWatcher fileWatcher;
 
@@ -128,6 +132,10 @@ public class ActionLoop implements MosireAPI {
 
         // ★ 注意力管理器初始化
         this.attentionManager = new AttentionManager();
+
+        // ★ 语义疲劳管理器初始化 + 注入到准备池
+        this.fatigueManager = new FatigueManager();
+        this.preparePool.setFatigueManager(fatigueManager);
 
         // ★ 文件输入监控器初始化
         this.fileWatcher = new FileInputWatcher();
@@ -432,6 +440,9 @@ public class ActionLoop implements MosireAPI {
             // ── 步骤 1.5: 注意力分配（内源能量注入）──
             attentionManager.tick(preparePool.getAllUnits());
 
+            // ── 步骤 1.6: 疲劳衰减（清理过期历史）──
+            fatigueManager.tick(tick);
+
             if (log.isDebugEnabled()) {
                 log.debug("[ActionLoop] ⏰ Tick #{} — 池大小: {}, 本轮清理: {}, 正在处理: {}",
                         tick, preparePool.size(), pruned, isProcessing.get());
@@ -440,6 +451,17 @@ public class ActionLoop implements MosireAPI {
                 log.info("[ActionLoop] 📊 Tick #{} 概况 — 池: {}, 已处理Input: {}, Tools: {}, Exp: {}, Feel: {}",
                         tick, preparePool.size(), inputProcessedCount.get(),
                         toolExecutedCount.get(), experienceStoredCount.get(), feelingStimulatedCount.get());
+
+                // ★ 心智日志：池状态快照
+                List<CognitivePrepareUnit> all = preparePool.getAllUnits();
+                long exo = all.stream().filter(u -> !u.isEndogenous()).count();
+                long endo = all.size() - exo;
+                double avgF = all.stream().mapToDouble(CognitivePrepareUnit::getUnitFatigue)
+                        .average().orElse(0.0);
+                double avgSE = all.stream().mapToDouble(CognitivePrepareUnit::getStimulateEnergy)
+                        .average().orElse(0.0);
+                MentalStateLogger.getInstance().poolSnapshot(
+                        tick, all.size(), (int) exo, (int) endo, avgF, avgSE);
             }
 
             // ── 步骤 2: 选择并处理 ──
@@ -448,7 +470,8 @@ public class ActionLoop implements MosireAPI {
                         this::getEmbedding,
                         experiencesDB,
                         feelingsDB,
-                        FeelingHypergraphManager.getInstance()
+                        FeelingHypergraphManager.getInstance(),
+                        tick
                 );
                 if (action != null) {
                     log.info("[ActionLoop] 🎯 Tick #" + tick + " — 选中 CognitiveAction: CF=" + String.format("%.3f", action.getCognitiveFamiliarity()) + ", Scale=" + action.getScale() + ", Accident=" + String.format("%.3f", action.getAccidentDegree()) + ", CW=" + String.format("%.3f", action.getContinueWeight()));
@@ -545,14 +568,22 @@ public class ActionLoop implements MosireAPI {
 
             // ★ 互斥感觉维度检测（委托 FeelingsManager）
             List<Map<String, Object>> mutualExclusions = List.of();
+            double[] actionTextEmb = null;
             try {
-                double[] actionTextEmb = getEmbedding(action.getActionText());
+                actionTextEmb = getEmbedding(action.getActionText());
                 if (actionTextEmb != null) {
                     mutualExclusions = feelingsManager.detectMutualExclusions(actionTextEmb);
                     if (!mutualExclusions.isEmpty()) {
                         log.info("[ActionLoop] ⚔️ 互斥感觉检测: {} 个互斥候选 → {}",
                                 mutualExclusions.size(),
                                 mutualExclusions.stream().map(m -> m.get("concept")).limit(5).toList());
+
+                        // ★ 心智日志：互斥感觉
+                        String topConcepts = mutualExclusions.stream()
+                                .limit(5).map(m -> (String) m.get("concept"))
+                                .reduce((a, b) -> a + ", " + b).orElse("");
+                        MentalStateLogger.getInstance().feelingMutualExclusion(
+                                mutualExclusions.size(), topConcepts);
                     }
                 }
             } catch (Exception e) {
@@ -893,6 +924,9 @@ public class ActionLoop implements MosireAPI {
             // ★ 违和感积累（委托 FeelingsManager）
             feelingsManager.accumulateDissonance(resonance, action.getActionText());
 
+            // ★ 语义疲劳记录：将本轮 action 的 embedding 写入近期历史
+            fatigueManager.record(actionTextEmb, tickCount.get());
+
             // ── 通知控制台监听器 ──
             if (!consoleListeners.isEmpty()) {
                 ActionNotification notification = new ActionNotification(
@@ -916,6 +950,14 @@ public class ActionLoop implements MosireAPI {
 
             log.info("[ActionLoop] ✅ CognitiveAction 处理完成 — 工具执行:{}/{}, 经验ID:{}, 刺激维度:{}, 池大小:{}",
                     toolResults.size(), toolCallCount, expId, stimulatedDimIds.size(), preparePool.size());
+
+            // ★ 心智日志：动作完成
+            MentalStateLogger.getInstance().actionComplete(
+                    tickCount.get(), toolCallCount, toolResults.size(),
+                    expId, stimulatedDimIds.size(), llmElapsedMs,
+                    preparePool.size(), action.getCognitiveFamiliarity(),
+                    action.getAccidentDegree(),
+                    action.getUEDimIds() != null ? action.getUEDimIds().size() : 0);
 
         } catch (Exception e) {
             log.error("[ActionLoop] ❌ processAction 异常", e);

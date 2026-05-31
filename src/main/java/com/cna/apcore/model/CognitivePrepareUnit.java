@@ -27,6 +27,7 @@ public class CognitivePrepareUnit {
     private double continueWeight;            // 持续权重，初始 1，每 tick 衰减，LLM 可 boost
     private double attentionEnergy;           // 注意力赋能累积（内源能量，与 SE 加算）
     private boolean endogenous;               // 是否来自 LLM 自生成（next_actions 创建）
+    private double unitFatigue;               // 语义疲劳值 [0,1]，由 FatigueManager 在选前设置
 
     private CognitivePrepareUnit(String text, List<String> sourceIds, double stimulateEnergy) {
         this.uuid = UUID.randomUUID();
@@ -39,6 +40,7 @@ public class CognitivePrepareUnit {
         this.continueWeight = 1.0;
         this.attentionEnergy = 0.0;
         this.endogenous = false;
+        this.unitFatigue = 0.0;
         this.createdAtMs = System.currentTimeMillis();
     }
 
@@ -102,9 +104,16 @@ public class CognitivePrepareUnit {
     }
 
     /**
-     * 选择得分 = (SE + attentionEnergy) × UE × tick × CW
+     * 选择得分 = (SE + attentionEnergy) × UE × log₂(tick+1) × CW × fatiguePenalty
+     *
      * 总能量 = 外源刺激能量 + 内源注意力累积能量。
      * 总能量 × UE 必须先超过 baselineThreshold 才有效，否则返回 0。
+     *
+     * tickFactor 使用对数压缩，避免旧任务无限积累优势：
+     *   tick=0 → 1, tick=3 → 3, tick=7 → 4, tick=15 → 5
+     *
+     * fatiguePenalty = 1 / (1 + unitFatigue × sensitivity)
+     *   疲劳越高，得分越低，自然倾向于切换到新鲜话题。
      */
     public double selectionScore(double baselineThreshold) {
         double totalEnergy = stimulateEnergy + attentionEnergy;
@@ -112,9 +121,13 @@ public class CognitivePrepareUnit {
         if (baseEnergy < baselineThreshold) {
             return 0.0;
         }
-        // tick 至少为 1 以保证新单元也能参与比较
-        int effectiveTick = Math.max(1, tick);
-        return baseEnergy * effectiveTick * continueWeight;
+        // 对数压缩 tick 因子
+        double tickFactor = 1.0 + Math.log(tick + 1) / Math.log(2);
+        // 疲劳惩罚
+        double sensitivity = com.cna.apcore.config.CoreConfig.FATIGUE_SENSITIVITY;
+        double fatiguePenalty = 1.0 / (1.0 + unitFatigue * sensitivity);
+
+        return baseEnergy * tickFactor * continueWeight * fatiguePenalty;
     }
 
     /** 累加注意力能量 */
@@ -134,6 +147,16 @@ public class CognitivePrepareUnit {
 
     public boolean isEndogenous() {
         return endogenous;
+    }
+
+    /** 设置语义疲劳值（由 FatigueManager 在选前计算） */
+    public void setUnitFatigue(double fatigue) {
+        this.unitFatigue = Math.max(0.0, Math.min(1.0, fatigue));
+    }
+
+    /** 获取语义疲劳值 */
+    public double getUnitFatigue() {
+        return unitFatigue;
     }
 
     @Override

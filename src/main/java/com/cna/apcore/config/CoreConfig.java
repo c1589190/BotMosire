@@ -126,6 +126,22 @@ public class CoreConfig {
     public static final double SINGLE_BOOST_CAP;
 
     // ==========================================
+    // 语义疲劳参数（FatigueManager）
+    // ==========================================
+
+    /** 近期处理历史最大条目数（环形缓冲上限） */
+    public static final int FATIGUE_MAX_HISTORY;
+
+    /** 时间衰减系数：recencyWeight = exp(-age × decayRate) */
+    public static final double FATIGUE_DECAY_RATE;
+
+    /** 疲劳对选择得分的敏感度：penalty = 1 / (1 + fatigue × sensitivity) */
+    public static final double FATIGUE_SENSITIVITY;
+
+    /** 超过此 tick 数的历史条目自动清理 */
+    public static final int FATIGUE_MAX_AGE_TICKS;
+
+    // ==========================================
     // 初始化
     // ==========================================
 
@@ -173,6 +189,12 @@ public class CoreConfig {
         ATTENTION_REGEN_PER_TICK     = getDouble("v4.attention.regenPerTick", 5.0);
         ATTENTION_MAX_ATTEND_UNITS   = getInt("v4.attention.maxAttendUnits", 5);
         ATTENTION_DECAY_PER_TICK     = getDouble("v4.attention.decayPerTick", 0.05);
+
+        // —— 语义疲劳 ——
+        FATIGUE_MAX_HISTORY          = getInt("v4.fatigue.maxHistory", 30);
+        FATIGUE_DECAY_RATE           = getDouble("v4.fatigue.decayRate", 0.08);
+        FATIGUE_SENSITIVITY          = getDouble("v4.fatigue.sensitivity", 2.5);
+        FATIGUE_MAX_AGE_TICKS        = getInt("v4.fatigue.maxAgeTicks", 200);
 
         // —— Chat 消息聚合 ——
         CHAT_BATCH_MIN_MESSAGES        = getInt("v4.chat.batchMinMessages", 3);

@@ -1,9 +1,12 @@
 package com.cna.apcore.pool;
 
+import com.cna.apcore.MentalStateLogger;
 import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
+import com.cna.apcore.attention.FatigueManager;
 import com.cna.apcore.model.*;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.cna.config.ConfigsManager;
 import com.cna.db.FeelingDimensionManager;
 import com.cna.db.FeelingHypergraphManager;
@@ -28,6 +31,13 @@ public class CognitivePreparePool {
 
     private final ConcurrentLinkedDeque<CognitivePrepareUnit> pool = new ConcurrentLinkedDeque<>();
     private final Object poolLock = new Object();
+
+    private FatigueManager fatigueManager;     // 语义疲劳管理器（外部注入）
+
+    /** 注入语义疲劳管理器 */
+    public void setFatigueManager(FatigueManager fm) {
+        this.fatigueManager = fm;
+    }
 
     /** 推送一个准备单元到池中 */
     public void push(CognitivePrepareUnit unit) {
@@ -72,6 +82,9 @@ public class CognitivePreparePool {
                     it.remove();
                     removed++;
                     log.debug("[Pool] 移除过期单元: {} (tick={})", unit, unit.getTick());
+                    MentalStateLogger.getInstance().poolUnitExpired(
+                            unit.getUuid().toString(), unit.getTick(),
+                            unit.isEndogenous(), unit.getContinueWeight());
                 }
             }
         }
@@ -85,22 +98,26 @@ public class CognitivePreparePool {
      * 选择并转换为 CognitiveAction。
      *
      * 流程：
-     * 1. 对每个单元计算 UE（理解能量）— BFS 搜索感觉维度超图
-     * 2. 找到 selectionScore = max(SE×UE×tick) 且 SE×UE > baselineThreshold
-     * 3. 计算 CognitiveAction 的 6 个情绪字段
-     * 4. 从 ExperiencesDB 检索 ActionPredicts
+     * 1. 对每个单元计算 embedding（仅一次），用于 UE 计算和疲劳评估
+     * 2. 对每个单元计算 UE（理解能量）— BFS 搜索感觉维度超图
+     * 3. 找到 selectionScore = max((SE+attn)×UE×log₂(tick+1)×CW×fatiguePenalty)
+     *    且 (SE+attn)×UE > baselineThreshold
+     * 4. 计算 CognitiveAction 的 6 个情绪字段
+     * 5. 从 ExperiencesDB 检索 ActionPredicts
      *
-     * @param embedder    文本→embedding 函数
+     * @param embedder      文本→embedding 函数
      * @param experiencesDB 经验数据库（用于检索先验经验）
-     * @param feelingsDB  V4 感觉数据库（用于 UE 计算和去重）
-     * @param hypergraph  感觉超图（用于 BFS 扩展）
+     * @param feelingsDB    V4 感觉数据库（用于 UE 计算和去重）
+     * @param hypergraph    感觉超图（用于 BFS 扩展）
+     * @param currentTick   当前 tick 编号（用于疲劳时间衰减计算）
      * @return 选中的 CognitiveAction，如果没有符合条件的单元则返回 null
      */
     public CognitiveAction selectAndConvert(
             Function<String, double[]> embedder,
             ExperiencesDB experiencesDB,
             FeelingsDB feelingsDB,
-            FeelingHypergraphManager hypergraph) {
+            FeelingHypergraphManager hypergraph,
+            int currentTick) {
 
         List<CognitivePrepareUnit> units;
         synchronized (poolLock) {
@@ -108,11 +125,19 @@ public class CognitivePreparePool {
             units = new ArrayList<>(pool);
         }
 
-        // 计算每个单元的 UE
+        // ★ 计算每个单元的 embedding（仅一次）、UE 和语义疲劳
         FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
         for (CognitivePrepareUnit unit : units) {
+            double[] emb = embedder.apply(unit.getText());
+
+            // UE 计算（传入预计算 embedding 避免重复计算）
             if (unit.getUeUnits() == null || unit.getUeUnits().isEmpty()) {
-                computeUE(unit, embedder, fdm, hypergraph, feelingsDB);
+                computeUE(unit, emb, fdm, hypergraph, feelingsDB);
+            }
+
+            // ★ 语义疲劳计算
+            if (fatigueManager != null) {
+                unit.setUnitFatigue(fatigueManager.computeFatigue(emb, currentTick));
             }
         }
 
@@ -138,6 +163,40 @@ public class CognitivePreparePool {
         }
 
         log.info("[Pool] 选中单元: " + best + " (score=" + String.format("%.3f", bestScore) + ")");
+
+        // ★ 心智日志：单元选中 + 选取得分分解
+        double tickFactor = 1.0 + Math.log(Math.max(1, best.getTick()) + 1) / Math.log(2);
+        MentalStateLogger mlog = MentalStateLogger.getInstance();
+        mlog.unitSelected(
+                best.getUuid().toString(), bestScore,
+                best.getStimulateEnergy(), best.getAttentionEnergy(),
+                best.getUnderstandEnergy(), tickFactor, best.getContinueWeight(),
+                best.getUnitFatigue(), best.isEndogenous(),
+                best.getText(), pool.size());
+
+        // ★ 心智日志：排名前 5 的候选单元
+        final CognitivePrepareUnit selectedUnit = best;
+        List<CognitivePrepareUnit> ranked = units.stream()
+                .filter(u -> u != selectedUnit)
+                .sorted((a, b) -> Double.compare(
+                        b.selectionScore(CoreConfig.BASELINE_THRESHOLD),
+                        a.selectionScore(CoreConfig.BASELINE_THRESHOLD)))
+                .limit(5)
+                .toList();
+        if (!ranked.isEmpty()) {
+            ObjectNode[] rankings = new ObjectNode[ranked.size()];
+            for (int i = 0; i < ranked.size(); i++) {
+                CognitivePrepareUnit u = ranked.get(i);
+                double uTick = 1.0 + Math.log(Math.max(1, u.getTick()) + 1) / Math.log(2);
+                rankings[i] = mlog.createRankEntry(
+                        u.getUuid().toString(),
+                        u.selectionScore(CoreConfig.BASELINE_THRESHOLD),
+                        u.getStimulateEnergy(), u.getAttentionEnergy(),
+                        u.getUnderstandEnergy(), uTick, u.getContinueWeight(),
+                        u.getUnitFatigue(), u.isEndogenous());
+            }
+            mlog.unitSelectionRanking(rankings);
+        }
 
         // 转换为 CognitiveAction
         CognitiveAction action = CognitiveAction.from(best);
@@ -178,7 +237,7 @@ public class CognitivePreparePool {
      */
     private void computeUE(
             CognitivePrepareUnit unit,
-            Function<String, double[]> embedder,
+            double[] unitEmbedding,
             FeelingDimensionManager fdm,
             FeelingHypergraphManager hypergraph,
             FeelingsDB feelingsDB) {
@@ -258,9 +317,8 @@ public class CognitivePreparePool {
         // 2. 同时查询 V4 FeelingsDB
         if (feelingsDB != null) {
             List<FeelingEntry> v4Feelings = feelingsDB.getAll();
-            double[] textEmb = embedder.apply(unit.getText());
             for (FeelingEntry f : v4Feelings) {
-                double sim = CognitiveDB_CS(textEmb, f.getEmbedding());
+                double sim = CognitiveDB_CS(unitEmbedding, f.getEmbedding());
                 if (sim > 0.5 && !visited.contains(f.getId())) {
                     double noveltyW = FeelingsDB.noveltyCurve(f.getActivationCount());
                     double contribution = sim * noveltyW;
@@ -288,7 +346,7 @@ public class CognitivePreparePool {
                     .bfsLayer(0)
                     .layerWeight(1.0)
                     .noveltyWeight(1.0)
-                    .embedding(embedder.apply(unit.getText()))
+                    .embedding(unitEmbedding)
                     .build());
             log.debug("[Pool] UE 冷启动兜底: SE=" + String.format("%.3f", unit.getStimulateEnergy()) + " → UE=0.6 (合成节点)");
         }
