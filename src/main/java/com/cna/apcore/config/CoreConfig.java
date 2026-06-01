@@ -71,7 +71,7 @@ public class CoreConfig {
     public static final double DEDUP_THRESHOLD;
 
     // ==========================================
-    // 文件输入监控参数（FileInputWatcher）
+    // 文件输入监控参数（FileSurveyTickAction）
     // ==========================================
 
     /** 桌面巡视间隔（tick 数），池空闲时每隔这么多 tick 注入一次目录快照 */
@@ -82,6 +82,16 @@ public class CoreConfig {
 
     /** 桌面巡视产生单元的基础 SE */
     public static final double FILE_INPUT_BASE_SE;
+
+    // ==========================================
+    // TickAction 参数
+    // ==========================================
+
+    /** 自我检查间隔（tick 数），默认 30 = 约 60 秒 */
+    public static final int TICK_SELFCHECK_INTERVAL_TICKS;
+
+    /** 自我检查产生单元的基础 SE */
+    public static final double TICK_SELFCHECK_BASE_SE;
 
     // ==========================================
     // 注意力机制参数（AttentionManager）
@@ -207,7 +217,11 @@ public class CoreConfig {
         // —— 桌面巡视 ——
         FILE_SURVEY_INTERVAL_TICKS = getInt("v4.file.surveyIntervalTicks", 8);
         FILE_IDLE_POOL_THRESHOLD   = getInt("v4.file.idlePoolThreshold", 2);
-        FILE_INPUT_BASE_SE         = getDouble("v4.file.inputBaseSE", 0.6);
+        FILE_INPUT_BASE_SE              = getDouble("v4.file.inputBaseSE", 0.6);
+
+        // —— TickAction ——
+        TICK_SELFCHECK_INTERVAL_TICKS  = getInt("v4.tick.selfCheckIntervalTicks", 30);
+        TICK_SELFCHECK_BASE_SE         = getDouble("v4.tick.selfCheckBaseSE", 0.5);
 
         // —— 注意力机制 ——
         ATTENTION_POOL_MAX           = getDouble("v4.attention.poolMax", 100.0);

@@ -183,24 +183,29 @@ public class MentalStateLogger {
 
     // ── 语义疲劳 ──
 
-    /** 为选择计算了单元疲劳 */
-    public void fatigueComputed(String unitUuid, double fatigue, int historySize,
-                                 double topSimilarity, int currentTick) {
+    /** 为选择计算了单元疲劳（基于感觉维度粒度） */
+    public void fatigueComputed(String unitUuid, double fatigue, int trackedDimCount,
+                                 int matchedDimCount, int ueUnitCount,
+                                 double maxRecency, int currentTick) {
         ObjectNode ev = mapper.createObjectNode();
         ev.put("event", "FATIGUE_COMPUTED");
         ev.put("uuid", shortUuid(unitUuid));
         ev.put("fatigue", round(fatigue, 4));
-        ev.put("history_size", historySize);
-        ev.put("top_similarity", round(topSimilarity, 4));
+        ev.put("tracked_dims", trackedDimCount);
+        ev.put("matched_dims", matchedDimCount);
+        ev.put("ue_units", ueUnitCount);
+        ev.put("max_recency", round(maxRecency, 4));
         ev.put("tick", currentTick);
         writeLine(ev);
     }
 
-    /** 记录了一条处理过的 action 到疲劳历史 */
-    public void fatigueRecorded(int historySize, int currentTick) {
+    /** 记录了一条处理过的 action 的感觉维度到疲劳历史 */
+    public void fatigueRecorded(int dimCount, int newDimCount, int totalTracked, int currentTick) {
         ObjectNode ev = mapper.createObjectNode();
         ev.put("event", "FATIGUE_RECORDED");
-        ev.put("history_size", historySize);
+        ev.put("dim_count", dimCount);
+        ev.put("new_dims", newDimCount);
+        ev.put("total_tracked", totalTracked);
         ev.put("tick", currentTick);
         writeLine(ev);
     }
@@ -248,7 +253,7 @@ public class MentalStateLogger {
     /** 选中了一个单元准备执行 */
     public void unitSelected(String unitUuid, double score, double se, double attn,
                               double ue, double tickFactor, double cw, double fatigue,
-                              boolean endogenous, String textPreview, int poolSize) {
+                              double attnMult, boolean endogenous, String textPreview, int poolSize) {
         ObjectNode ev = mapper.createObjectNode();
         ev.put("event", "UNIT_SELECTED");
         ev.put("uuid", shortUuid(unitUuid));
@@ -259,6 +264,7 @@ public class MentalStateLogger {
         ev.put("tick_factor", round(tickFactor, 3));
         ev.put("cw", round(cw, 4));
         ev.put("fatigue", round(fatigue, 4));
+        ev.put("attn_mult", round(attnMult, 4));
         ev.put("endogenous", endogenous);
         ev.put("text_preview", textPreview != null ? textPreview.substring(0, Math.min(60, textPreview.length())) : "");
         ev.put("pool_size_after", poolSize);
@@ -360,7 +366,7 @@ public class MentalStateLogger {
     /** 创建排名条目（供调用方构建排名列表） */
     public ObjectNode createRankEntry(String unitUuid, double score, double se, double attn,
                                        double ue, double tickFactor, double cw, double fatigue,
-                                       boolean endogenous) {
+                                       double attnMult, boolean endogenous) {
         ObjectNode ev = mapper.createObjectNode();
         ev.put("event", "UNIT_RANKED");
         ev.put("uuid", shortUuid(unitUuid));
@@ -371,6 +377,7 @@ public class MentalStateLogger {
         ev.put("tick_factor", round(tickFactor, 3));
         ev.put("cw", round(cw, 4));
         ev.put("fatigue", round(fatigue, 4));
+        ev.put("attn_mult", round(attnMult, 4));
         ev.put("endogenous", endogenous);
         return ev;
     }

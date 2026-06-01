@@ -115,7 +115,7 @@ public class CognitivePrepareUnit {
     }
 
     /**
-     * 选择得分 = (SE + attentionEnergy) × UE × log₂(tick+1) × CW × fatiguePenalty
+     * 选择得分 = (SE + attentionEnergy) × UE × log₂(tick+1) × CW × fatiguePenalty × attnAttitudeMultiplier
      *
      * 总能量 = 外源刺激能量 + 内源注意力累积能量。
      * 总能量 × UE 必须先超过 baselineThreshold 才有效，否则返回 0。
@@ -125,6 +125,11 @@ public class CognitivePrepareUnit {
      *
      * fatiguePenalty = 1 / (1 + unitFatigue × sensitivity)
      *   疲劳越高，得分越低，自然倾向于切换到新鲜话题。
+     *   unitFatigue 由 FatigueManager 基于该单元匹配的感觉维度的近期处理记录计算。
+     *
+     * attnAttitudeMultiplier 由 FeelingsDB 中各感觉维度的 attention_attitude 加权得出，
+     *   >1 = Agent 对该感觉方向持积极关注态度 → 分数被抬高
+     *   <1 = Agent 对该感觉方向持消极回避态度 → 分数被压低
      */
     public double selectionScore(double baselineThreshold) {
         double totalEnergy = stimulateEnergy + attentionEnergy;
@@ -134,11 +139,13 @@ public class CognitivePrepareUnit {
         }
         // 对数压缩 tick 因子
         double tickFactor = 1.0 + Math.log(tick + 1) / Math.log(2);
-        // 疲劳惩罚
+        // 疲劳惩罚（基于感觉维度粒度，由 FatigueManager 计算）
         double sensitivity = com.cna.apcore.config.CoreConfig.FATIGUE_SENSITIVITY;
         double fatiguePenalty = 1.0 / (1.0 + unitFatigue * sensitivity);
+        // 注意力态度乘数（基于感觉维度的关注度，从 DB 读取）
+        double attnMult = attentionAttitudeMultiplier;
 
-        return baseEnergy * tickFactor * continueWeight * fatiguePenalty;
+        return baseEnergy * tickFactor * continueWeight * fatiguePenalty * attnMult;
     }
 
     /** 累加注意力能量 */

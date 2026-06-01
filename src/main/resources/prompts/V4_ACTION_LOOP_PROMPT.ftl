@@ -37,6 +37,11 @@ ${selection_reason}
 CF=${cognitive_familiarity?string("0.000")} Scale=${scale} Accident=${accident_degree?string("0.000")} Pressure=${action_pressure?string("0.000")} CW=${continue_weight?string("0.000")}
 <#if cognitive_familiarity gt 0.6>很熟悉<#elseif cognitive_familiarity gt 0.3>有些熟悉<#elseif cognitive_familiarity gt 0.1>不太熟悉<#else>几乎全新</#if> | <#if accident_degree gt 0.2>有意料之外的信息<#elseif accident_degree gt -0.2>符合预期<#else>高度符合预期</#if> | <#if action_pressure gt 0.7>紧迫<#elseif action_pressure gt 0.3>正常<#else>从容</#if>
 
+<#-- ── 动机分析（DemandManager 六维认知感受 → 人话引导）── -->
+<#if demand_analysis?has_content>
+${demand_analysis}
+</#if>
+
 <#-- ── 关联感觉维度 ── -->
 <#if ue_concepts?size gt 0>
 ## 关联感觉维度

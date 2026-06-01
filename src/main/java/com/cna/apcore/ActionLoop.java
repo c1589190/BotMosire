@@ -16,7 +16,9 @@ import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
 import com.cna.apcore.action.ChatMessageActionDeveloper;
-import com.cna.apcore.action.FileInputWatcher;
+import com.cna.apcore.action.TickActionManager;
+import com.cna.apcore.demand.DemandManager;
+import com.cna.apcore.demand.DemandState;
 import com.cna.apcore.attention.AttentionManager;
 import com.cna.apcore.attention.FatigueManager;
 import com.cna.apcore.feeling.FeelingsManager;
@@ -102,8 +104,8 @@ public class ActionLoop implements MosireAPI {
     // ★ 语义疲劳管理器（让"刚处理过类似内容"的任务自然被压制）
     private final FatigueManager fatigueManager;
 
-    // ★ 文件输入监控器（自动发现工作区新增的 txt/md 文件）
-    private final FileInputWatcher fileWatcher;
+    // ★ TickAction 管理器（统一调度桌面巡视、认知自检等周期性检查）
+    private final TickActionManager tickActionManager;
 
     private ActionLoop() {
         this.preparePool = new CognitivePreparePool();
@@ -144,8 +146,9 @@ public class ActionLoop implements MosireAPI {
         this.preparePool.setHypergraph(FeelingHypergraphManager.getInstance());
         this.preparePool.setFeelingsDB(feelingsDB);
 
-        // ★ 文件输入监控器初始化
-        this.fileWatcher = new FileInputWatcher();
+        // ★ TickAction 管理器初始化（注册内置 tick action 并注入池引用）
+        this.tickActionManager = TickActionManager.getInstance();
+        this.tickActionManager.init(preparePool);
 
         // ── 自持工具箱初始化（不依赖 LivingLoop） ──
         initToolbox();
@@ -433,11 +436,10 @@ public class ActionLoop implements MosireAPI {
             // ── 步骤 0: 直接处理 Main.AgentInputTasksQueue（不再依赖 LivingLoop） ──
             drainInputQueue();
 
-            // ── 步骤 0.5: 桌面巡视（池空闲时定期扫描当前目录）──
-            List<CognitivePrepareUnit> fileUnits = fileWatcher.survey(preparePool.size());
-            for (CognitivePrepareUnit unit : fileUnits) {
-                preparePool.push(unit);
-                inputProcessedCount.incrementAndGet();
+            // ── 步骤 0.5: 系统级周期性检查（桌面巡视、认知自检等）──
+            int tickUnitsPushed = tickActionManager.tick(tick, preparePool.size());
+            if (tickUnitsPushed > 0) {
+                inputProcessedCount.addAndGet(tickUnitsPushed);
             }
 
             // ── 步骤 1: tickAll + 衰减/清理 ──
@@ -602,7 +604,15 @@ public class ActionLoop implements MosireAPI {
                 log.warn("[ActionLoop] 互斥感觉检测失败，跳过: {}", e.getMessage());
             }
 
-            Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock, mutualExclusions);
+            // ★ 动机分析（DemandManager — 六维认知感受计算 + 人话翻译）
+            int resonanceDissonant = resonance != null ? resonance.getDissonantCount() : 0;
+            int resonanceResonant = resonance != null ? resonance.getResonantCount() : 0;
+            DemandState demandState = DemandManager.getInstance().compute(
+                    action, mutualExclusions, resonanceDissonant, resonanceResonant, preparePool);
+            String demandAnalysis = DemandManager.getInstance().renderPrompt(demandState);
+
+            Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock,
+                    mutualExclusions, demandAnalysis);
             ArrayNode toolsArray = buildToolsArray();
 
             // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
@@ -945,8 +955,8 @@ public class ActionLoop implements MosireAPI {
             // ★ 违和感积累（委托 FeelingsManager）
             feelingsManager.accumulateDissonance(resonance, action.getActionText());
 
-            // ★ 语义疲劳记录：将本轮 action 的 embedding 写入近期历史
-            fatigueManager.record(actionTextEmb, tickCount.get());
+            // ★ 语义疲劳记录：将本轮 action 涉及的感觉维度写入近期历史
+            fatigueManager.record(action.getSourceUnit().getUeUnits(), tickCount.get());
 
             // ★ 被选中执行的 action，其匹配的感觉获得最大 boost（已确认重要）
             preparePool.boostMatchedFeelings(action.getSourceUnit(), CoreConfig.ATTENTION_BOOST_SELECTED);
@@ -1000,7 +1010,8 @@ public class ActionLoop implements MosireAPI {
      *    防止组合 prompt 超过 API 上下文窗口导致 502 错误。
      */
     private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock,
-                                                       List<Map<String, Object>> mutualExclusions) {
+                                                       List<Map<String, Object>> mutualExclusions,
+                                                       String demandAnalysis) {
         Map<String, Object> data = new HashMap<>();
 
         // ★ action_text 上限：防止超长聊天历史撑爆上下文窗口
@@ -1035,6 +1046,11 @@ public class ActionLoop implements MosireAPI {
         // 生成可读的选择原因
         String selectionReason = buildSelectionReason(src, action);
         data.put("selection_reason", selectionReason);
+
+        // ★ 动机分析（DemandManager 六维认知感受 → 人话翻译）
+        if (demandAnalysis != null && !demandAnalysis.isBlank()) {
+            data.put("demand_analysis", demandAnalysis);
+        }
 
         // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {

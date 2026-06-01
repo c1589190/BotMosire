@@ -110,6 +110,16 @@ public class FeelingResonanceAnalyzer {
         public boolean hasDissonance() {
             return groups.stream().anyMatch(ResonanceGroup::hasDissonance);
         }
+
+        /** 所有 group 中违和节点的总数 */
+        public int getDissonantCount() {
+            return groups.stream().mapToInt(g -> g.getDissonant().size()).sum();
+        }
+
+        /** 所有 group 中共鸣节点的总数 */
+        public int getResonantCount() {
+            return groups.stream().mapToInt(g -> g.getConsonant().size()).sum();
+        }
     }
 
     // =====================================================

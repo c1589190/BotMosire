@@ -199,9 +199,9 @@ public class CognitivePreparePool {
                 computeAttentionMultiplier(unit);
             }
 
-            // ★ 语义疲劳计算
+            // ★ 语义疲劳计算（基于感觉维度粒度，而非整文本 embedding）
             if (fatigueManager != null) {
-                unit.setUnitFatigue(fatigueManager.computeFatigue(emb, currentTick));
+                unit.setUnitFatigue(fatigueManager.computeFatigue(unit.getUeUnits(), currentTick));
             }
         }
 
@@ -235,7 +235,8 @@ public class CognitivePreparePool {
                 best.getUuid().toString(), bestScore,
                 best.getStimulateEnergy(), best.getAttentionEnergy(),
                 best.getUnderstandEnergy(), tickFactor, best.getContinueWeight(),
-                best.getUnitFatigue(), best.isEndogenous(),
+                best.getUnitFatigue(), best.getAttentionAttitudeMultiplier(),
+                best.isEndogenous(),
                 best.getText(), pool.size());
 
         // ★ 心智日志：排名前 5 的候选单元
@@ -257,7 +258,8 @@ public class CognitivePreparePool {
                         u.selectionScore(CoreConfig.BASELINE_THRESHOLD),
                         u.getStimulateEnergy(), u.getAttentionEnergy(),
                         u.getUnderstandEnergy(), uTick, u.getContinueWeight(),
-                        u.getUnitFatigue(), u.isEndogenous());
+                        u.getUnitFatigue(), u.getAttentionAttitudeMultiplier(),
+                        u.isEndogenous());
             }
             mlog.unitSelectionRanking(rankings);
         }
@@ -583,6 +585,29 @@ public class CognitivePreparePool {
         synchronized (poolLock) {
             for (CognitivePrepareUnit unit : pool) {
                 if (unit.getSourceIds() != null && unit.getSourceIds().contains(sourceId)) {
+                    return unit;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从池中移除匹配指定来源的第一个单元。
+     * 用于 tick action 替换：新 tick action 触发时，移除上一次的旧 tick action 单元。
+     *
+     * @param sourceId 来源标识符（如 "system:tick"）
+     * @return 被移除的单元，未找到返回 null
+     */
+    public CognitivePrepareUnit removeBySource(String sourceId) {
+        if (sourceId == null || sourceId.isBlank()) return null;
+        synchronized (poolLock) {
+            Iterator<CognitivePrepareUnit> it = pool.iterator();
+            while (it.hasNext()) {
+                CognitivePrepareUnit unit = it.next();
+                if (unit.getSourceIds() != null && unit.getSourceIds().contains(sourceId)) {
+                    it.remove();
+                    log.debug("[Pool] removeBySource: {} → {}", sourceId, unit);
                     return unit;
                 }
             }
