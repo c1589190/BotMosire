@@ -19,6 +19,9 @@ public class FeelingEntry {
     private final double[] embedding;
     private final int activationCount;
     private final double accuracy;
+    /** 注意力态度：[-1.0, 1.0]，正值=应多关注，负值=应少关注，0=中性 */
+    @Builder.Default
+    private final double attentionAttitude = 0.0;
 
     /**
      * 实际权重 = noveltyCurve × accuracy。
@@ -30,7 +33,7 @@ public class FeelingEntry {
 
     @Override
     public String toString() {
-        return String.format("Feeling{id=%d, concept='%s', act=%d, acc=%.3f, w=%.4f}",
-                id, concept, activationCount, accuracy, actualWeight());
+        return String.format("Feeling{id=%d, concept='%s', act=%d, acc=%.3f, attnA=%.2f, w=%.4f}",
+                id, concept, activationCount, accuracy, attentionAttitude, actualWeight());
     }
 }

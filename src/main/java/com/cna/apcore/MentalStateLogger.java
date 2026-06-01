@@ -294,6 +294,28 @@ public class MentalStateLogger {
         writeLine(ev);
     }
 
+    // ── 注意力态度 ──
+
+    /** 注意力态度被行为驱动调节 */
+    public void attentionAttitudeBoosted(int dimId, String concept, double delta) {
+        ObjectNode ev = mapper.createObjectNode();
+        ev.put("event", "ATTENTION_ATTITUDE_BOOSTED");
+        ev.put("dim_id", dimId);
+        ev.put("concept", concept != null ? concept : "");
+        ev.put("delta", round(delta, 4));
+        writeLine(ev);
+    }
+
+    /** 注意力态度乘数计算结果 */
+    public void attentionAttitudeMultiplier(String uuid, double multiplier, int matchedFeelings) {
+        ObjectNode ev = mapper.createObjectNode();
+        ev.put("event", "ATTENTION_ATTITUDE_MULTIPLIER");
+        ev.put("uuid", shortUuid(uuid));
+        ev.put("multiplier", round(multiplier, 4));
+        ev.put("matched_feelings", matchedFeelings);
+        writeLine(ev);
+    }
+
     // ── 池状态快照 ──
 
     /** 定期池状态快照（每 N tick） */

@@ -74,6 +74,9 @@ public class FeelingsDB {
         } catch (SQLException e) {
             log.warn("[FeelingsDB] 创建索引失败: {}", e.getMessage());
         }
+
+        // ★ 迁移：注意力态度列
+        CognitiveDB.ensureColumn("V4_Feelings", "attention_attitude", "REAL DEFAULT 0.0");
     }
 
     // ==========================================
@@ -131,7 +134,7 @@ public class FeelingsDB {
     /** 获取全量感觉维度 */
     public List<FeelingEntry> getAll() {
         List<FeelingEntry> result = new ArrayList<>();
-        String sql = "SELECT id, concept, embedding_json, activation_count, accuracy FROM V4_Feelings";
+        String sql = "SELECT id, concept, embedding_json, activation_count, accuracy, attention_attitude FROM V4_Feelings";
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -144,6 +147,7 @@ public class FeelingsDB {
                             .embedding(emb)
                             .activationCount(rs.getInt("activation_count"))
                             .accuracy(rs.getDouble("accuracy"))
+                            .attentionAttitude(rs.getDouble("attention_attitude"))
                             .build());
                 } catch (Exception e) {
                     log.warn("[FeelingsDB] 解析 id={} 的向量失败，跳过", rs.getInt("id"));
@@ -157,7 +161,7 @@ public class FeelingsDB {
 
     /** 按 ID 获取 */
     public FeelingEntry getById(int id) {
-        String sql = "SELECT id, concept, embedding_json, activation_count, accuracy FROM V4_Feelings WHERE id = ?";
+        String sql = "SELECT id, concept, embedding_json, activation_count, accuracy, attention_attitude FROM V4_Feelings WHERE id = ?";
         try (Connection conn = CognitiveDB.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
@@ -170,6 +174,7 @@ public class FeelingsDB {
                             .embedding(emb)
                             .activationCount(rs.getInt("activation_count"))
                             .accuracy(rs.getDouble("accuracy"))
+                            .attentionAttitude(rs.getDouble("attention_attitude"))
                             .build();
                 }
             }
@@ -242,6 +247,75 @@ public class FeelingsDB {
         // 线性衰减
         double progress = (double) (activationCount - 1) / (limit - 1);
         return 1.0 - progress * (1.0 - 1.0 / limit);
+    }
+
+    // ==========================================
+    // 注意力态度 CRUD
+    // ==========================================
+
+    /**
+     * 获取感觉维度的注意力态度。
+     * @return 态度值 [-1.0, 1.0]，不存在时返回 0.0
+     */
+    public double getAttentionAttitude(int dimId) {
+        String sql = "SELECT attention_attitude FROM V4_Feelings WHERE id = ?";
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, dimId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getDouble("attention_attitude");
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("[FeelingsDB] 获取注意力态度失败 dimId={}", dimId, e);
+        }
+        return 0.0;
+    }
+
+    /**
+     * 累加调节注意力态度（自动 clamp 到 [ATTITUDE_MIN, ATTITUDE_MAX]）。
+     * 正值 = 该感觉维度更值得关注，负值 = 更不值得关注。
+     */
+    public void adjustAttentionAttitude(int dimId, double delta) {
+        if (delta == 0.0) return;
+        double current = getAttentionAttitude(dimId);
+        double clamped = Math.max(CoreConfig.ATTENTION_ATTITUDE_MIN,
+                           Math.min(CoreConfig.ATTENTION_ATTITUDE_MAX, current + delta));
+        if (Math.abs(clamped - current) < 0.0001) return; // 未变化
+
+        String sql = "UPDATE V4_Feelings SET attention_attitude = ? WHERE id = ?";
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setDouble(1, clamped);
+            pstmt.setInt(2, dimId);
+            pstmt.executeUpdate();
+            if (Math.abs(delta) > 0.005) {
+                log.debug("[FeelingsDB] dimId={} attention_attitude: {:.3f} -> {:.3f} (delta={:+.3f})",
+                        dimId, current, clamped, delta);
+            }
+        } catch (SQLException e) {
+            log.error("[FeelingsDB] 调节注意力态度失败 dimId={}", dimId, e);
+        }
+    }
+
+    /**
+     * 对全量感觉维度做注意力态度自然衰减。
+     * 每 tick 调用一次，不活跃的维度缓慢回归中性。
+     */
+    public void decayAttentionAttitudes(double decayRate) {
+        if (decayRate <= 0.0) return;
+        String sql = "UPDATE V4_Feelings SET attention_attitude = attention_attitude * (1.0 - ?)";
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setDouble(1, decayRate);
+            int updated = pstmt.executeUpdate();
+            if (updated > 0) {
+                log.debug("[FeelingsDB] 注意力态度衰减: {} 个维度, rate={}", updated, decayRate);
+            }
+        } catch (SQLException e) {
+            log.warn("[FeelingsDB] 注意力态度衰减失败", e);
+        }
     }
 
     // ==========================================

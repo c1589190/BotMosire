@@ -25,6 +25,7 @@ import com.cna.apcore.model.CognitiveAction;
 import com.cna.apcore.model.CognitivePrepareUnit;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
+import com.cna.db.FeelingDimensionManager;
 import com.cna.db.FeelingHypergraphManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -136,6 +137,12 @@ public class ActionLoop implements MosireAPI {
         // ★ 语义疲劳管理器初始化 + 注入到准备池
         this.fatigueManager = new FatigueManager();
         this.preparePool.setFatigueManager(fatigueManager);
+
+        // ★ 注意力态度引擎依赖注入：让 preparePool 具备 eager UE 计算和态度管理能力
+        this.preparePool.setEmbedder(this::getEmbedding);
+        this.preparePool.setFdm(FeelingDimensionManager.getInstance());
+        this.preparePool.setHypergraph(FeelingHypergraphManager.getInstance());
+        this.preparePool.setFeelingsDB(feelingsDB);
 
         // ★ 文件输入监控器初始化
         this.fileWatcher = new FileInputWatcher();
@@ -443,6 +450,9 @@ public class ActionLoop implements MosireAPI {
             // ── 步骤 1.6: 疲劳衰减（清理过期历史）──
             fatigueManager.tick(tick);
 
+            // ── 步骤 1.7: 注意力态度自然衰减 ──
+            feelingsDB.decayAttentionAttitudes(CoreConfig.ATTENTION_ATTITUDE_DECAY);
+
             if (log.isDebugEnabled()) {
                 log.debug("[ActionLoop] ⏰ Tick #{} — 池大小: {}, 本轮清理: {}, 正在处理: {}",
                         tick, preparePool.size(), pruned, isProcessing.get());
@@ -527,6 +537,8 @@ public class ActionLoop implements MosireAPI {
                         + ", SE=" + String.format("%.3f", existing.getStimulateEnergy()));
             } else {
                 preparePool.push(unit);
+                // ★ 外部输入隐式驱动注意力态度
+                preparePool.boostMatchedFeelings(unit, CoreConfig.ATTENTION_BOOST_EXTERNAL);
                 int count = inputProcessedCount.incrementAndGet();
                 log.info("[ActionLoop] 📨 新准备单元入池 (总计: " + count + "): source=" + source
                         + ", textLen=" + unit.getText().length()
@@ -788,6 +800,9 @@ public class ActionLoop implements MosireAPI {
                                     // ★ 标记为内源任务：注意力系统会对其分配额外能量
                                     nextUnit.setEndogenous(true);
                                     preparePool.push(nextUnit);
+                                    // ★ 内源任务隐式驱动注意力态度
+                                    preparePool.boostMatchedFeelings(nextUnit,
+                                            CoreConfig.ATTENTION_BOOST_ENDOGENOUS * priority);
                                     createdCount++;
                                     log.info("[ActionLoop] 🔄 后续任务 #{}: SE=" + String.format("%.3f", se)
                                             + ", priority=" + String.format("%.2f", priority)
@@ -820,6 +835,9 @@ public class ActionLoop implements MosireAPI {
                         );
                         continued.setEndogenous(true);
                         preparePool.push(continued);
+                        // ★ 续命任务也隐式驱动注意力态度（权重减半）
+                        preparePool.boostMatchedFeelings(continued,
+                                CoreConfig.ATTENTION_BOOST_ENDOGENOUS * 0.5);
                         log.info("[ActionLoop] 🔄 本轮未结算但有 " + toolCallCount + " 个工具调用，自动续命任务入池: SE="
                                 + String.format("%.3f", continuedSE)
                                 + ", text=" + (action.getActionText().length() > 60
@@ -881,6 +899,9 @@ public class ActionLoop implements MosireAPI {
                         action.getSourceUnit().getStimulateEnergy() * 0.3
                 );
                 preparePool.push(toolSummary);
+                // ★ 工具执行结果也隐式驱动注意力态度
+                preparePool.boostMatchedFeelings(toolSummary,
+                        CoreConfig.ATTENTION_BOOST_SELECTED * 0.3);
                 log.info("[ActionLoop] 📦 工具执行汇总已注入准备池: " + toolResults.size() + " 条结果, SE=" + String.format("%.3f", action.getSourceUnit().getStimulateEnergy() * 0.3));
             }
 
@@ -926,6 +947,9 @@ public class ActionLoop implements MosireAPI {
 
             // ★ 语义疲劳记录：将本轮 action 的 embedding 写入近期历史
             fatigueManager.record(actionTextEmb, tickCount.get());
+
+            // ★ 被选中执行的 action，其匹配的感觉获得最大 boost（已确认重要）
+            preparePool.boostMatchedFeelings(action.getSourceUnit(), CoreConfig.ATTENTION_BOOST_SELECTED);
 
             // ── 通知控制台监听器 ──
             if (!consoleListeners.isEmpty()) {
@@ -1265,6 +1289,8 @@ public class ActionLoop implements MosireAPI {
         newCPU.setSE(currentAction.getSourceUnit().getStimulateEnergy() * 0.7);
 
         preparePool.push(newCPU);
+        // ★ 未完成事项也隐式驱动注意力态度
+        preparePool.boostMatchedFeelings(newCPU, CoreConfig.ATTENTION_BOOST_ENDOGENOUS);
         log.info("[ActionLoop] 📝 LLM 创建新准备单元: " + newCPU + " (继承SE=" + String.format("%.3f", newCPU.getStimulateEnergy()) + ")");
     }
 

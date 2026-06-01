@@ -179,6 +179,12 @@ public class AttentionManager {
             attr += 0.05;
         }
 
+        // ★ 注意力态度乘数：基于匹配感觉维度的长期态度偏好
+        double attnMultiplier = unit.getAttentionAttitudeMultiplier();
+        if (Math.abs(attnMultiplier - 1.0) > 0.001) {
+            attr *= attnMultiplier;
+        }
+
         return attr;
     }
 

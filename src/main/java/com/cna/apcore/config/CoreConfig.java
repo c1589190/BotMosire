@@ -126,6 +126,31 @@ public class CoreConfig {
     public static final double SINGLE_BOOST_CAP;
 
     // ==========================================
+    // 注意力态度参数（感觉驱动的注意力倍率引擎）
+    // ==========================================
+
+    /** 注意力态度缩放因子：multiplier = 1 + rawModulation * scale */
+    public static final double ATTENTION_ATTITUDE_SCALE;
+
+    /** 注意力态度取值范围上限 */
+    public static final double ATTENTION_ATTITUDE_MAX;
+
+    /** 注意力态度取值范围下限 */
+    public static final double ATTENTION_ATTITUDE_MIN;
+
+    /** 注意力态度每 tick 自然衰减系数，0=不衰减 */
+    public static final double ATTENTION_ATTITUDE_DECAY;
+
+    /** 外部输入触发感觉的态度增量 */
+    public static final double ATTENTION_BOOST_EXTERNAL;
+
+    /** LLM 内源任务触发感觉的态度增量基准 */
+    public static final double ATTENTION_BOOST_ENDOGENOUS;
+
+    /** 被选中执行的任务触发感觉的态度增量 */
+    public static final double ATTENTION_BOOST_SELECTED;
+
+    // ==========================================
     // 语义疲劳参数（FatigueManager）
     // ==========================================
 
@@ -189,6 +214,15 @@ public class CoreConfig {
         ATTENTION_REGEN_PER_TICK     = getDouble("v4.attention.regenPerTick", 5.0);
         ATTENTION_MAX_ATTEND_UNITS   = getInt("v4.attention.maxAttendUnits", 5);
         ATTENTION_DECAY_PER_TICK     = getDouble("v4.attention.decayPerTick", 0.05);
+
+        // —— 注意力态度 ——
+        ATTENTION_ATTITUDE_SCALE     = getDouble("v4.attention.attitudeScale", 0.5);
+        ATTENTION_ATTITUDE_MAX       = getDouble("v4.attention.attitudeMax", 1.0);
+        ATTENTION_ATTITUDE_MIN       = getDouble("v4.attention.attitudeMin", -1.0);
+        ATTENTION_ATTITUDE_DECAY     = getDouble("v4.attention.attitudeDecay", 0.002);
+        ATTENTION_BOOST_EXTERNAL     = getDouble("v4.attention.boostExternal", 0.02);
+        ATTENTION_BOOST_ENDOGENOUS   = getDouble("v4.attention.boostEndogenous", 0.05);
+        ATTENTION_BOOST_SELECTED      = getDouble("v4.attention.boostSelected", 0.08);
 
         // —— 语义疲劳 ——
         FATIGUE_MAX_HISTORY          = getInt("v4.fatigue.maxHistory", 30);

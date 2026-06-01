@@ -5,6 +5,7 @@ import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
 import com.cna.apcore.attention.FatigueManager;
+import com.cna.apcore.feeling.FeelingsManager;
 import com.cna.apcore.model.*;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.cna.config.ConfigsManager;
@@ -33,15 +34,65 @@ public class CognitivePreparePool {
     private final Object poolLock = new Object();
 
     private FatigueManager fatigueManager;     // 语义疲劳管理器（外部注入）
+    private Function<String, double[]> embedder;  // 文本→embedding 函数（外部注入）
+    private FeelingDimensionManager fdm;           // 旧版感觉维度管理器（外部注入）
+    private FeelingHypergraphManager hypergraph;   // 感觉超图管理器（外部注入）
+    private FeelingsDB feelingsDB;                 // V4 感觉数据库（外部注入）
 
     /** 注入语义疲劳管理器 */
     public void setFatigueManager(FatigueManager fm) {
         this.fatigueManager = fm;
     }
 
-    /** 推送一个准备单元到池中 */
+    /** 注入 embedder 函数（用于 eager UE 计算） */
+    public void setEmbedder(Function<String, double[]> embedder) {
+        this.embedder = embedder;
+    }
+
+    /** 注入感觉维度管理器 */
+    public void setFdm(FeelingDimensionManager fdm) {
+        this.fdm = fdm;
+    }
+
+    /** 注入感觉超图管理器 */
+    public void setHypergraph(FeelingHypergraphManager h) {
+        this.hypergraph = h;
+    }
+
+    /** 注入 V4 感觉数据库 */
+    public void setFeelingsDB(FeelingsDB db) {
+        this.feelingsDB = db;
+    }
+
+    /** 推送一个准备单元到池中。会在 poolLock 外部做 eager embedding + UE 计算。 */
     public void push(CognitivePrepareUnit unit) {
         if (unit == null) return;
+
+        // ★ Eager embedding 计算（poolLock 外部，避免阻塞）
+        if (embedder != null && unit.getCachedEmbedding() == null) {
+            try {
+                double[] emb = embedder.apply(unit.getText());
+                if (emb != null && emb.length > 0) {
+                    unit.setCachedEmbedding(emb);
+                }
+            } catch (Exception e) {
+                log.warn("[Pool] push() embedding 计算失败: {}，将在 select 时重试", e.getMessage());
+            }
+        }
+
+        // ★ Eager UE 计算（poolLock 外部，利用刚算好的 embedding）
+        if (unit.getCachedEmbedding() != null
+                && (unit.getUeUnits() == null || unit.getUeUnits().isEmpty())
+                && fdm != null && feelingsDB != null) {
+            try {
+                computeUE(unit, unit.getCachedEmbedding(), fdm, hypergraph, feelingsDB);
+                // UE 算完后立即计算注意力态度乘数
+                computeAttentionMultiplier(unit);
+            } catch (Exception e) {
+                log.warn("[Pool] push() UE 计算失败: {}，将在 select 时重试", e.getMessage());
+            }
+        }
+
         synchronized (poolLock) {
             // 容量控制：超出时移除最旧的（tick 最大的）
             while (pool.size() >= CoreConfig.MAX_POOL_SIZE) {
@@ -54,7 +105,8 @@ public class CognitivePreparePool {
                 }
             }
             pool.offerFirst(unit);
-            log.debug("[Pool] 推送新单元: {} (池大小: {})", unit, pool.size());
+            log.debug("[Pool] 推送新单元: {} (池大小: {}, attnM={})", unit, pool.size(),
+                    String.format("%.2f", unit.getAttentionAttitudeMultiplier()));
         }
     }
 
@@ -125,14 +177,26 @@ public class CognitivePreparePool {
             units = new ArrayList<>(pool);
         }
 
-        // ★ 计算每个单元的 embedding（仅一次）、UE 和语义疲劳
-        FeelingDimensionManager fdm = FeelingDimensionManager.getInstance();
+        // ★ 计算每个单元的 embedding（优先用缓存）、UE 和语义疲劳
+        FeelingDimensionManager fdm = this.fdm != null ? this.fdm : FeelingDimensionManager.getInstance();
+        FeelingsDB v4feelings = this.feelingsDB != null ? this.feelingsDB : feelingsDB;
+        FeelingHypergraphManager hg = this.hypergraph != null ? this.hypergraph : hypergraph;
         for (CognitivePrepareUnit unit : units) {
-            double[] emb = embedder.apply(unit.getText());
+            // 优先使用 push 时预计算的 embedding，避免重复 LLM 调用
+            double[] emb = unit.getCachedEmbedding();
+            if (emb == null) {
+                emb = embedder.apply(unit.getText());
+                unit.setCachedEmbedding(emb);
+            }
 
-            // UE 计算（传入预计算 embedding 避免重复计算）
+            // UE 计算：若 push 时已算则跳过
             if (unit.getUeUnits() == null || unit.getUeUnits().isEmpty()) {
-                computeUE(unit, emb, fdm, hypergraph, feelingsDB);
+                computeUE(unit, emb, fdm, hg, v4feelings);
+                // 补算注意力态度乘数（push 时可能因 UE 未算而没算）
+                computeAttentionMultiplier(unit);
+            } else if (unit.getFeelingMatchStrengths() == null || unit.getFeelingMatchStrengths().isEmpty()) {
+                // UE 已算但态度乘数未算
+                computeAttentionMultiplier(unit);
             }
 
             // ★ 语义疲劳计算
@@ -353,6 +417,95 @@ public class CognitivePreparePool {
 
         unit.setUE(totalUE, allUEUnits);
         log.debug("[Pool] UE 计算完成: " + unit + " UE=" + String.format("%.3f", totalUE) + ", UEUnits=" + allUEUnits.size());
+    }
+
+    /**
+     * 基于单元已匹配的感觉维度，计算注意力态度乘数。
+     *
+     * 对每个 UEUnit 取对应感觉维度的 attention_attitude，
+     * 按匹配强度 (noveltyWeight × layerWeight) 加权求和，
+     * 经全局缩放因子转换后得到乘数。
+     *
+     * multiplier = clamp(1.0 + rawModulation * ATTITUDE_SCALE, 0.3, 2.0)
+     */
+    private void computeAttentionMultiplier(CognitivePrepareUnit unit) {
+        List<UEUnit> ueUnits = unit.getUeUnits();
+        if (ueUnits == null || ueUnits.isEmpty()) {
+            unit.setAttentionAttitudeMultiplier(1.0);
+            return;
+        }
+
+        double totalUE = unit.getUnderstandEnergy();
+        if (totalUE <= 0.0) {
+            unit.setAttentionAttitudeMultiplier(1.0);
+            return;
+        }
+
+        double rawModulation = 0.0;
+        Map<Integer, Double> strengths = new HashMap<>();
+
+        for (UEUnit u : ueUnits) {
+            if (u.getDimId() <= 0) continue; // 跳过合成节点
+            double contribution = u.getNoveltyWeight() * u.getLayerWeight();
+            double matchStrength = contribution / totalUE;
+            double attitude = feelingsDB != null ? feelingsDB.getAttentionAttitude(u.getDimId()) : 0.0;
+            rawModulation += matchStrength * attitude;
+            strengths.put(u.getDimId(), matchStrength);
+        }
+
+        unit.setFeelingMatchStrengths(strengths);
+
+        double scale = CoreConfig.ATTENTION_ATTITUDE_SCALE;
+        double multiplier = 1.0 + rawModulation * scale;
+        unit.setAttentionAttitudeMultiplier(multiplier);
+
+        if (Math.abs(multiplier - 1.0) > 0.01) {
+            log.debug("[Pool] 注意力态度乘数: {:.2f} = 1 + ({:.3f} * {:.2f})",
+                    multiplier, rawModulation, scale);
+        }
+
+        // ★ 心智日志
+        MentalStateLogger.getInstance().attentionAttitudeMultiplier(
+                unit.getUuid().toString(), multiplier, strengths.size());
+    }
+
+    /**
+     * ★ 行为驱动态度变化：对单元匹配的每个感觉维度，按匹配强度分配 boost。
+     *
+     * 这是注意力态度系统的核心闭环——不是让 LLM 显式指定关注什么，
+     * 而是让 Agent 的行为（next_actions、外部输入、被选中的任务）自然驱动态度变化。
+     *
+     * @param unit      已计算 UE 的准备单元
+     * @param baseBoost 基准增量（由调用方按事件类型指定）
+     */
+    public void boostMatchedFeelings(CognitivePrepareUnit unit, double baseBoost) {
+        if (unit == null || baseBoost == 0.0 || feelingsDB == null) return;
+
+        List<UEUnit> ueUnits = unit.getUeUnits();
+        if (ueUnits == null || ueUnits.isEmpty()) return;
+
+        double totalUE = unit.getUnderstandEnergy();
+        if (totalUE <= 0.0) return;
+
+        int boosted = 0;
+        for (UEUnit u : ueUnits) {
+            if (u.getDimId() <= 0) continue;
+            double contribution = u.getNoveltyWeight() * u.getLayerWeight();
+            double matchStrength = contribution / totalUE;
+            double delta = baseBoost * matchStrength;
+            if (Math.abs(delta) < 0.001) continue;
+
+            feelingsDB.adjustAttentionAttitude(u.getDimId(), delta);
+            boosted++;
+
+            MentalStateLogger.getInstance().attentionAttitudeBoosted(
+                    u.getDimId(), u.getConcept(), delta);
+        }
+
+        if (boosted > 0) {
+            log.debug("[Pool] boostMatchedFeelings: {} 个感觉维度各获得 boost={}, 共 {} 个",
+                    boosted, String.format("%.3f", baseBoost), ueUnits.size());
+        }
     }
 
     /** 获取 top-N UEUnit 的 dimId 列表 */

@@ -3,7 +3,9 @@ package com.cna.apcore.model;
 import lombok.Getter;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -28,6 +30,9 @@ public class CognitivePrepareUnit {
     private double attentionEnergy;           // 注意力赋能累积（内源能量，与 SE 加算）
     private boolean endogenous;               // 是否来自 LLM 自生成（next_actions 创建）
     private double unitFatigue;               // 语义疲劳值 [0,1]，由 FatigueManager 在选前设置
+    private double[] cachedEmbedding;         // 预计算的文本 embedding（push 时计算，避免 select 时重复）
+    private Map<Integer, Double> feelingMatchStrengths; // 每个感觉维度的归一化匹配强度 dimId→strength
+    private double attentionAttitudeMultiplier; // 注意力态度乘数，默认 1.0（中性），>1=应多关注，<1=应少关注
 
     private CognitivePrepareUnit(String text, List<String> sourceIds, double stimulateEnergy) {
         this.uuid = UUID.randomUUID();
@@ -41,6 +46,9 @@ public class CognitivePrepareUnit {
         this.attentionEnergy = 0.0;
         this.endogenous = false;
         this.unitFatigue = 0.0;
+        this.cachedEmbedding = null;
+        this.feelingMatchStrengths = new HashMap<>();
+        this.attentionAttitudeMultiplier = 1.0;
         this.createdAtMs = System.currentTimeMillis();
     }
 
@@ -101,6 +109,9 @@ public class CognitivePrepareUnit {
     public void clearUE() {
         this.understandEnergy = 0.0;
         this.ueUnits = new ArrayList<>();
+        this.cachedEmbedding = null;
+        this.feelingMatchStrengths = new HashMap<>();
+        this.attentionAttitudeMultiplier = 1.0;
     }
 
     /**
@@ -157,6 +168,38 @@ public class CognitivePrepareUnit {
     /** 获取语义疲劳值 */
     public double getUnitFatigue() {
         return unitFatigue;
+    }
+
+    // ── 注意力态度乘数相关 ──
+
+    /** 获取预计算的文本 embedding（push 时计算，select 时复用） */
+    public double[] getCachedEmbedding() {
+        return cachedEmbedding;
+    }
+
+    /** 设置预计算的文本 embedding */
+    public void setCachedEmbedding(double[] emb) {
+        this.cachedEmbedding = emb;
+    }
+
+    /** 获取每个感觉维度的归一化匹配强度 */
+    public Map<Integer, Double> getFeelingMatchStrengths() {
+        return feelingMatchStrengths;
+    }
+
+    /** 设置感觉匹配强度 */
+    public void setFeelingMatchStrengths(Map<Integer, Double> strengths) {
+        this.feelingMatchStrengths = strengths != null ? new HashMap<>(strengths) : new HashMap<>();
+    }
+
+    /** 获取注意力态度乘数 */
+    public double getAttentionAttitudeMultiplier() {
+        return attentionAttitudeMultiplier;
+    }
+
+    /** 设置注意力态度乘数（自动 clamp 到安全范围） */
+    public void setAttentionAttitudeMultiplier(double multiplier) {
+        this.attentionAttitudeMultiplier = Math.max(0.2, Math.min(5.0, multiplier));
     }
 
     @Override
