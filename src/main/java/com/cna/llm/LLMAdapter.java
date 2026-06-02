@@ -25,6 +25,8 @@ public class LLMAdapter {
     private final OkHttpClient client;
     private final LLMConfig config;
 
+    public LLMConfig getConfig() { return config; }
+
     public LLMAdapter(LLMConfig config) {
         this.config = config;
         // 从 config 读 per-model timeout，避免 Gatekeeper 慢响应卡住整个线程池
@@ -732,6 +734,44 @@ public class LLMAdapter {
         }
 
         return result;
+    }
+
+    /**
+     * 智能截断用户 prompt — 保留头尾，从中间切除，保证完整关闭。
+     *
+     * <p>策略：取前 60% + 后 40%，插入截断标记。
+     * 这比简单截尾要好：LLM 仍能看到最开头的上下文和最后面的任务说明。
+     *
+     * @param text     原始 prompt
+     * @param maxChars 最大字符数（来自 LLMConfig.maxPromptChars）
+     * @return 截断后的 prompt，不超标则原样返回
+     */
+    public String truncatePrompt(String text, int maxChars) {
+        if (text == null || text.length() <= maxChars) return text;
+
+        int headLen = (int) (maxChars * 0.6);
+        int tailLen = (int) (maxChars * 0.4);
+        String marker = String.format(
+                "\n\n[... 原始 prompt %d 字符 → 截断为 %d 字符，中间 %d 字符已省略 ...]\n\n",
+                text.length(), maxChars, text.length() - maxChars);
+
+        int actualHead = headLen;
+        int actualTail = tailLen - marker.length();
+        if (actualTail <= 0) {
+            actualHead = maxChars - 100;
+            actualTail = 100;
+        }
+
+        String head = text.substring(0, actualHead);
+        // 尾部从最近的换行开始，避免截断中间行
+        String tail = text.substring(text.length() - actualTail);
+        int firstNewline = tail.indexOf('\n');
+        if (firstNewline > 0 && firstNewline < 50) {
+            tail = tail.substring(firstNewline);
+        }
+
+        log.warn("[LLMAdapter] ⚠️ Prompt 超长 ({} → {} chars)，已智能截断", text.length(), maxChars);
+        return head + marker + tail;
     }
 
     private ObjectNode normalizeToolCall(JsonNode call) {

@@ -2,9 +2,18 @@
 <#-- 上下文：LLM 接收到一个 CognitiveAction，需要执行工具、刺激感觉维度、存储经验 -->
 
 【当前时间】${now_time}
+来源: ${source_ids?join(", ")}<#if source_ids?size == 0>（未知）</#if>
 
 【动作文本（ActionText）】
 ${action_text}
+
+【你为什么被选中执行本轮动作】
+${selection_reason}
+
+<#if demand_analysis?has_content>
+【动机状态】
+${demand_analysis}
+</#if>
 
 【认知状态 — 6 个情绪维度】
 认知熟悉度 (CognitiveFamiliarity): ${cognitive_familiarity}
@@ -12,15 +21,28 @@ ${action_text}
 认知规模 (Scale): ${scale}
   说明：根据关联的感觉节点数量决定，影响检索多少条先验经验。
 意外度 (AccidentDegree): ${accident_degree}
-  说明：UnderstandingEnergy - CognitiveFamiliarity，正值表示"意料之外"，负值表示"意料之中"。
+  说明：UnderstandingEnergy - CognitiveFamiliarity，正值表示"意料之外"。
 行动压力 (ActionPressure): ${action_pressure}
   说明：当前为 TODO，暂固定为 0。
 持续权重 (ContinueWeight): ${continue_weight}
-  说明：初始 1，每 tick 衰减。LLM 可以通过 continue_weight_boosts 给池中感兴趣的单元加权。
+  说明：初始 1，每 tick 衰减。LLM 可通过 continue_weight_boosts 给池中感兴趣的单元加权。
 
 【关联的感觉维度】
 概念: ${ue_concepts?join(", ")}<#if ue_concepts?size == 0>（无）</#if>
 维度ID: ${ue_dim_ids?join(", ")}<#if ue_dim_ids?size == 0>（无）</#if>
+
+<#if mutual_exclusions?has_content>
+【互斥感觉维度 — 与当前场景语义相斥的已有概念】
+以下是你认知体系中已建立、但与当前输入高度不匹配的感觉概念，
+可能指向矛盾情境、认知盲区或情境转变：
+<#list mutual_exclusions as m>
+  · 【${m.concept}】 (dim_id=${m.dim_id}, 相似度=${m.similarity}, 已激活${m.activation_count}次)
+</#list>
+</#if>
+
+<#if feeling_resonance?has_content>
+${feeling_resonance}
+</#if>
 
 【先验经验（从经验库按感觉维度检索）】
 <#if action_predicts_text?has_content>
@@ -29,12 +51,8 @@ ${action_predicts_text}
 （无相关先验经验）
 </#if>
 
-<#if expectations_text?has_content>
-${expectations_text}
-</#if>
-
-<#if methodology_text?has_content>
-${methodology_text}
+<#if related_experiences_text?has_content>
+${related_experiences_text}
 </#if>
 
 ${pool_summary}
@@ -90,7 +108,9 @@ ${pool_summary}
      "score": 1
    }]
    ```
-   你的打分会被用于实时维护经验库的 HelpfulDegree，并传播到关联感觉维度的准确度。
+   你的打分会被用于实时更新经验库的 helpful_degree 和 score_count。
+   被验证次数越多的经验在后续检索中越靠前 — 不需要打负分来淘汰，
+   常被打分的自然上浮，不打分的自然下沉。
 
 6. **continue_weight_boosts**: 给准备池中的单元加权（数组）
    你可以给【认知准备池】中感兴趣的单元增加 ContinueWeight，让它们更早被选中。

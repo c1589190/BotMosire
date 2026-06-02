@@ -114,7 +114,14 @@ public class LLManager {
             Map<String, Object> dataModel,
             ArrayNode tools) {
         String userPrompt = render(userTemplate, dataModel);
-        log.info("[LLManager 无状态] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
+        // ★ 智能截断：由 LLMAdapter 根据模型配置的 maxPromptChars 处理超长 prompt
+        int maxChars = llm.getConfig().getMaxPromptChars();
+        if (maxChars > 0 && userPrompt.length() > maxChars) {
+            userPrompt = llm.truncatePrompt(userPrompt, maxChars);
+        }
+        log.info("[LLManager 无状态] Prompt 渲染完毕, 长度: {} chars{}",
+                userPrompt.length(),
+                userPrompt.length() > maxChars ? " (已截断)" : "");
 
         ArrayNode messages = jsonMapper.createArrayNode();
         ObjectNode sysMsg = messages.addObject();
@@ -303,7 +310,13 @@ public class LLManager {
                 dataModel.put("now_time", Utils.getNowPrecise());
 
                 String userPrompt = render(userTemplate, dataModel);
-                log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
+                int maxChars = llm.getConfig().getMaxPromptChars();
+                if (maxChars > 0 && userPrompt.length() > maxChars) {
+                    userPrompt = llm.truncatePrompt(userPrompt, maxChars);
+                }
+                log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars{}",
+                        userPrompt.length(),
+                        userPrompt.length() > maxChars ? " (已截断)" : "");
 
                 ArrayNode workingMessages = GLOBAL_CACHE.messages.deepCopy();
                 ObjectNode userMsgNode = jsonMapper.createObjectNode();

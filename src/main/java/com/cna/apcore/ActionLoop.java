@@ -88,8 +88,8 @@ public class ActionLoop implements MosireAPI {
     //   组合后超过 API 上下文窗口导致 502
     /** action_text 最大字符数（超长聊天历史截断），约 3000 tokens */
     private static final int MAX_ACTION_TEXT_CHARS = 8000;
-    /** pool_summary 最大单元数（防止准备池摘要膨胀） */
-    private static final int MAX_POOL_SUMMARY_UNITS = 20;
+    /** pool_summary 最大单元数（200 条 ≈ ~10K chars，由 Adapter 层的 maxPromptChars 兜底截断） */
+    private static final int MAX_POOL_SUMMARY_UNITS = 200;
     /** action_predicts_text 最大经验条数 */
     private static final int MAX_PREDICT_EXPERIENCES = 15;
 
@@ -462,14 +462,6 @@ public class ActionLoop implements MosireAPI {
             // ── 步骤 1.7: 注意力态度自然衰减 ──
             feelingsDB.decayAttentionAttitudes(CoreConfig.ATTENTION_ATTITUDE_DECAY);
 
-            // ── 步骤 1.8: 联想引擎方法挖掘（空闲时触发，避免与 action 处理竞争）──
-            if (associationEngine.hasPendingMine() && !isProcessing.get()
-                    && preparePool.size() <= 5) {
-                int mined = associationEngine.mineMethods(experiencesDB, feelingsDB, this::getEmbedding);
-                if (mined > 0) {
-                    log.info("[ActionLoop] ⛏️ 空闲时方法挖掘完成: {} 个新方法", mined);
-                }
-            }
 
             if (log.isDebugEnabled()) {
                 log.debug("[ActionLoop] ⏰ Tick #{} — 池大小: {}, 本轮清理: {}, 正在处理: {}",
@@ -695,6 +687,7 @@ public class ActionLoop implements MosireAPI {
             JsonNode experienceScoringNode = null;
             JsonNode newPrepareUnitNode = null;
             JsonNode boostNode = null;
+            JsonNode expAnnotationsNode = null;
 
             if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
                 // —— 分类：finish_action vs 其他工具 ——
@@ -713,9 +706,11 @@ public class ActionLoop implements MosireAPI {
                             experienceScoringNode = finishActionArgs.path("experience_scoring");
                             newPrepareUnitNode = finishActionArgs.path("new_prepare_unit");
                             boostNode = finishActionArgs.path("continue_weight_boosts");
+                            expAnnotationsNode = finishActionArgs.path("experience_annotations");
                             int scoringCount = experienceScoringNode.isArray() ? experienceScoringNode.size() : 0;
-                            log.info("[ActionLoop] 📋 检测到 finish_action — thoughts={}chars, scoring={}条, feelings={}, boosts={}, newUnit={}",
-                                    thoughts.length(), scoringCount,
+                            int annotCount = expAnnotationsNode != null && expAnnotationsNode.isArray() ? expAnnotationsNode.size() : 0;
+                            log.info("[ActionLoop] 📋 检测到 finish_action — thoughts={}chars, scoring={}条, annotations={}条, feelings={}, boosts={}, newUnit={}",
+                                    thoughts.length(), scoringCount, annotCount,
                                     stimulatedFeelingsNode.isArray() ? stimulatedFeelingsNode.size() : 0,
                                     boostNode.isArray() ? boostNode.size() : 0,
                                     !newPrepareUnitNode.isNull() && !newPrepareUnitNode.isMissingNode());
@@ -953,16 +948,26 @@ public class ActionLoop implements MosireAPI {
                     ? newPrepareUnitNode.path("text").asText() : null;
             int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText);
 
-            // ★ 联想引擎：标记新经验（累积到阈值后触发方法挖掘）
-            if (expId > 0) {
-                associationEngine.markNewExperience();
-            }
-
             // 7. 应用经验打分（委托 FeelingsManager）
             if (experienceScoringNode != null) {
                 feelingsManager.applyExperienceScoring(experienceScoringNode);
-                // ★ 联想引擎：打分闭环 — 经验打分传播到关联方法的成功率
-                associationEngine.updateMethodSuccessFromScoring(experienceScoringNode, experiencesDB);
+            }
+
+            // 7.5. 处理经验追加评价
+            if (expAnnotationsNode != null && expAnnotationsNode.isArray()) {
+                int annotated = 0;
+                for (JsonNode ann : expAnnotationsNode) {
+                    int annExpId = ann.path("experience_id").asInt(-1);
+                    String annText = ann.path("annotation").asText("");
+                    if (annExpId >= 0 && !annText.isBlank()) {
+                        if (experiencesDB.appendAnnotation(annExpId, annText)) {
+                            annotated++;
+                        }
+                    }
+                }
+                if (annotated > 0) {
+                    log.info("[ActionLoop] 📝 追加评价: {} 条经验已更新", annotated);
+                }
             }
 
             // 8. 处理新的准备单元
@@ -1075,10 +1080,9 @@ public class ActionLoop implements MosireAPI {
             data.put("demand_analysis", demandAnalysis);
         }
 
-        // ★ 联想引擎：预期 + 方法论（感觉维度集合运算 → 结构化的经验抽象）
-        Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, feelingsDB);
-        data.put("expectations_text", associationBlock.getOrDefault("expectations", ""));
-        data.put("methodology_text", associationBlock.getOrDefault("methodology", ""));
+        // ★ 联想引擎：按感觉维度检索相关过往经验
+        Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, experiencesDB, feelingsDB);
+        data.put("related_experiences_text", associationBlock.getOrDefault("related_experiences", ""));
 
         // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {

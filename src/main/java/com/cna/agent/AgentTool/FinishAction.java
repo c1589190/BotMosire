@@ -136,6 +136,23 @@ public class FinishAction implements DefaultAgentToolUnit {
         ObjectNode nuSourcesItems = nuSources.putObject("items");
         nuSourcesItems.put("type", "string");
 
+        // experience_annotations: 可选，对已有经验追加评价
+        ObjectNode expAnnotations = properties.putObject("experience_annotations");
+        expAnnotations.put("type", "array");
+        expAnnotations.put("description",
+                "（可选）对已有经验的追加评价。如果本轮让你对某条历史经验有了新的认识，"
+                + "可以在此追加评注。这些评注会追加到对应经验的条目中，影响后续检索。"
+                + "无需时传空数组 []。");
+        ObjectNode eaItems = expAnnotations.putObject("items");
+        eaItems.put("type", "object");
+        ObjectNode eaProps = eaItems.putObject("properties");
+        ObjectNode eaExpId = eaProps.putObject("experience_id");
+        eaExpId.put("type", "integer");
+        eaExpId.put("description", "要追加评价的经验 ID");
+        ObjectNode eaAnnotation = eaProps.putObject("annotation");
+        eaAnnotation.put("type", "string");
+        eaAnnotation.put("description", "追加的评价文本，说明你为什么这样评价它、它现在是否仍然适用等。简洁即可，1-2句话。");
+
         // continue_weight_boosts: 注意力调节
         ObjectNode boosts = properties.putObject("continue_weight_boosts");
         boosts.put("type", "array");

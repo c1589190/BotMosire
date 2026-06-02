@@ -74,6 +74,17 @@ public class ExperiencesDB {
         } catch (SQLException e) {
             log.warn("[ExperiencesDB] 创建索引失败: {}", e.getMessage());
         }
+
+        // 迁移：追加 score_count 列（累积正面评分次数）
+        CognitiveDB.ensureColumn("V4_Experiences", "score_count", "INTEGER DEFAULT 0");
+        CognitiveDB.ensureColumn("V4_Experiences", "last_scored_at", "TIMESTAMP");
+
+        try (Connection conn = CognitiveDB.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_v4_exp_score_count ON V4_Experiences(score_count)");
+        } catch (SQLException e) {
+            log.warn("[ExperiencesDB] 创建 score_count 索引失败: {}", e.getMessage());
+        }
     }
 
     // ==========================================
@@ -85,14 +96,16 @@ public class ExperiencesDB {
         public final List<Integer> feelingDimIds;
         public final List<String> expTexts;
         public final double helpfulDegree;
+        public final int scoreCount;
         public final double[] embedding;
 
         public ExperienceEntry(int id, List<Integer> feelingDimIds, List<String> expTexts,
-                               double helpfulDegree, double[] embedding) {
+                               double helpfulDegree, int scoreCount, double[] embedding) {
             this.id = id;
             this.feelingDimIds = feelingDimIds != null ? feelingDimIds : List.of();
             this.expTexts = expTexts != null ? expTexts : List.of();
             this.helpfulDegree = helpfulDegree;
+            this.scoreCount = scoreCount;
             this.embedding = embedding;
         }
     }
@@ -174,7 +187,7 @@ public class ExperiencesDB {
 
     /** 按 ID 获取 */
     public ExperienceEntry getById(int id) {
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, embedding_json FROM V4_Experiences WHERE id = ?";
+        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, embedding_json FROM V4_Experiences WHERE id = ?";
         try (Connection conn = CognitiveDB.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
@@ -273,16 +286,117 @@ public class ExperiencesDB {
         return result;
     }
 
-    /** 更新 HelpfulDegree */
+    /**
+     * 为已有经验追加一条评价文本。
+     * 读取当前 exp_texts JSON 数组，追加 annotation，写回。
+     *
+     * @param expId      经验 ID
+     * @param annotation 追加的评价文本（会加上"追评:"前缀）
+     * @return true 成功，false 失败
+     */
+    public boolean appendAnnotation(int expId, String annotation) {
+        if (annotation == null || annotation.isBlank()) return false;
+
+        // 读取当前 exp_texts
+        String selectSql = "SELECT exp_texts FROM V4_Experiences WHERE id = ?";
+        String currentJson;
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(selectSql)) {
+            pstmt.setInt(1, expId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    log.warn("[ExperiencesDB] 追加评价失败：未找到经验 id={}", expId);
+                    return false;
+                }
+                currentJson = rs.getString("exp_texts");
+            }
+        } catch (SQLException e) {
+            log.error("[ExperiencesDB] 追加评价查询失败 id={}", expId, e);
+            return false;
+        }
+
+        // 解析并追加
+        try {
+            List<String> texts = CognitiveDB.getMapper().readValue(
+                    currentJson, new TypeReference<List<String>>() {});
+            texts.add("追评: " + annotation.trim());
+            String newJson = CognitiveDB.getMapper().writeValueAsString(texts);
+
+            String updateSql = "UPDATE V4_Experiences SET exp_texts = ? WHERE id = ?";
+            try (Connection conn = CognitiveDB.getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                pstmt.setString(1, newJson);
+                pstmt.setInt(2, expId);
+                pstmt.executeUpdate();
+                log.info("[ExperiencesDB] 经验 id={} 已追加评价: \"{}\"", expId,
+                        annotation.length() > 50 ? annotation.substring(0, 50) + "..." : annotation);
+                return true;
+            }
+        } catch (Exception e) {
+            log.error("[ExperiencesDB] 追加评价序列化失败 id={}", expId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 累积更新 HelpfulDegree — 不再直接覆写，而是加权平均。
+     *
+     * <p>新逻辑：
+     * <ul>
+     *   <li>读到当前的 helpful_degree 和 score_count</li>
+     *   <li>score &gt; 0：score_count += 1, helpful = (helpful * oldCount + 1.0) / newCount</li>
+     *   <li>score == 0：不改变 score_count，helpful 不变（中性分不计入）</li>
+     *   <li>score &lt; 0：score_count 不变，但 helpful 被稀释 (相当于 +0 的一次评估)</li>
+     * </ul>
+     *
+     * <p>效果：被正面评分次数越多的经验，helpful 越趋向 1.0 且 score_count 越高。
+     * 未被评分或很少被评分的经验自然在检索中排到后面。
+     */
     public void updateHelpfulDegree(int id, double score) {
         double clamped = Math.max(-1.0, Math.min(1.0, score));
-        String sql = "UPDATE V4_Experiences SET helpful_degree = ? WHERE id = ?";
+        if (clamped == 0.0) return; // 中性分不改变任何状态
+
+        // 读取当前值
+        String selectSql = "SELECT helpful_degree, score_count FROM V4_Experiences WHERE id = ?";
+        double oldHelpful;
+        int oldCount;
         try (Connection conn = CognitiveDB.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setDouble(1, clamped);
-            pstmt.setInt(2, id);
+             PreparedStatement pstmt = conn.prepareStatement(selectSql)) {
+            pstmt.setInt(1, id);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    log.warn("[ExperiencesDB] updateHelpfulDegree: 经验 id={} 不存在", id);
+                    return;
+                }
+                oldHelpful = rs.getDouble("helpful_degree");
+                oldCount = Math.max(0, rs.getInt("score_count"));
+            }
+        } catch (SQLException e) {
+            log.error("[ExperiencesDB] updateHelpfulDegree 查询失败 id={}", id, e);
+            return;
+        }
+
+        int newCount = oldCount + (clamped > 0 ? 1 : 0);
+        // 正分：累积平均向上；负分：稀释但不减计数
+        double newHelpful;
+        if (clamped > 0) {
+            newHelpful = (oldHelpful * oldCount + 1.0) / newCount;
+        } else {
+            // 负分：等效于加了一次 0，稀释 helpful
+            int evalCount = oldCount + 1;
+            newHelpful = (oldHelpful * oldCount) / evalCount;
+        }
+
+        String updateSql = "UPDATE V4_Experiences SET helpful_degree = ?, score_count = ?, last_scored_at = CURRENT_TIMESTAMP WHERE id = ?";
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+            pstmt.setDouble(1, newHelpful);
+            pstmt.setInt(2, newCount);
+            pstmt.setInt(3, id);
             pstmt.executeUpdate();
-            log.info("[ExperiencesDB] id={} HelpfulDegree 更新为 {}", id, clamped);
+            log.info("[ExperiencesDB] id={} helpful={:.3f} ({}→{}), score_count={}",
+                    id, newHelpful, String.format("%.3f", oldHelpful), String.format("%.3f", newHelpful),
+                    newCount);
         } catch (SQLException e) {
             log.error("[ExperiencesDB] 更新 HelpfulDegree 失败 id={}", id, e);
         }
@@ -291,7 +405,7 @@ public class ExperiencesDB {
     /** 获取全量经验 */
     public List<ExperienceEntry> getAll() {
         List<ExperienceEntry> result = new ArrayList<>();
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, embedding_json FROM V4_Experiences";
+        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, embedding_json FROM V4_Experiences";
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -320,9 +434,11 @@ public class ExperiencesDB {
                     rs.getString("exp_texts"), new TypeReference<List<String>>() {});
             double[] emb = CognitiveDB.getMapper().readValue(
                     rs.getString("embedding_json"), double[].class);
+            int sc = 0;
+            try { sc = rs.getInt("score_count"); } catch (SQLException ignored) { /* 旧表无此列 */ }
             return new ExperienceEntry(
                     rs.getInt("id"), dimIds, texts,
-                    rs.getDouble("helpful_degree"), emb);
+                    rs.getDouble("helpful_degree"), sc, emb);
         } catch (JsonProcessingException e) {
             throw new SQLException("JSON 解析失败", e);
         }
