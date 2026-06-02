@@ -78,6 +78,8 @@ public class ExperiencesDB {
         // 迁移：追加 score_count 列（累积正面评分次数）
         CognitiveDB.ensureColumn("V4_Experiences", "score_count", "INTEGER DEFAULT 0");
         CognitiveDB.ensureColumn("V4_Experiences", "last_scored_at", "TIMESTAMP");
+        // ★ 顺序通道：后继经验 ID 列表（允许重复，重复次数 = 提到次数 = 边权重）
+        CognitiveDB.ensureColumn("V4_Experiences", "successor_ids", "TEXT DEFAULT '[]'");
 
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement()) {
@@ -97,15 +99,18 @@ public class ExperiencesDB {
         public final List<String> expTexts;
         public final double helpfulDegree;
         public final int scoreCount;
+        public final List<Integer> successorIds;
         public final double[] embedding;
 
         public ExperienceEntry(int id, List<Integer> feelingDimIds, List<String> expTexts,
-                               double helpfulDegree, int scoreCount, double[] embedding) {
+                               double helpfulDegree, int scoreCount, List<Integer> successorIds,
+                               double[] embedding) {
             this.id = id;
             this.feelingDimIds = feelingDimIds != null ? feelingDimIds : List.of();
             this.expTexts = expTexts != null ? expTexts : List.of();
             this.helpfulDegree = helpfulDegree;
             this.scoreCount = scoreCount;
+            this.successorIds = successorIds != null ? successorIds : List.of();
             this.embedding = embedding;
         }
     }
@@ -187,7 +192,7 @@ public class ExperiencesDB {
 
     /** 按 ID 获取 */
     public ExperienceEntry getById(int id) {
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, embedding_json FROM V4_Experiences WHERE id = ?";
+        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, successor_ids, embedding_json FROM V4_Experiences WHERE id = ?";
         try (Connection conn = CognitiveDB.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
@@ -402,10 +407,66 @@ public class ExperiencesDB {
         }
     }
 
+    /**
+     * ★ 顺序通道：为前驱经验追加后继 ID。
+     *
+     * <p>每次 storeExperience 后调用，让本轮触发的每条经验 A 记录
+     * 「在此之后出现了经验 B」。A.successor_ids 允许重复——
+     * 重复次数 = 提到次数 = 顺序通道权重。
+     *
+     * @param predecessorId 前驱经验 ID（本轮触发的）
+     * @param successorId   后继经验 ID（刚存入的）
+     */
+    public void appendSuccessor(int predecessorId, int successorId) {
+        // 读当前 successor_ids
+        String selectSql = "SELECT successor_ids FROM V4_Experiences WHERE id = ?";
+        String json;
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(selectSql)) {
+            pstmt.setInt(1, predecessorId);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (!rs.next()) {
+                    log.debug("[ExperiencesDB] appendSuccessor: 前驱 id={} 不存在", predecessorId);
+                    return;
+                }
+                json = rs.getString("successor_ids");
+                if (json == null) json = "[]";
+            }
+        } catch (SQLException e) {
+            log.error("[ExperiencesDB] appendSuccessor 查询失败 id={}", predecessorId, e);
+            return;
+        }
+
+        // 追加
+        try {
+            List<Integer> ids = CognitiveDB.getMapper().readValue(
+                    json, new TypeReference<List<Integer>>() {});
+            if (ids == null) ids = new ArrayList<>();
+            ids.add(successorId);
+
+            // 防膨胀：保留最近 200 条
+            while (ids.size() > 200) {
+                ids.remove(0);
+            }
+
+            String newJson = CognitiveDB.getMapper().writeValueAsString(ids);
+            String updateSql = "UPDATE V4_Experiences SET successor_ids = ? WHERE id = ?";
+            try (Connection conn = CognitiveDB.getConnection();
+                 PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                pstmt.setString(1, newJson);
+                pstmt.setInt(2, predecessorId);
+                pstmt.executeUpdate();
+                log.debug("[ExperiencesDB] id={} successor 已追加 id={} (当前 {} 条)", predecessorId, successorId, ids.size());
+            }
+        } catch (Exception e) {
+            log.error("[ExperiencesDB] appendSuccessor 序列化失败 id={}", predecessorId, e);
+        }
+    }
+
     /** 获取全量经验 */
     public List<ExperienceEntry> getAll() {
         List<ExperienceEntry> result = new ArrayList<>();
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, embedding_json FROM V4_Experiences";
+        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, successor_ids, embedding_json FROM V4_Experiences";
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -436,9 +497,17 @@ public class ExperiencesDB {
                     rs.getString("embedding_json"), double[].class);
             int sc = 0;
             try { sc = rs.getInt("score_count"); } catch (SQLException ignored) { /* 旧表无此列 */ }
+            List<Integer> succIds = List.of();
+            try {
+                String succJson = rs.getString("successor_ids");
+                if (succJson != null && !succJson.equals("[]")) {
+                    succIds = CognitiveDB.getMapper().readValue(succJson,
+                            new TypeReference<List<Integer>>() {});
+                }
+            } catch (Exception ignored) { /* 旧表无此列或解析失败 */ }
             return new ExperienceEntry(
                     rs.getInt("id"), dimIds, texts,
-                    rs.getDouble("helpful_degree"), sc, emb);
+                    rs.getDouble("helpful_degree"), sc, succIds, emb);
         } catch (JsonProcessingException e) {
             throw new SQLException("JSON 解析失败", e);
         }

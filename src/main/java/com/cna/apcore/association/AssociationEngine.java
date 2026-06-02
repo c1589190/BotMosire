@@ -161,12 +161,111 @@ public class AssociationEngine {
     }
 
     // ==========================================
+    // 预测：顺序通道 — 触发经验的 successor_ids → 接下来可能发生
+    // ==========================================
+
+    /**
+     * 从触发经验的 successor_ids 中预测后续经验。
+     *
+     * <p>算法：
+     * <ol>
+     *   <li>收集本轮所有触发经验（actionPredicts）的 successor_ids</li>
+     *   <li>统计出现次数：重复即权重，出现次数越多越靠前</li>
+     *   <li>次数相同时，按与 action UE dims 的 Jaccard 打破平局</li>
+     *   <li>上限 MAX_RELATED_EXPERIENCES 条</li>
+     * </ol>
+     *
+     * <p>核心直觉：提到次数（历史共现统计）> 感觉单元语义相似度。
+     */
+    public String predictFromSuccessors(CognitiveAction action,
+                                         ExperiencesDB experiencesDB,
+                                         FeelingsDB feelingsDB) {
+        List<ActionPredict> predicts = action.getActionPredicts();
+        if (predicts == null || predicts.isEmpty()) return "";
+
+        // 1. 收集所有触发经验的 successor_ids，计数
+        Map<Integer, Integer> successorCounts = new LinkedHashMap<>();
+        int totalPredecessors = 0;
+        for (ActionPredict p : predicts) {
+            ExperiencesDB.ExperienceEntry pred = experiencesDB.getById(p.getExperienceId());
+            if (pred == null || pred.successorIds.isEmpty()) continue;
+            totalPredecessors++;
+            for (int succId : pred.successorIds) {
+                successorCounts.merge(succId, 1, Integer::sum);
+            }
+        }
+        if (successorCounts.isEmpty()) return "";
+
+        // 2. 获取 action 的 UE dims 用于平局打破
+        Set<Integer> actionDims = new HashSet<>(action.getUEDimIds());
+
+        // 3. 按 count 降序，同 count 按 dim Jaccard 降序
+        record Candidate(int expId, int count, double tiebreak) {}
+        List<Candidate> candidates = new ArrayList<>();
+
+        for (Map.Entry<Integer, Integer> e : successorCounts.entrySet()) {
+            int expId = e.getKey();
+            int count = e.getValue();
+            ExperiencesDB.ExperienceEntry exp = experiencesDB.getById(expId);
+            if (exp == null) continue;
+
+            // 平局打破：被预测经验与当前 action 的 dim 重合度
+            double tiebreak = 0;
+            if (!exp.feelingDimIds.isEmpty() && !actionDims.isEmpty()) {
+                Set<Integer> expDims = new HashSet<>(exp.feelingDimIds);
+                int overlap = 0;
+                for (int d : actionDims) {
+                    if (expDims.contains(d)) overlap++;
+                }
+                int union = actionDims.size() + expDims.size() - overlap;
+                tiebreak = (double) overlap / union;
+            }
+            candidates.add(new Candidate(expId, count, tiebreak));
+        }
+
+        candidates.sort((a, b) -> {
+            if (a.count != b.count) return Integer.compare(b.count, a.count);
+            return Double.compare(b.tiebreak, a.tiebreak);
+        });
+
+        // 4. 格式化输出
+        int limit = Math.min(MAX_RELATED_EXPERIENCES, candidates.size());
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("【预测 — 从 %d 条触发经验的顺序通道推断】\n", totalPredecessors));
+
+        for (int i = 0; i < limit; i++) {
+            Candidate c = candidates.get(i);
+            ExperiencesDB.ExperienceEntry e = experiencesDB.getById(c.expId);
+            if (e == null) continue;
+
+            List<String> dimConcepts = lookupConcepts(new LinkedHashSet<>(e.feelingDimIds), feelingsDB);
+            String dimInfo = dimConcepts.isEmpty() ? "(无)" : String.join("、", dimConcepts);
+
+            String tag;
+            if (e.helpfulDegree > 0.3) tag = "🟢";
+            else if (e.helpfulDegree < -0.1) tag = "🔴";
+            else tag = "⚪";
+
+            sb.append(String.format("  [预测#%d] %s (提到%d次, 维度重合: %.0f%%)\n",
+                    i + 1, tag, c.count, c.tiebreak * 100));
+            sb.append(String.format("    感觉维度: %s\n", dimInfo));
+            for (String text : e.expTexts) {
+                if (text != null && !text.isBlank()) {
+                    sb.append(String.format("    · %s\n", text));
+                }
+            }
+        }
+
+        return sb.toString();
+    }
+
+    // ==========================================
     // 一键构建 Prompt 区块（供 ActionLoop 调用）
     // ==========================================
 
     /**
      * 为当前 action 构建联想 Prompt 区块。
-     * 只包含按感觉维度检索的相关过往经验。
+     * 包含：相关过往经验（回顾）+ 顺序通道预测（前瞻）
      */
     public Map<String, String> buildPromptBlock(CognitiveAction action,
                                                  ExperiencesDB experiencesDB,
@@ -174,6 +273,8 @@ public class AssociationEngine {
         Map<String, String> result = new LinkedHashMap<>();
         String related = queryRelatedExperiences(action, experiencesDB, feelingsDB);
         if (!related.isEmpty()) result.put("related_experiences", related);
+        String predictions = predictFromSuccessors(action, experiencesDB, feelingsDB);
+        if (!predictions.isEmpty()) result.put("predicted_experiences", predictions);
         return result;
     }
 

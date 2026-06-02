@@ -55,6 +55,10 @@ ${action_predicts_text}
 ${related_experiences_text}
 </#if>
 
+<#if predicted_experiences_text?has_content>
+${predicted_experiences_text}
+</#if>
+
 ${pool_summary}
 
 ---

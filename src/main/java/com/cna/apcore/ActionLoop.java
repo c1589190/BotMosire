@@ -948,6 +948,16 @@ public class ActionLoop implements MosireAPI {
                     ? newPrepareUnitNode.path("text").asText() : null;
             int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText);
 
+            // ★ 顺序通道：本轮触发的每条经验记录「我这个经验之后出现了 expId」
+            if (expId > 0) {
+                List<ActionPredict> predicts = action.getActionPredicts();
+                if (predicts != null) {
+                    for (ActionPredict p : predicts) {
+                        experiencesDB.appendSuccessor(p.getExperienceId(), expId);
+                    }
+                }
+            }
+
             // 7. 应用经验打分（委托 FeelingsManager）
             if (experienceScoringNode != null) {
                 feelingsManager.applyExperienceScoring(experienceScoringNode);
@@ -1080,9 +1090,10 @@ public class ActionLoop implements MosireAPI {
             data.put("demand_analysis", demandAnalysis);
         }
 
-        // ★ 联想引擎：按感觉维度检索相关过往经验
+        // ★ 联想引擎：相关经验 + 顺序通道预测
         Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, experiencesDB, feelingsDB);
         data.put("related_experiences_text", associationBlock.getOrDefault("related_experiences", ""));
+        data.put("predicted_experiences_text", associationBlock.getOrDefault("predicted_experiences", ""));
 
         // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {
