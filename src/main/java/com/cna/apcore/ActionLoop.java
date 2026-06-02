@@ -19,6 +19,7 @@ import com.cna.apcore.action.ChatMessageActionDeveloper;
 import com.cna.apcore.action.TickActionManager;
 import com.cna.apcore.demand.DemandManager;
 import com.cna.apcore.demand.DemandState;
+import com.cna.apcore.association.AssociationEngine;
 import com.cna.apcore.attention.AttentionManager;
 import com.cna.apcore.attention.FatigueManager;
 import com.cna.apcore.feeling.FeelingsManager;
@@ -107,6 +108,9 @@ public class ActionLoop implements MosireAPI {
     // ★ TickAction 管理器（统一调度桌面巡视、认知自检等周期性检查）
     private final TickActionManager tickActionManager;
 
+    // ★ 联想引擎（预期生成 + 方法论检索 + 方法挖掘）
+    private final AssociationEngine associationEngine;
+
     private ActionLoop() {
         this.preparePool = new CognitivePreparePool();
         this.experiencesDB = ExperiencesDB.getInstance();
@@ -149,6 +153,9 @@ public class ActionLoop implements MosireAPI {
         // ★ TickAction 管理器初始化（注册内置 tick action 并注入池引用）
         this.tickActionManager = TickActionManager.getInstance();
         this.tickActionManager.init(preparePool);
+
+        // ★ 联想引擎初始化（预期 + 方法论）
+        this.associationEngine = AssociationEngine.getInstance();
 
         // ── 自持工具箱初始化（不依赖 LivingLoop） ──
         initToolbox();
@@ -454,6 +461,15 @@ public class ActionLoop implements MosireAPI {
 
             // ── 步骤 1.7: 注意力态度自然衰减 ──
             feelingsDB.decayAttentionAttitudes(CoreConfig.ATTENTION_ATTITUDE_DECAY);
+
+            // ── 步骤 1.8: 联想引擎方法挖掘（空闲时触发，避免与 action 处理竞争）──
+            if (associationEngine.hasPendingMine() && !isProcessing.get()
+                    && preparePool.size() <= 5) {
+                int mined = associationEngine.mineMethods(experiencesDB, feelingsDB, this::getEmbedding);
+                if (mined > 0) {
+                    log.info("[ActionLoop] ⛏️ 空闲时方法挖掘完成: {} 个新方法", mined);
+                }
+            }
 
             if (log.isDebugEnabled()) {
                 log.debug("[ActionLoop] ⏰ Tick #{} — 池大小: {}, 本轮清理: {}, 正在处理: {}",
@@ -937,9 +953,16 @@ public class ActionLoop implements MosireAPI {
                     ? newPrepareUnitNode.path("text").asText() : null;
             int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText);
 
+            // ★ 联想引擎：标记新经验（累积到阈值后触发方法挖掘）
+            if (expId > 0) {
+                associationEngine.markNewExperience();
+            }
+
             // 7. 应用经验打分（委托 FeelingsManager）
             if (experienceScoringNode != null) {
                 feelingsManager.applyExperienceScoring(experienceScoringNode);
+                // ★ 联想引擎：打分闭环 — 经验打分传播到关联方法的成功率
+                associationEngine.updateMethodSuccessFromScoring(experienceScoringNode, experiencesDB);
             }
 
             // 8. 处理新的准备单元
@@ -1051,6 +1074,11 @@ public class ActionLoop implements MosireAPI {
         if (demandAnalysis != null && !demandAnalysis.isBlank()) {
             data.put("demand_analysis", demandAnalysis);
         }
+
+        // ★ 联想引擎：预期 + 方法论（感觉维度集合运算 → 结构化的经验抽象）
+        Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, feelingsDB);
+        data.put("expectations_text", associationBlock.getOrDefault("expectations", ""));
+        data.put("methodology_text", associationBlock.getOrDefault("methodology", ""));
 
         // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {

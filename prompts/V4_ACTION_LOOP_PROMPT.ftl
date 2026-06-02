@@ -29,6 +29,14 @@ ${action_predicts_text}
 （无相关先验经验）
 </#if>
 
+<#if expectations_text?has_content>
+${expectations_text}
+</#if>
+
+<#if methodology_text?has_content>
+${methodology_text}
+</#if>
+
 ${pool_summary}
 
 ---

@@ -56,16 +56,16 @@ public class CognitiveDB {
         }
     }
 
-    /** 获取连接（供子类 FeelingsDB/ExperiencesDB 使用） */
-    static Connection getConnection() throws SQLException {
+    /** 获取连接（供子类及同模块 DB 类使用） */
+    public static Connection getConnection() throws SQLException {
         if (dataSource == null || dataSource.isClosed()) {
             initDataSource();
         }
         return dataSource.getConnection();
     }
 
-    /** 获取 ObjectMapper 实例（供子类序列化 JSON 字段使用） */
-    static ObjectMapper getMapper() {
+    /** 获取 ObjectMapper 实例（供序列化 JSON 字段使用） */
+    public static ObjectMapper getMapper() {
         return mapper;
     }
 
