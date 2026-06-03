@@ -57,9 +57,7 @@ public class ExpectedChatMessageInputHandler extends ChatMessageInputHandler {
                 this.ChatTaskPreparationPool.put(senderRole, existingChatTask);
                 this.updatedRoles.add(senderRole);
 
-                List<String> l = new LinkedList<>();
-                l.add("主动等待的目标 [ " + senderRole + " ] 终于发消息了: [ " + text + " ]，预定任务开始催熟。");
-                MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(chatInput));
+                // ★ V4: 输入已由 ActionLoop.drainInputQueue() → ChatMessageActionDeveloper 统一处理
             } else {
                 normalInputs.add(chatInput);
             }

@@ -57,7 +57,6 @@ public class CuriosityListManager {
         if (resonance == null || !resonance.hasDissonance()) return;
 
         List<CuriosityEntry> existing = db.getAllCuriosityEntries();
-        MemoryManager mm = MemoryManager.getInstance();
 
         for (ResonanceGroup group : resonance.groups) {
             if (!group.hasDissonance()) continue;
@@ -79,12 +78,6 @@ public class CuriosityListManager {
                 int newCount = matched.triggerCount + 1;
                 log.info("[CuriosityListManager] 好奇心条目 #{} 再次触发 (第{}次): {}",
                         matched.id, newCount, group.sourceConcept);
-
-                if (mm != null && (matched.llmQuestion == null || matched.llmQuestion.isBlank())) {
-                    mm.inputCurrentMemory(
-                            String.format("[好奇心] 条目#%d 再次触发(第%d次): 对'%s'的违和感再次浮现，请在 finish_task 的 curiosity_questions 中写下你的疑问",
-                                    matched.id, newCount, group.sourceConcept));
-                }
             } else {
                 // 不存在 → 新建
                 try {
@@ -97,12 +90,6 @@ public class CuriosityListManager {
                     if (newId > 0) {
                         log.info("[CuriosityListManager] 新建好奇心条目 #{} : {}",
                                 newId, group.sourceConcept);
-
-                        if (mm != null) {
-                            mm.inputCurrentMemory(
-                                    String.format("[好奇心] 发现新违和(条目#%d): 对'%s'产生了违和感，请在 finish_task 的 curiosity_questions 中以疑问句写下你的困惑",
-                                            newId, group.sourceConcept));
-                        }
 
                         // 裁剪超限条目
                         pruneExcessEntries();
@@ -142,8 +129,6 @@ public class CuriosityListManager {
         }
         if (sourceConcept.isEmpty()) sourceConcept = "dim#" + sourceDimId;
 
-        MemoryManager mm = MemoryManager.getInstance();
-
         // 查找已有条目
         List<CuriosityEntry> existing = db.getAllCuriosityEntries();
         CuriosityEntry matched = findMatchingEntry(existing, sourceDimId, dissonantDimIds);
@@ -154,13 +139,6 @@ public class CuriosityListManager {
             db.incrementCuriosityTriggerCount(matched.id);
             log.info("[CuriosityListManager] LLM 为条目 #{} 提交了疑问: {}", matched.id,
                     question.length() > 60 ? question.substring(0, 60) + "..." : question);
-
-            if (mm != null) {
-                mm.inputCurrentMemory(
-                        String.format("[好奇心] 条目#%d: 对'%s'的疑问已更新——\"%s\"",
-                                matched.id, sourceConcept,
-                                question.length() > 80 ? question.substring(0, 80) + "..." : question));
-            }
         } else {
             // 不存在 → 新建
             try {
@@ -174,13 +152,6 @@ public class CuriosityListManager {
                 if (newId > 0) {
                     log.info("[CuriosityListManager] LLM 创建好奇心条目 #{} (含疑问): {}",
                             newId, sourceConcept);
-
-                    if (mm != null) {
-                        mm.inputCurrentMemory(
-                                String.format("[好奇心] 条目#%d: 对'%s'提出疑问——\"%s\"",
-                                        newId, sourceConcept,
-                                        question.length() > 80 ? question.substring(0, 80) + "..." : question));
-                    }
 
                     pruneExcessEntries();
                 }
@@ -299,20 +270,12 @@ public class CuriosityListManager {
      */
     public void resolveEntriesByDim(int dimId, String note) {
         List<CuriosityEntry> active = db.getActiveCuriosityEntries();
-        MemoryManager mm = MemoryManager.getInstance();
 
         for (CuriosityEntry entry : active) {
             // 该 dim 是 source 或 dissonant 维度之一
             if (entry.sourceDimId == dimId || entry.dissonantDimIds.contains(dimId)) {
                 db.deactivateCuriosityEntry(entry.id, note);
                 log.info("[CuriosityListManager] 好奇心条目 #{} 已消解 (dim_id={})", entry.id, dimId);
-
-                if (mm != null) {
-                    mm.inputCurrentMemory(
-                            String.format("[好奇心] 条目#%d 已消解: 对'%s'的疑问已被充分理解%s",
-                                    entry.id, entry.sourceConcept,
-                                    (note != null && !note.isBlank()) ? "——" + note : ""));
-                }
             }
         }
     }

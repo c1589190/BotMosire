@@ -358,7 +358,7 @@ public class LivingLoop implements MosireAPI {
         this.registerTool(new QueryDeepMemory());
         this.registerTool(new ReflectiveCompactionTool());
         this.registerTool(new SendConsoleMessage());
-        this.registerTool(new CreatePendingChatTask(this));
+        // ★ V4: CreatePendingChatTask 已改用 CognitivePreparePool，LivingLoop 不再需要
         this.registerTool(new UpdateWebUI());
         this.registerTool(new ToolUsageReader());
         this.registerTool(new FinishTask());

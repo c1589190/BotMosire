@@ -305,9 +305,6 @@ public class ActionLoop implements MosireAPI {
     private void initToolbox() {
         log.info("[ActionLoop] 🔧 开始自持工具箱初始化...");
 
-        // 获取旧 LivingLoop 引用（仅用于兼容仍需要 LivingLoop 参数的旧工具）
-        com.cna.agent.LivingLoop legacy = Main.legacyLoop;
-
         // 核心通讯工具
         registerToolInternal(new SendChatMessage());
         registerToolInternal(new GetChatHistory());
@@ -328,16 +325,11 @@ public class ActionLoop implements MosireAPI {
         registerToolInternal(new CdWorkspace());
         registerToolInternal(new DownloadFile());
 
-        // 认知/记忆工具
-        registerToolInternal(new GetMoreCurrentMemorys());
-        registerToolInternal(new QueryDeepMemory());
-        registerToolInternal(new ReflectiveCompactionTool());
-
         // 控制台工具
         registerToolInternal(new SendConsoleMessage());
 
-        // 管理工具（部分需要 LivingLoop 引用，使用 legacy 兼容）
-        registerToolInternal(new CreatePendingChatTask(legacy));
+        // V4 原生工具（全部自持，零 LivingLoop 依赖）
+        registerToolInternal(new CreatePendingChatTask(preparePool));  // ★ 改为注入 V4 Pool
         registerToolInternal(new UpdateWebUI());
         registerToolInternal(new ToolUsageReader());
         registerToolInternal(new FinishTask());
@@ -345,17 +337,12 @@ public class ActionLoop implements MosireAPI {
         registerToolInternal(new GetNowTime());
         registerToolInternal(new SetSleepTimeTool());
         registerToolInternal(new GetSleepTimeTool());
-        registerToolInternal(new GetTaskQueueTool(legacy));
-        registerToolInternal(new AdjustTaskPriorityTool(legacy));
         registerToolInternal(new DelegateComputerTaskTool());
         registerToolInternal(new ManageToolGroups(this.toolbox));
-        registerToolInternal(new ManageMessageKeywords());
-        registerToolInternal(new CreateSelfTask(legacy));
-        registerToolInternal(new CancelTask(legacy));
         registerToolInternal(new McpBridge());
 
-        log.info("[ActionLoop] 🔧 自持工具箱初始化完成: {} 个工具已挂载 ({} 个使用 legacy LivingLoop)",
-                toolbox.size(), 6);
+        log.info("[ActionLoop] 🔧 自持工具箱初始化完成: {} 个工具已挂载 (零 LivingLoop 依赖)",
+                toolbox.size());
 
         // 打印所有工具名（调试用）
         log.info("[ActionLoop] 📋 工具箱工具列表:");
@@ -1103,6 +1090,14 @@ public class ActionLoop implements MosireAPI {
         // ★ 感觉谐振分析结果（违和/一致感觉维度）
         if (feelingResonanceBlock != null && !feelingResonanceBlock.isBlank()) {
             data.put("feeling_resonance", feelingResonanceBlock);
+        }
+
+        // ★ 好奇心上下文（V4：从 CuriosityListManager 直接注入，不经过旧 Current_Memorys）
+        String curiosityContext = com.cna.agent.CuriosityListManager.getInstance() != null
+                ? com.cna.agent.CuriosityListManager.getInstance().buildCuriosityPromptBlock()
+                : "";
+        if (!curiosityContext.isBlank()) {
+            data.put("curiosity_context", curiosityContext);
         }
 
         // 先验经验（★ 截断保护：最多 MAX_PREDICT_EXPERIENCES 条）

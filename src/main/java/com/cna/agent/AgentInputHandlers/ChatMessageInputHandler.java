@@ -249,10 +249,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
                         ChatTaskPreparationPool.put(senderRole, task);
                     }
 
-                    List<String> l = new LinkedList<>();
-                    l.add("本能决定回复这条消息:{\n" + input.getInputText() + "\n}; 理由是: " + reason);
-                    MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(input));
-
+                    // ★ V4: 输入已由 ActionLoop.drainInputQueue() → ChatMessageActionDeveloper 统一处理
                     updatedRoles.add(senderRole);
                 }
             }
@@ -355,9 +352,7 @@ public class ChatMessageInputHandler extends AbstractInputHandler<ChatMessageInp
             ChatTaskPreparationPool.put(role, task);
             log.info("[Backlog-Drain] 为 [Role:{}] 从积压区创建/扩容了ChatTask，消耗 {} 条积压Input", role, roleBatch.size());
 
-            List<String> l = new LinkedList<>();
-            l.add("从积压区消化了来自 " + role + " 的消息，回复理由是: " + first.reason);
-            MemoryManager.getInstance().inputCurrentMemorys(l, buildSourcesFromInput(rep));
+            // ★ V4: 输入已由 ActionLoop.drainInputQueue() → ChatMessageActionDeveloper 统一处理
         }
 
         // 5. 从积压区移除已消费的条目

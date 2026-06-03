@@ -44,6 +44,10 @@ ${demand_analysis}
 ${feeling_resonance}
 </#if>
 
+<#if curiosity_context?has_content>
+${curiosity_context}
+</#if>
+
 【先验经验（从经验库按感觉维度检索）】
 <#if action_predicts_text?has_content>
 ${action_predicts_text}
