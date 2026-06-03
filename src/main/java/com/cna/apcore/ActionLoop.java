@@ -799,7 +799,7 @@ public class ActionLoop implements MosireAPI {
                             // ★ LLM 自主后续行动规划：从 next_actions 数组创建多个准备单元注入池中
                             JsonNode nextActions = finishActionArgs.path("next_actions");
                             if (nextActions.isArray()) {
-                                double baseSE = action.getSourceUnit().getStimulateEnergy() * 0.7;
+                                double baseSE = action.getSourceUnit().getStimulateEnergy() * CoreConfig.NEXT_ACTION_SE_MULTIPLIER;
                                 int createdCount = 0;
                                 for (JsonNode na : nextActions) {
                                     String taskText = na.path("text").asText();
@@ -842,7 +842,7 @@ public class ActionLoop implements MosireAPI {
                     // LLM 做了工具调用但没调 finish_action（如在 get_chat_history 后需要
                     // 下一轮继续处理），自动重建当前任务入池，避免任务丢失。
                     if (toolCallCount > 0) {
-                        double continuedSE = action.getSourceUnit().getStimulateEnergy() * 0.9;
+                        double continuedSE = action.getSourceUnit().getStimulateEnergy() * CoreConfig.CONTINUED_SE_MULTIPLIER;
                         CognitivePrepareUnit continued = CognitivePrepareUnit.create(
                                 action.getActionText(),
                                 action.getSourceUnit().getSourceIds(),
@@ -911,13 +911,13 @@ public class ActionLoop implements MosireAPI {
                 CognitivePrepareUnit toolSummary = CognitivePrepareUnit.create(
                         aggregated.toString(),
                         action.getSourceUnit().getSourceIds(),
-                        action.getSourceUnit().getStimulateEnergy() * 0.3
+                        action.getSourceUnit().getStimulateEnergy() * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER
                 );
                 preparePool.push(toolSummary);
                 // ★ 工具执行结果也隐式驱动注意力态度
                 preparePool.boostMatchedFeelings(toolSummary,
-                        CoreConfig.ATTENTION_BOOST_SELECTED * 0.3);
-                log.info("[ActionLoop] 📦 工具执行汇总已注入准备池: " + toolResults.size() + " 条结果, SE=" + String.format("%.3f", action.getSourceUnit().getStimulateEnergy() * 0.3));
+                        CoreConfig.ATTENTION_BOOST_SELECTED * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER);
+                log.info("[ActionLoop] 📦 工具执行汇总已注入准备池: " + toolResults.size() + " 条结果, SE=" + String.format("%.3f", action.getSourceUnit().getStimulateEnergy() * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER));
             }
 
             // 5. 处理刺激的感觉维度（委托 FeelingsManager）
@@ -1369,7 +1369,7 @@ public class ActionLoop implements MosireAPI {
 
         CognitivePrepareUnit newCPU = CognitivePrepareUnit.create(text, sourceIds);
         // 初始 SE 可以继承一部分，表示"上一轮未完成的事有点重要"
-        newCPU.setSE(currentAction.getSourceUnit().getStimulateEnergy() * 0.7);
+        newCPU.setSE(currentAction.getSourceUnit().getStimulateEnergy() * CoreConfig.NEW_PREP_UNIT_SE_MULTIPLIER);
 
         preparePool.push(newCPU);
         // ★ 未完成事项也隐式驱动注意力态度

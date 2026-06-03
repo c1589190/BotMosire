@@ -23,13 +23,17 @@ public class SelfCheckTickAction implements TickAction {
 
     private final int intervalTicks;
     private final double baseSE;
+    private final boolean requireIdle;
+    private final int idleThreshold;
 
     public SelfCheckTickAction() {
         this.intervalTicks = CoreConfig.TICK_SELFCHECK_INTERVAL_TICKS;
         this.baseSE = CoreConfig.TICK_SELFCHECK_BASE_SE;
+        this.requireIdle = CoreConfig.TICK_SELFCHECK_REQUIRE_IDLE;
+        this.idleThreshold = CoreConfig.TICK_SELFCHECK_IDLE_THRESHOLD;
 
-        log.info("[TickAction:{}] 初始化: interval={}ticks (≈{}s), baseSE={}",
-                ACTION_TYPE, intervalTicks, intervalTicks * 2L, baseSE);
+        log.info("[TickAction:{}] 初始化: interval={}ticks (≈{}s), baseSE={}, requireIdle={}, idleThreshold={}",
+                ACTION_TYPE, intervalTicks, intervalTicks * 2L, baseSE, requireIdle, idleThreshold);
     }
 
     @Override
@@ -42,7 +46,14 @@ public class SelfCheckTickAction implements TickAction {
         return intervalTicks;
     }
 
-    // isReady() 使用默认实现（always true），不要求池空闲
+    /** 当 selfCheckRequireIdle=true 时，仅在池空闲时触发；false 则始终触发 */
+    @Override
+    public boolean isReady(int poolSize, int currentTick) {
+        if (requireIdle) {
+            return poolSize <= idleThreshold;
+        }
+        return true;
+    }
 
     @Override
     public CognitivePrepareUnit generate(int currentTick) {

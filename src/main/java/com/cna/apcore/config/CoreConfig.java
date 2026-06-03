@@ -93,6 +93,44 @@ public class CoreConfig {
     /** 自我检查产生单元的基础 SE */
     public static final double TICK_SELFCHECK_BASE_SE;
 
+    /** 自我检查是否需要池空闲才触发 */
+    public static final boolean TICK_SELFCHECK_REQUIRE_IDLE;
+
+    /** 自我检查空闲判断阈值（池大小低于此值才触发） */
+    public static final int TICK_SELFCHECK_IDLE_THRESHOLD;
+
+    // ==========================================
+    // LLM 自主规划参数（next_actions / 续命 / 汇总）
+    // ==========================================
+
+    /** next_action SE = 源单元SE × seMultiplier × priority */
+    public static final double NEXT_ACTION_SE_MULTIPLIER;
+
+    /** 无 finish_action 时续命任务的 SE 系数 */
+    public static final double CONTINUED_SE_MULTIPLIER;
+
+    /** 无 tool_calls 时续命任务的 SE 系数 */
+    public static final double NO_TOOL_CONTINUED_SE_MULTIPLIER;
+
+    /** 工具执行结果汇总入池的 SE 系数 */
+    public static final double TOOL_SUMMARY_SE_MULTIPLIER;
+
+    /** new_prepare_unit 继承 SE 的系数 */
+    public static final double NEW_PREP_UNIT_SE_MULTIPLIER;
+
+    // ==========================================
+    // 行动模板匹配参数（ActionTemplateMatcher）
+    // ==========================================
+
+    /** 工具在匹配经验中出现比例的最低阈值 */
+    public static final double TEMPLATE_MIN_TOOL_RATIO;
+
+    /** 最小匹配经验数 */
+    public static final int TEMPLATE_MIN_MATCH_COUNT;
+
+    /** 最多输出的模板数 */
+    public static final int TEMPLATE_MAX_TEMPLATES;
+
     // ==========================================
     // 注意力机制参数（AttentionManager）
     // ==========================================
@@ -222,6 +260,20 @@ public class CoreConfig {
         // —— TickAction ——
         TICK_SELFCHECK_INTERVAL_TICKS  = getInt("v4.tick.selfCheckIntervalTicks", 30);
         TICK_SELFCHECK_BASE_SE         = getDouble("v4.tick.selfCheckBaseSE", 0.5);
+        TICK_SELFCHECK_REQUIRE_IDLE    = getBoolean("v4.tick.selfCheckRequireIdle", true);
+        TICK_SELFCHECK_IDLE_THRESHOLD  = getInt("v4.tick.selfCheckIdleThreshold", 3);
+
+        // —— LLM 自主规划 ——
+        NEXT_ACTION_SE_MULTIPLIER        = getDouble("v4.nextAction.seMultiplier", 1.3);
+        CONTINUED_SE_MULTIPLIER          = getDouble("v4.nextAction.continuedSeMultiplier", 0.9);
+        NO_TOOL_CONTINUED_SE_MULTIPLIER  = getDouble("v4.nextAction.noToolContinuedSeMultiplier", 0.9);
+        TOOL_SUMMARY_SE_MULTIPLIER       = getDouble("v4.nextAction.toolSummarySeMultiplier", 0.3);
+        NEW_PREP_UNIT_SE_MULTIPLIER      = getDouble("v4.nextAction.newPrepUnitSeMultiplier", 0.7);
+
+        // —— 行动模板匹配 ——
+        TEMPLATE_MIN_TOOL_RATIO    = getDouble("v4.template.minToolRatio", 0.6);
+        TEMPLATE_MIN_MATCH_COUNT   = getInt("v4.template.minMatchCount", 3);
+        TEMPLATE_MAX_TEMPLATES     = getInt("v4.template.maxTemplates", 5);
 
         // —— 注意力机制 ——
         ATTENTION_POOL_MAX           = getDouble("v4.attention.poolMax", 100.0);
@@ -291,6 +343,14 @@ public class CoreConfig {
             } catch (NumberFormatException e) {
                 log.warn("[CoreConfig] {} = {} 不是合法整数，使用默认值 {}", key, val, defaultValue);
             }
+        }
+        return defaultValue;
+    }
+
+    private static boolean getBoolean(String key, boolean defaultValue) {
+        String val = props.getProperty(key);
+        if (val != null && !val.isBlank()) {
+            return Boolean.parseBoolean(val.trim());
         }
         return defaultValue;
     }

@@ -1,5 +1,6 @@
 package com.cna.apcore.association;
 
+import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.model.CognitiveAction;
 import lombok.extern.slf4j.Slf4j;
@@ -29,15 +30,6 @@ import java.util.*;
 @Slf4j
 public class ActionTemplateMatcher {
 
-    /** 工具在匹配经验中出现的最低比例阈值（低于此值不推荐） */
-    private static final double MIN_TOOL_RATIO = 0.6;
-
-    /** 最小匹配经验数量（少于此次数不进行统计） */
-    private static final int MIN_MATCH_COUNT = 3;
-
-    /** 最多输出的模板数 */
-    private static final int MAX_TEMPLATES = 5;
-
     /** 单例 */
     private static volatile ActionTemplateMatcher INSTANCE;
 
@@ -54,7 +46,7 @@ public class ActionTemplateMatcher {
 
     private ActionTemplateMatcher() {
         log.info("[TemplateMatcher] 🔧 行动模板匹配器已就绪 (minRatio={}, minMatch={})",
-                String.format("%.0f%%", MIN_TOOL_RATIO * 100), MIN_MATCH_COUNT);
+                String.format("%.0f%%", CoreConfig.TEMPLATE_MIN_TOOL_RATIO * 100), CoreConfig.TEMPLATE_MIN_MATCH_COUNT);
     }
 
     // ==========================================
@@ -126,8 +118,8 @@ public class ActionTemplateMatcher {
             }
         }
 
-        if (scored.size() < MIN_MATCH_COUNT) {
-            log.debug("[TemplateMatcher] 匹配经验数 {} < 阈值 {}，跳过", scored.size(), MIN_MATCH_COUNT);
+        if (scored.size() < CoreConfig.TEMPLATE_MIN_MATCH_COUNT) {
+            log.debug("[TemplateMatcher] 匹配经验数 {} < 阈值 {}，跳过", scored.size(), CoreConfig.TEMPLATE_MIN_MATCH_COUNT);
             return List.of();
         }
 
@@ -145,7 +137,7 @@ public class ActionTemplateMatcher {
         List<ActionTemplate> templates = new ArrayList<>();
         for (Map.Entry<String, Integer> e : toolCounts.entrySet()) {
             double ratio = (double) e.getValue() / totalMatches;
-            if (ratio >= MIN_TOOL_RATIO) {
+            if (ratio >= CoreConfig.TEMPLATE_MIN_TOOL_RATIO) {
                 // 收集示例来源
                 List<String> samples = scored.stream()
                         .filter(se -> se.exp.toolNames().contains(e.getKey()))
@@ -162,8 +154,8 @@ public class ActionTemplateMatcher {
         templates.sort((a, b) -> Double.compare(b.ratio, a.ratio));
 
         // 截断
-        if (templates.size() > MAX_TEMPLATES) {
-            templates = templates.subList(0, MAX_TEMPLATES);
+        if (templates.size() > CoreConfig.TEMPLATE_MAX_TEMPLATES) {
+            templates = templates.subList(0, CoreConfig.TEMPLATE_MAX_TEMPLATES);
         }
 
         if (!templates.isEmpty()) {
