@@ -80,12 +80,17 @@ public class ExperiencesDB {
         CognitiveDB.ensureColumn("V4_Experiences", "last_scored_at", "TIMESTAMP");
         // ★ 顺序通道：后继经验 ID 列表（允许重复，重复次数 = 提到次数 = 边权重）
         CognitiveDB.ensureColumn("V4_Experiences", "successor_ids", "TEXT DEFAULT '[]'");
+        // ★ 行动模板匹配：记录本经验中调用了哪些工具
+        CognitiveDB.ensureColumn("V4_Experiences", "tool_names_json", "TEXT DEFAULT '[]'");
+        // ★ 行动模板匹配：记录本经验的来源类型（如 qqid, qq_group, web_event）
+        CognitiveDB.ensureColumn("V4_Experiences", "source_type", "TEXT DEFAULT ''");
 
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_v4_exp_score_count ON V4_Experiences(score_count)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_v4_exp_source_type ON V4_Experiences(source_type)");
         } catch (SQLException e) {
-            log.warn("[ExperiencesDB] 创建 score_count 索引失败: {}", e.getMessage());
+            log.warn("[ExperiencesDB] 创建索引失败: {}", e.getMessage());
         }
     }
 
@@ -101,10 +106,12 @@ public class ExperiencesDB {
         public final int scoreCount;
         public final List<Integer> successorIds;
         public final double[] embedding;
+        public final List<String> toolNames;
+        public final String sourceType;
 
         public ExperienceEntry(int id, List<Integer> feelingDimIds, List<String> expTexts,
                                double helpfulDegree, int scoreCount, List<Integer> successorIds,
-                               double[] embedding) {
+                               double[] embedding, List<String> toolNames, String sourceType) {
             this.id = id;
             this.feelingDimIds = feelingDimIds != null ? feelingDimIds : List.of();
             this.expTexts = expTexts != null ? expTexts : List.of();
@@ -112,6 +119,8 @@ public class ExperiencesDB {
             this.scoreCount = scoreCount;
             this.successorIds = successorIds != null ? successorIds : List.of();
             this.embedding = embedding;
+            this.toolNames = toolNames != null ? toolNames : List.of();
+            this.sourceType = sourceType != null ? sourceType : "";
         }
     }
 
@@ -125,33 +134,39 @@ public class ExperiencesDB {
      * @param feelingDimIds 关联的感觉维度 ID 列表
      * @param expTexts      经验文本列表（LLM 想法 + 行动 + 结果）
      * @param embedding     拼接文本的 embedding
+     * @param toolNames     本轮调用的工具名列表
+     * @param sourceType    经验来源类型
      * @return 新插入的 ID，如果重复则返回已有 ID
      */
-    public int insertExperience(List<Integer> feelingDimIds, List<String> expTexts, double[] embedding) {
+    public int insertExperience(List<Integer> feelingDimIds, List<String> expTexts,
+                                double[] embedding, List<String> toolNames, String sourceType) {
         // 先去重
         int duplicateId = findDuplicate(embedding);
         if (duplicateId > 0) {
             log.debug("[ExperiencesDB] 新经验与已有 id={} 高度相似，跳过插入", duplicateId);
-            // 可选：丰富已有经验的 expTexts
             enrichExpTexts(duplicateId, expTexts);
+            enrichToolNames(duplicateId, toolNames);
             return duplicateId;
         }
 
-        String sql = "INSERT INTO V4_Experiences (feeling_dim_ids, exp_texts, helpful_degree, embedding_json) VALUES (?, ?, 0.0, ?)";
+        String sql = "INSERT INTO V4_Experiences (feeling_dim_ids, exp_texts, helpful_degree, embedding_json, tool_names_json, source_type) VALUES (?, ?, 0.0, ?, ?, ?)";
         try (Connection conn = CognitiveDB.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, CognitiveDB.getMapper().writeValueAsString(feelingDimIds));
             pstmt.setString(2, CognitiveDB.getMapper().writeValueAsString(expTexts));
             pstmt.setString(3, CognitiveDB.getMapper().writeValueAsString(embedding));
+            pstmt.setString(4, CognitiveDB.getMapper().writeValueAsString(toolNames != null ? toolNames : List.of()));
+            pstmt.setString(5, sourceType != null ? sourceType : "");
             pstmt.executeUpdate();
 
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery("SELECT last_insert_rowid()")) {
                 if (rs.next()) {
                     int id = rs.getInt(1);
-                    log.info("[ExperiencesDB] 新增经验 id={}, feelings={}, texts={}",
+                    log.info("[ExperiencesDB] 新增经验 id={}, feelings={}, texts={}, tools={}, source={}",
                             id, feelingDimIds != null ? feelingDimIds.size() : 0,
-                            expTexts != null ? expTexts.size() : 0);
+                            expTexts != null ? expTexts.size() : 0,
+                            toolNames != null ? toolNames.size() : 0, sourceType);
                     return id;
                 }
             }
@@ -190,9 +205,41 @@ public class ExperiencesDB {
         }
     }
 
+    /** 向已有经验合并 toolNames（去重追加） */
+    private void enrichToolNames(int id, List<String> newToolNames) {
+        if (newToolNames == null || newToolNames.isEmpty()) return;
+
+        ExperienceEntry existing = getById(id);
+        if (existing == null) return;
+
+        List<String> merged = new ArrayList<>(existing.toolNames);
+        boolean changed = false;
+        for (String t : newToolNames) {
+            if (t != null && !t.isBlank() && !merged.contains(t)) {
+                merged.add(t);
+                changed = true;
+            }
+        }
+        if (!changed) return;
+
+        String sql = "UPDATE V4_Experiences SET tool_names_json = ? WHERE id = ?";
+        try (Connection conn = CognitiveDB.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, CognitiveDB.getMapper().writeValueAsString(merged));
+            pstmt.setInt(2, id);
+            pstmt.executeUpdate();
+            log.debug("[ExperiencesDB] id={} toolNames 已合并: {} -> {}", id, existing.toolNames, merged);
+        } catch (SQLException | JsonProcessingException e) {
+            log.error("[ExperiencesDB] 丰富工具名失败 id={}", id, e);
+        }
+    }
+
+    private static final String SELECT_COLUMNS =
+            "id, feeling_dim_ids, exp_texts, helpful_degree, score_count, successor_ids, embedding_json, tool_names_json, source_type";
+
     /** 按 ID 获取 */
     public ExperienceEntry getById(int id) {
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, successor_ids, embedding_json FROM V4_Experiences WHERE id = ?";
+        String sql = "SELECT " + SELECT_COLUMNS + " FROM V4_Experiences WHERE id = ?";
         try (Connection conn = CognitiveDB.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, id);
@@ -287,6 +334,50 @@ public class ExperiencesDB {
         List<ActionPredict> result = new ArrayList<>();
         for (int i = 0; i < limit; i++) {
             result.add(scored.get(i).predict);
+        }
+        return result;
+    }
+
+    // ==========================================
+    // 行动模板匹配 — 按感觉维度 + 来源类型检索，统计工具出场率
+    // ==========================================
+
+    /**
+     * 用于匹配的轻量经验摘要（不加载 embedding，只加载匹配和统计所需字段）。
+     */
+    public record MatchableExp(List<Integer> feelingDimIds, List<String> toolNames, String sourceType) {}
+
+    /**
+     * 加载全量经验的轻量摘要，用于模板匹配统计。
+     */
+    public List<MatchableExp> loadMatchableExps() {
+        List<MatchableExp> result = new ArrayList<>();
+        String sql = "SELECT feeling_dim_ids, tool_names_json, source_type FROM V4_Experiences";
+        try (Connection conn = CognitiveDB.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                try {
+                    List<Integer> dimIds = CognitiveDB.getMapper().readValue(
+                            rs.getString("feeling_dim_ids"), new TypeReference<List<Integer>>() {});
+                    List<String> toolNames = List.of();
+                    String toolJson = rs.getString("tool_names_json");
+                    if (toolJson != null && !toolJson.equals("[]") && !toolJson.isBlank()) {
+                        toolNames = CognitiveDB.getMapper().readValue(
+                                toolJson, new TypeReference<List<String>>() {});
+                    }
+                    String sourceType = rs.getString("source_type");
+                    if (sourceType == null) sourceType = "";
+                    result.add(new MatchableExp(
+                            dimIds != null ? dimIds : List.of(),
+                            toolNames != null ? toolNames : List.of(),
+                            sourceType));
+                } catch (Exception e) {
+                    // 跳过损坏行
+                }
+            }
+        } catch (SQLException e) {
+            log.error("[ExperiencesDB] 加载匹配摘要失败", e);
         }
         return result;
     }
@@ -466,7 +557,7 @@ public class ExperiencesDB {
     /** 获取全量经验 */
     public List<ExperienceEntry> getAll() {
         List<ExperienceEntry> result = new ArrayList<>();
-        String sql = "SELECT id, feeling_dim_ids, exp_texts, helpful_degree, score_count, successor_ids, embedding_json FROM V4_Experiences";
+        String sql = "SELECT " + SELECT_COLUMNS + " FROM V4_Experiences";
         try (Connection conn = CognitiveDB.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -505,9 +596,20 @@ public class ExperiencesDB {
                             new TypeReference<List<Integer>>() {});
                 }
             } catch (Exception ignored) { /* 旧表无此列或解析失败 */ }
+            List<String> toolNames = List.of();
+            try {
+                String toolJson = rs.getString("tool_names_json");
+                if (toolJson != null && !toolJson.equals("[]") && !toolJson.isBlank()) {
+                    toolNames = CognitiveDB.getMapper().readValue(toolJson,
+                            new TypeReference<List<String>>() {});
+                }
+            } catch (Exception ignored) { /* 旧表无此列 */ }
+            String sourceType = "";
+            try { sourceType = rs.getString("source_type"); } catch (SQLException ignored) { /* 旧表无此列 */ }
+            if (sourceType == null) sourceType = "";
             return new ExperienceEntry(
                     rs.getInt("id"), dimIds, texts,
-                    rs.getDouble("helpful_degree"), sc, succIds, emb);
+                    rs.getDouble("helpful_degree"), sc, succIds, emb, toolNames, sourceType);
         } catch (JsonProcessingException e) {
             throw new SQLException("JSON 解析失败", e);
         }

@@ -11,6 +11,8 @@ import com.cna.agent.AgentTool.FinishAction;
 import com.cna.agent.AgentTasksHandlers.DefaultAgentTaskHandler;
 import com.cna.agent.FeelingResonanceAnalyzer;
 import com.cna.agent.code.DelegateComputerTaskTool;
+import com.cna.apcore.association.ActionTemplateMatcher;
+import com.cna.apcore.association.AssociationEngine;
 import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
@@ -606,8 +608,13 @@ public class ActionLoop implements MosireAPI {
                     action, mutualExclusions, resonanceDissonant, resonanceResonant, preparePool);
             String demandAnalysis = DemandManager.getInstance().renderPrompt(demandState);
 
+            // ★ 行动模板匹配：从历史经验中统计类似场景的工具出场率
+            List<ActionTemplateMatcher.ActionTemplate> templates =
+                    ActionTemplateMatcher.getInstance().compute(action, experiencesDB);
+            String actionTemplatesText = ActionTemplateMatcher.getInstance().renderPromptBlock(templates);
+
             Map<String, Object> promptData = buildActionPromptData(action, feelingResonanceBlock,
-                    mutualExclusions, demandAnalysis);
+                    mutualExclusions, demandAnalysis, actionTemplatesText);
             ArrayNode toolsArray = buildToolsArray();
 
             // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
@@ -919,6 +926,19 @@ public class ActionLoop implements MosireAPI {
                     : new ArrayList<>();
 
             // 6. 存储经验
+            // ★ 收集本轮执行的工具名（用于行动模板匹配）
+            List<String> executedToolNames = new ArrayList<>();
+            if (result.isToolCall() && result.getToolCalls() != null && result.getToolCalls().isArray()) {
+                for (JsonNode tc : result.getToolCalls()) {
+                    String fnName = tc.path("function").path("name").asText();
+                    if (!fnName.isBlank() && !"finish_action".equals(fnName)) {
+                        executedToolNames.add(fnName);
+                    }
+                }
+            }
+            // ★ 提取来源类型（用于行动模板匹配）
+            String expSourceType = ActionTemplateMatcher.extractSourceType(action);
+
             // ★ 优先使用 LLM 通过 action_feelings 回报的感觉维度 ID 作为富 key
             //    回退：合并 stimulatedDimIds + UE dimIds（旧逻辑）
             List<Integer> expDimIds;
@@ -933,7 +953,8 @@ public class ActionLoop implements MosireAPI {
             }
             String newPrepText = (newPrepareUnitNode != null && !newPrepareUnitNode.isNull() && !newPrepareUnitNode.isMissingNode())
                     ? newPrepareUnitNode.path("text").asText() : null;
-            int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText);
+            int expId = storeExperience(action, thoughts, expDimIds, toolResults, newPrepText,
+                    executedToolNames, expSourceType);
 
             // ★ 顺序通道：本轮触发的每条经验记录「我这个经验之后出现了 expId」
             if (expId > 0) {
@@ -1036,7 +1057,8 @@ public class ActionLoop implements MosireAPI {
      */
     private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock,
                                                        List<Map<String, Object>> mutualExclusions,
-                                                       String demandAnalysis) {
+                                                       String demandAnalysis,
+                                                       String actionTemplatesText) {
         Map<String, Object> data = new HashMap<>();
 
         // ★ action_text 上限：防止超长聊天历史撑爆上下文窗口
@@ -1075,6 +1097,11 @@ public class ActionLoop implements MosireAPI {
         // ★ 动机分析（DemandManager 六维认知感受 → 人话翻译）
         if (demandAnalysis != null && !demandAnalysis.isBlank()) {
             data.put("demand_analysis", demandAnalysis);
+        }
+
+        // ★ 行动模板匹配：从历史经验中统计出的高频工具建议
+        if (actionTemplatesText != null && !actionTemplatesText.isBlank()) {
+            data.put("action_templates_text", actionTemplatesText);
         }
 
         // ★ 联想引擎：相关经验 + 顺序通道预测
@@ -1230,7 +1257,7 @@ public class ActionLoop implements MosireAPI {
 
     private int storeExperience(CognitiveAction action, String thoughts,
                                  List<Integer> feelingDimIds, List<String> toolResults,
-                                 String newPrepareText) {
+                                 String newPrepareText, List<String> toolNames, String sourceType) {
         List<String> expTexts = new ArrayList<>();
 
         // LLM 的想法
@@ -1265,7 +1292,9 @@ public class ActionLoop implements MosireAPI {
         String combinedText = String.join(" ", expTexts);
         double[] emb = getEmbedding(combinedText);
 
-        int expId = experiencesDB.insertExperience(allDimIds, expTexts, emb);
+        int expId = experiencesDB.insertExperience(allDimIds, expTexts, emb,
+                toolNames != null ? toolNames : List.of(),
+                sourceType != null ? sourceType : "");
         if (expId > 0) {
             experienceStoredCount.incrementAndGet();
         }

@@ -63,6 +63,10 @@ ${related_experiences_text}
 ${predicted_experiences_text}
 </#if>
 
+<#if action_templates_text?has_content>
+${action_templates_text}
+</#if>
+
 ${pool_summary}
 
 ---
