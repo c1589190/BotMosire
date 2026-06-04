@@ -142,8 +142,7 @@ public class AttentionManager {
      * - 基线：每个单元都有被注意的基本可能 (0.05)
      * - 新颖度：UE 越低越新颖，注意力天然倾向探索未知 (0 ~ 0.25)
      * - LLM boost：CW > 1 意味着 LLM 显式标记为重要 (0 ~ 0.30)
-     * - 内源任务：自生成任务需要注意力滋养才能成长 (0.15)
-     * - tick 紧迫度：等太久还没被选中的单元有一定紧迫感 (0 ~ 0.15)
+     * - 疲劳惩罚：高疲劳单元降低注意力吸引力
      */
     private double computeAttractiveness(CognitivePrepareUnit unit) {
         double attr = 0.05; // 基线
@@ -168,16 +167,6 @@ public class AttentionManager {
         // ★ 疲劳惩罚：高疲劳单元降低注意力吸引力，注意力倾向新鲜话题
         double fatigue = unit.getUnitFatigue();
         attr *= (1.0 - fatigue * 0.7);
-
-        // tick 紧迫度：等待超过 5 tick 的单元，越等越"急"
-        int tick = unit.getTick();
-        if (tick > 15) {
-            attr += 0.15; // 等很久了，紧迫
-        } else if (tick > 10) {
-            attr += 0.10;
-        } else if (tick > 5) {
-            attr += 0.05;
-        }
 
         // ★ 注意力态度乘数：基于匹配感觉维度的长期态度偏好
         double attnMultiplier = unit.getAttentionAttitudeMultiplier();
