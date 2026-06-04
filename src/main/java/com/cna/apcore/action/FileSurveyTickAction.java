@@ -34,7 +34,7 @@ public class FileSurveyTickAction implements TickAction {
 
     public FileSurveyTickAction() {
         this.rootDir = Paths.get("").toAbsolutePath().normalize();
-        this.baseSE = CoreConfig.FILE_INPUT_BASE_SE;
+        this.baseSE = CoreConfig.FILE_SOURCE_PRIORITY;
         this.surveyIntervalTicks = CoreConfig.FILE_SURVEY_INTERVAL_TICKS;
         this.idlePoolThreshold = CoreConfig.FILE_IDLE_POOL_THRESHOLD;
 

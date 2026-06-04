@@ -22,8 +22,8 @@ public class CognitivePrepareUnit {
     private final List<String> sourceIds;     // 来源标识符列表（如 "qqid:12345", "qq_group:67890"）
     private final long createdAtMs;           // 创建时间戳
 
-    private double stimulateEnergy;           // SE: 外部刺激强度
-    private double understandEnergy;          // UE: 理解能量（BFS 搜索结果）
+    private double sourcePriority;            // 来源优先级（外源=消息统计值，内源=继承父权重+定值）
+    private double semanticWeight;            // 语义权重（ActionText 在感觉维度超图 BFS 结果）
     private int tick;                         // 未被选中的轮数
     private List<UEUnit> ueUnits;             // UE 计算涉及的所有感觉节点
     private double continueWeight;            // 持续权重，初始 1，每 tick 衰减，LLM 可 boost
@@ -34,12 +34,12 @@ public class CognitivePrepareUnit {
     private Map<Integer, Double> feelingMatchStrengths; // 每个感觉维度的归一化匹配强度 dimId→strength
     private double attentionAttitudeMultiplier; // 注意力态度乘数，默认 1.0（中性），>1=应多关注，<1=应少关注
 
-    private CognitivePrepareUnit(String text, List<String> sourceIds, double stimulateEnergy) {
+    private CognitivePrepareUnit(String text, List<String> sourceIds, double sourcePriority) {
         this.uuid = UUID.randomUUID();
         this.text = text;
         this.sourceIds = sourceIds != null ? new ArrayList<>(sourceIds) : new ArrayList<>();
-        this.stimulateEnergy = stimulateEnergy;
-        this.understandEnergy = 0.0;
+        this.sourcePriority = sourcePriority;
+        this.semanticWeight = 0.0;
         this.tick = 0;
         this.ueUnits = new ArrayList<>();
         this.continueWeight = 1.0;
@@ -52,24 +52,24 @@ public class CognitivePrepareUnit {
         this.createdAtMs = System.currentTimeMillis();
     }
 
-    /** 工厂方法 */
+    /** 工厂方法（无来源优先级） */
     public static CognitivePrepareUnit create(String text, List<String> sourceIds) {
         return new CognitivePrepareUnit(text, sourceIds, 0.0);
     }
 
-    /** 工厂方法，带初始 SE */
-    public static CognitivePrepareUnit create(String text, List<String> sourceIds, double stimulateEnergy) {
-        return new CognitivePrepareUnit(text, sourceIds, stimulateEnergy);
+    /** 工厂方法，带初始来源优先级 */
+    public static CognitivePrepareUnit create(String text, List<String> sourceIds, double sourcePriority) {
+        return new CognitivePrepareUnit(text, sourceIds, sourcePriority);
     }
 
-    /** 设置刺激能量 */
-    public void setSE(double se) {
-        this.stimulateEnergy = Math.max(0.0, se);
+    /** 设置来源优先级 */
+    public void setSourcePriority(double p) {
+        this.sourcePriority = Math.max(0.0, p);
     }
 
-    /** 设置理解能量及关联的感觉节点 */
-    public void setUE(double ue, List<UEUnit> units) {
-        this.understandEnergy = Math.max(0.0, ue);
+    /** 设置语义权重及关联的感觉节点 */
+    public void setSemanticWeight(double sw, List<UEUnit> units) {
+        this.semanticWeight = Math.max(0.0, sw);
         this.ueUnits = units != null ? new ArrayList<>(units) : new ArrayList<>();
     }
 
@@ -105,9 +105,9 @@ public class CognitivePrepareUnit {
         this.tick = 0;
     }
 
-    /** 清除 UE 计算结果（文本变更后 UE 需要重算） */
-    public void clearUE() {
-        this.understandEnergy = 0.0;
+    /** 清除语义权重计算结果（文本变更后需要重算） */
+    public void clearSemanticWeight() {
+        this.semanticWeight = 0.0;
         this.ueUnits = new ArrayList<>();
         this.cachedEmbedding = null;
         this.feelingMatchStrengths = new HashMap<>();
@@ -115,42 +115,46 @@ public class CognitivePrepareUnit {
     }
 
     /**
-     * 选择得分 = (SE + attentionEnergy) × UE × log₂(tick+1) × CW × fatiguePenalty × attnAttitudeMultiplier
+     * 选取得分 = (semanticWeight + sourcePriority + tickBonus + attentionEnergy)
+     *           × CW × fatiguePenalty × attnAttitudeMultiplier
      *
-     * 总能量 = 外源刺激能量 + 内源注意力累积能量。
-     * 总能量 × UE 必须先超过 baselineThreshold 才有效，否则返回 0。
-     *
-     * tickFactor 使用对数压缩，避免旧任务无限积累优势：
-     *   tick=0 → 1, tick=3 → 3, tick=7 → 4, tick=15 → 5
-     *
-     * fatiguePenalty = 1 / (1 + unitFatigue × sensitivity)
-     *   疲劳越高，得分越低，自然倾向于切换到新鲜话题。
-     *   unitFatigue 由 FatigueManager 基于该单元匹配的感觉维度的近期处理记录计算。
-     *
-     * attnAttitudeMultiplier 由 FeelingsDB 中各感觉维度的 attention_attitude 加权得出，
-     *   >1 = Agent 对该感觉方向持积极关注态度 → 分数被抬高
-     *   <1 = Agent 对该感觉方向持消极回避态度 → 分数被压低
+     * semanticWeight:   ActionText 在感觉维度超图 BFS 的结果（外源有值，内源为 0）
+     * sourcePriority:   来源的实践重要性（外源=消息统计，内源=继承父权重+定值加成）
+     * tickBonus:        挂起时间对数加成 log₂(tick+1)
+     * attentionEnergy:  AttentionManager 每 tick 分配的内源蓄能
+     * CW:               LLM 手动 boost 的持续权重
+     * fatiguePenalty:   刚处理过类似感觉 → 分数降低
+     * attnAttitudeMultiplier: 对匹配感觉维度的长期态度倾向
      */
     public double selectionScore(double baselineThreshold) {
-        double totalEnergy = stimulateEnergy + attentionEnergy;
-        double baseEnergy = totalEnergy * understandEnergy;
-        if (baseEnergy < baselineThreshold) {
+        double tickBonus = 1.0 + Math.log(tick + 1) / Math.log(2);
+        double practicalBonus = sourcePriority + tickBonus + attentionEnergy;
+        double baseScore = semanticWeight + practicalBonus;
+
+        if (baseScore < baselineThreshold) {
             return 0.0;
         }
-        // 对数压缩 tick 因子
-        double tickFactor = 1.0 + Math.log(tick + 1) / Math.log(2);
-        // 疲劳惩罚（基于感觉维度粒度，由 FatigueManager 计算）
+
         double sensitivity = com.cna.apcore.config.CoreConfig.FATIGUE_SENSITIVITY;
         double fatiguePenalty = 1.0 / (1.0 + unitFatigue * sensitivity);
-        // 注意力态度乘数（基于感觉维度的关注度，从 DB 读取）
-        double attnMult = attentionAttitudeMultiplier;
 
-        return baseEnergy * tickFactor * continueWeight * fatiguePenalty * attnMult;
+        return baseScore * continueWeight * fatiguePenalty * attentionAttitudeMultiplier;
     }
 
     /** 累加注意力能量 */
     public void addAttentionEnergy(double delta) {
         this.attentionEnergy = Math.max(0.0, this.attentionEnergy + delta);
+    }
+
+    /** 获取语义权重子项（用于 next_action 继承） */
+    public double getSemanticWeight() { return semanticWeight; }
+
+    /** 获取来源优先级子项（用于 next_action 继承） */
+    public double getSourcePriority() { return sourcePriority; }
+
+    /** next_action 继承用的父权重 = semanticWeight + sourcePriority */
+    public double getParentWeight() {
+        return semanticWeight + sourcePriority;
     }
 
     /** 衰减注意力能量（未被持续关注时消退） */
@@ -214,7 +218,7 @@ public class CognitivePrepareUnit {
         String textPreview = text != null && text.length() > 50 ? text.substring(0, 50) + "..." : text;
         return String.format("CPU{uuid=%s, text='%s', SE=%.3f, UE=%.3f, tick=%d, cw=%.2f, ueUnits=%d}",
                 uuid.toString().substring(0, 8), textPreview,
-                stimulateEnergy, understandEnergy, tick, continueWeight,
+                sourcePriority, semanticWeight, tick, continueWeight,
                 ueUnits != null ? ueUnits.size() : 0);
     }
 }

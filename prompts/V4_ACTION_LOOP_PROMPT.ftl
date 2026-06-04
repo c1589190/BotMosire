@@ -15,17 +15,17 @@ ${selection_reason}
 ${demand_analysis}
 </#if>
 
-【认知状态 — 6 个情绪维度】
-认知熟悉度 (CognitiveFamiliarity): ${cognitive_familiarity}
-  说明：ActionText 与所有关联感觉维度的加权相似度之和，越高表示越"似曾相识"。
+【认知状态】
+语义权重 (SemanticWeight): ${selection_semantic_weight}
+  说明：ActionText 在感觉维度超图 BFS 匹配结果（外源有值，内源为 0）。
+来源优先级 (SourcePriority): ${selection_src_priority}
+  说明：消息的实践重要性（私聊>群聊、@提及>无@、多消息>少消息；内源=继承父权重+定值）。
+实践加成 (PracticalBonus): ${selection_practical_bonus}
+  说明：来源优先级 + 挂起时间加成 + 注意力蓄能。
+认知熟悉度 (CF): ${cognitive_familiarity}
 认知规模 (Scale): ${scale}
-  说明：根据关联的感觉节点数量决定，影响检索多少条先验经验。
 意外度 (AccidentDegree): ${accident_degree}
-  说明：UnderstandingEnergy - CognitiveFamiliarity，正值表示"意料之外"。
-行动压力 (ActionPressure): ${action_pressure}
-  说明：当前为 TODO，暂固定为 0。
 持续权重 (ContinueWeight): ${continue_weight}
-  说明：初始 1，每 tick 衰减。LLM 可通过 continue_weight_boosts 给池中感兴趣的单元加权。
 
 【关联的感觉维度】
 概念: ${ue_concepts?join(", ")}<#if ue_concepts?size == 0>（无）</#if>

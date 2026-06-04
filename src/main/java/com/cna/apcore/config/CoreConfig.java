@@ -25,7 +25,7 @@ public class CoreConfig {
     // 认知准备池参数
     // ==========================================
 
-    /** SE×UE 基础底线，低于此值的单元不会被选中 */
+    /** 选取得分基线：(semanticWeight + practicalBonus) 低于此值的单元不会被选中 */
     public static final double BASELINE_THRESHOLD;
 
     /** 每 tick ContinueWeight 衰减系数（0~1） */
@@ -71,27 +71,23 @@ public class CoreConfig {
     public static final double DEDUP_THRESHOLD;
 
     // ==========================================
-    // 文件输入监控参数（FileSurveyTickAction）
+    // 来源优先级（sourcePriority）— 外源消息的实践权重
     // ==========================================
 
-    /** 桌面巡视间隔（tick 数），池空闲时每隔这么多 tick 注入一次目录快照 */
+    /** 文件巡视产生单元的基础来源优先级 */
+    public static final double FILE_SOURCE_PRIORITY;
+
+    /** 文件巡视间隔（tick 数） */
     public static final int FILE_SURVEY_INTERVAL_TICKS;
 
-    /** 空闲判断阈值：池大小低于此值才触发桌面巡视 */
+    /** 文件巡视空闲阈值（池大小低于此值才触发） */
     public static final int FILE_IDLE_POOL_THRESHOLD;
 
-    /** 桌面巡视产生单元的基础 SE */
-    public static final double FILE_INPUT_BASE_SE;
+    /** 自我检查产生单元的基础来源优先级 */
+    public static final double TICK_SELFCHECK_SOURCE_PRIORITY;
 
-    // ==========================================
-    // TickAction 参数
-    // ==========================================
-
-    /** 自我检查间隔（tick 数），默认 30 = 约 60 秒 */
+    /** 自我检查间隔（tick 数） */
     public static final int TICK_SELFCHECK_INTERVAL_TICKS;
-
-    /** 自我检查产生单元的基础 SE */
-    public static final double TICK_SELFCHECK_BASE_SE;
 
     /** 自我检查是否需要池空闲才触发 */
     public static final boolean TICK_SELFCHECK_REQUIRE_IDLE;
@@ -100,23 +96,17 @@ public class CoreConfig {
     public static final int TICK_SELFCHECK_IDLE_THRESHOLD;
 
     // ==========================================
-    // LLM 自主规划参数（next_actions / 续命 / 汇总）
+    // 实践加成（practicalBonus）— 内源任务继承父权重 + 定值
     // ==========================================
 
-    /** next_action SE = 源单元SE × seMultiplier × priority */
-    public static final double NEXT_ACTION_SE_MULTIPLIER;
+    /** next_action：LLM 显式规划的下一步，sourcePriority = 父(semanticW+srcPri) + 此值 */
+    public static final double NEXT_ACTION_BONUS;
 
-    /** 无 finish_action 时续命任务的 SE 系数 */
-    public static final double CONTINUED_SE_MULTIPLIER;
+    /** 续命任务（无 finish_action / new_prepare_unit）的加成 */
+    public static final double CONTINUED_BONUS;
 
-    /** 无 tool_calls 时续命任务的 SE 系数 */
-    public static final double NO_TOOL_CONTINUED_SE_MULTIPLIER;
-
-    /** 工具执行结果汇总入池的 SE 系数 */
-    public static final double TOOL_SUMMARY_SE_MULTIPLIER;
-
-    /** new_prepare_unit 继承 SE 的系数 */
-    public static final double NEW_PREP_UNIT_SE_MULTIPLIER;
+    /** 工具执行结果汇总入池的固定来源优先级 */
+    public static final double TOOL_SUMMARY_SOURCE_PRIORITY;
 
     // ==========================================
     // 行动模板匹配参数（ActionTemplateMatcher）
@@ -234,7 +224,7 @@ public class CoreConfig {
         }
 
         // —— 认知准备池 ——
-        BASELINE_THRESHOLD        = getDouble("v4.core.baselineThreshold", 0.3);
+        BASELINE_THRESHOLD        = getDouble("v4.core.baselineThreshold", 1.0);
         CONTINUE_WEIGHT_DECAY     = getDouble("v4.core.continueWeightDecay", 0.9);
         MAX_CONTINUE_WEIGHT       = getDouble("v4.core.maxContinueWeight", 5.0);
         MAX_POOL_SIZE             = getInt("v4.core.maxPoolSize", 32);
@@ -252,23 +242,19 @@ public class CoreConfig {
         // —— 去重 ——
         DEDUP_THRESHOLD           = getDouble("v4.core.dedupThreshold", 0.85);
 
-        // —— 桌面巡视 ——
-        FILE_SURVEY_INTERVAL_TICKS = getInt("v4.file.surveyIntervalTicks", 8);
-        FILE_IDLE_POOL_THRESHOLD   = getInt("v4.file.idlePoolThreshold", 2);
-        FILE_INPUT_BASE_SE              = getDouble("v4.file.inputBaseSE", 0.6);
+        // —— 来源优先级 ——
+        FILE_SOURCE_PRIORITY                = getDouble("v4.source.filePriority", 0.6);
+        FILE_SURVEY_INTERVAL_TICKS          = getInt("v4.file.surveyIntervalTicks", 8);
+        FILE_IDLE_POOL_THRESHOLD            = getInt("v4.file.idlePoolThreshold", 2);
+        TICK_SELFCHECK_SOURCE_PRIORITY      = getDouble("v4.source.selfCheckPriority", 0.5);
+        TICK_SELFCHECK_INTERVAL_TICKS       = getInt("v4.tick.selfCheckIntervalTicks", 30);
+        TICK_SELFCHECK_REQUIRE_IDLE         = getBoolean("v4.tick.selfCheckRequireIdle", true);
+        TICK_SELFCHECK_IDLE_THRESHOLD       = getInt("v4.tick.selfCheckIdleThreshold", 3);
 
-        // —— TickAction ——
-        TICK_SELFCHECK_INTERVAL_TICKS  = getInt("v4.tick.selfCheckIntervalTicks", 30);
-        TICK_SELFCHECK_BASE_SE         = getDouble("v4.tick.selfCheckBaseSE", 0.5);
-        TICK_SELFCHECK_REQUIRE_IDLE    = getBoolean("v4.tick.selfCheckRequireIdle", true);
-        TICK_SELFCHECK_IDLE_THRESHOLD  = getInt("v4.tick.selfCheckIdleThreshold", 3);
-
-        // —— LLM 自主规划 ——
-        NEXT_ACTION_SE_MULTIPLIER        = getDouble("v4.nextAction.seMultiplier", 1.3);
-        CONTINUED_SE_MULTIPLIER          = getDouble("v4.nextAction.continuedSeMultiplier", 0.9);
-        NO_TOOL_CONTINUED_SE_MULTIPLIER  = getDouble("v4.nextAction.noToolContinuedSeMultiplier", 0.9);
-        TOOL_SUMMARY_SE_MULTIPLIER       = getDouble("v4.nextAction.toolSummarySeMultiplier", 0.3);
-        NEW_PREP_UNIT_SE_MULTIPLIER      = getDouble("v4.nextAction.newPrepUnitSeMultiplier", 0.7);
+        // —— 实践加成（内源继承父权重 + 定值）——
+        NEXT_ACTION_BONUS            = getDouble("v4.bonus.nextAction", 0.2);
+        CONTINUED_BONUS              = getDouble("v4.bonus.continued", 0.1);
+        TOOL_SUMMARY_SOURCE_PRIORITY = getDouble("v4.bonus.toolSummary", 0.1);
 
         // —— 行动模板匹配 ——
         TEMPLATE_MIN_TOOL_RATIO    = getDouble("v4.template.minToolRatio", 0.6);

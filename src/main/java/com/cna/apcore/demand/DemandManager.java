@@ -85,7 +85,7 @@ public class DemandManager {
 
         CognitivePrepareUnit src = action.getSourceUnit();
         double cf = action.getCognitiveFamiliarity();
-        double ue = src.getUnderstandEnergy();
+        double ue = src.getSemanticWeight();
         double safeUe = Math.max(ue, 0.001);
 
         // 1. 把握感 = CF / UE，即熟悉度占理解的比例
@@ -141,7 +141,7 @@ public class DemandManager {
             for (CognitivePrepareUnit u : units) {
                 if (!u.isEndogenous()) {
                     externalCount++;
-                    extSeSum += u.getStimulateEnergy();
+                    extSeSum += u.getSourcePriority();
                 }
             }
             double avgExtSe = externalCount > 0 ? extSeSum / externalCount : 0.0;

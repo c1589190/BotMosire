@@ -216,10 +216,10 @@ public class ApcoreConsole {
             String uuid = u.getUuid().toString().substring(0, 8);
             String text = u.getText();
             if (text.length() > 60) text = text.substring(0, 60) + "...";
-            System.out.printf("  [%s] SE=%.2f UE=%.2f tick=%d cw=%.2f src=%s%n",
+            System.out.printf("  [%s] semW=%.2f srcPri=%.2f tick=%d cw=%.2f src=%s%n",
                     uuid,
-                    u.getStimulateEnergy(),
-                    u.getUnderstandEnergy(),
+                    u.getSourcePriority(),
+                    u.getSemanticWeight(),
                     u.getTick(),
                     u.getContinueWeight(),
                     u.getSourceIds());

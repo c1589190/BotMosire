@@ -93,7 +93,7 @@ public class CognitiveAction {
 
     /** 计算 AccidentDegree（意外度）= UE - CF */
     public void computeAccidentDegree() {
-        this.accidentDegree = sourceUnit.getUnderstandEnergy() - this.cognitiveFamiliarity;
+        this.accidentDegree = sourceUnit.getSemanticWeight() - this.cognitiveFamiliarity;
     }
 
     /** 注入从 ExperiencesDB 检索到的先验经验 */

@@ -460,10 +460,10 @@ public class ActionLoop implements MosireAPI {
                 long endo = all.size() - exo;
                 double avgF = all.stream().mapToDouble(CognitivePrepareUnit::getUnitFatigue)
                         .average().orElse(0.0);
-                double avgSE = all.stream().mapToDouble(CognitivePrepareUnit::getStimulateEnergy)
+                double avgSrcPri = all.stream().mapToDouble(CognitivePrepareUnit::getSourcePriority)
                         .average().orElse(0.0);
                 MentalStateLogger.getInstance().poolSnapshot(
-                        tick, all.size(), (int) exo, (int) endo, avgF, avgSE);
+                        tick, all.size(), (int) exo, (int) endo, avgF, avgSrcPri);
             }
 
             // ── 步骤 2: 选择并处理 ──
@@ -521,12 +521,12 @@ public class ActionLoop implements MosireAPI {
             CognitivePrepareUnit existing = preparePool.findBySource(source);
             if (existing != null) {
                 existing.appendText(unit.getText());
-                existing.setSE(Math.max(existing.getStimulateEnergy(), unit.getStimulateEnergy()));
+                existing.setSourcePriority(Math.max(existing.getSourcePriority(), unit.getSourcePriority()));
                 existing.resetTick();
-                existing.clearUE();
+                existing.clearSemanticWeight();
                 int count = inputProcessedCount.incrementAndGet();
                 log.info("[ActionLoop] 🔗 合并同源输入 (总计: " + count + "): source=" + source
-                        + ", SE=" + String.format("%.3f", existing.getStimulateEnergy()));
+                        + ", SE=" + String.format("%.3f", existing.getSourcePriority()));
             } else {
                 preparePool.push(unit);
                 // ★ 外部输入隐式驱动注意力态度
@@ -534,7 +534,7 @@ public class ActionLoop implements MosireAPI {
                 int count = inputProcessedCount.incrementAndGet();
                 log.info("[ActionLoop] 📨 新准备单元入池 (总计: " + count + "): source=" + source
                         + ", textLen=" + unit.getText().length()
-                        + ", SE=" + String.format("%.3f", unit.getStimulateEnergy()));
+                        + ", SE=" + String.format("%.3f", unit.getSourcePriority()));
             }
         }
     }
@@ -792,30 +792,27 @@ public class ActionLoop implements MosireAPI {
                             // ★ LLM 自主后续行动规划：从 next_actions 数组创建多个准备单元注入池中
                             JsonNode nextActions = finishActionArgs.path("next_actions");
                             if (nextActions.isArray()) {
-                                double baseSE = action.getSourceUnit().getStimulateEnergy() * CoreConfig.NEXT_ACTION_SE_MULTIPLIER;
+                                // 语义权重归零，实践权重继承父任务的语义+来源权重再加定值加成
+                                double parentWeight = action.getSourceUnit().getParentWeight();
+                                double nextPriority = parentWeight + CoreConfig.NEXT_ACTION_BONUS;
                                 int createdCount = 0;
                                 for (JsonNode na : nextActions) {
                                     String taskText = na.path("text").asText();
                                     if (taskText == null || taskText.isBlank()) continue;
-                                    double priority = na.path("priority").asDouble(0.5);
-                                    priority = Math.max(0.1, Math.min(1.0, priority)); // clamp [0.1, 1.0]
-                                    double se = baseSE * priority;
                                     CognitivePrepareUnit nextUnit = CognitivePrepareUnit.create(
                                             taskText,
                                             action.getSourceUnit().getSourceIds(),
-                                            se
+                                            nextPriority
                                     );
-                                    // ★ 标记为内源任务：注意力系统会对其分配额外能量
                                     nextUnit.setEndogenous(true);
                                     preparePool.push(nextUnit);
-                                    // ★ 内源任务隐式驱动注意力态度
                                     preparePool.boostMatchedFeelings(nextUnit,
-                                            CoreConfig.ATTENTION_BOOST_ENDOGENOUS * priority);
+                                            CoreConfig.ATTENTION_BOOST_ENDOGENOUS);
                                     createdCount++;
-                                    log.info("[ActionLoop] 🔄 后续任务 #{}: SE=" + String.format("%.3f", se)
-                                            + ", priority=" + String.format("%.2f", priority)
-                                            + ", text=" + (taskText.length() > 60
-                                                    ? taskText.substring(0, 60) + "..." : taskText));
+                                    log.info("[ActionLoop] 🔄 next_action #{}: srcPri={:.3f} (parent={:.3f}+bonus={:.3f}) text={}",
+                                            createdCount, nextPriority, parentWeight,
+                                            CoreConfig.NEXT_ACTION_BONUS,
+                                            taskText.length() > 60 ? taskText.substring(0, 60) + "..." : taskText);
                                 }
                                 if (createdCount > 0) {
                                     log.info("[ActionLoop] 📋 LLM 通过 finish_action 规划了 " + createdCount + " 个后续任务");
@@ -835,21 +832,21 @@ public class ActionLoop implements MosireAPI {
                     // LLM 做了工具调用但没调 finish_action（如在 get_chat_history 后需要
                     // 下一轮继续处理），自动重建当前任务入池，避免任务丢失。
                     if (toolCallCount > 0) {
-                        double continuedSE = action.getSourceUnit().getStimulateEnergy() * CoreConfig.CONTINUED_SE_MULTIPLIER;
+                        double parentWeight = action.getSourceUnit().getParentWeight();
+                        double continuedPri = parentWeight + CoreConfig.CONTINUED_BONUS;
                         CognitivePrepareUnit continued = CognitivePrepareUnit.create(
                                 action.getActionText(),
                                 action.getSourceUnit().getSourceIds(),
-                                continuedSE
+                                continuedPri
                         );
                         continued.setEndogenous(true);
                         preparePool.push(continued);
-                        // ★ 续命任务也隐式驱动注意力态度（权重减半）
                         preparePool.boostMatchedFeelings(continued,
                                 CoreConfig.ATTENTION_BOOST_ENDOGENOUS * 0.5);
-                        log.info("[ActionLoop] 🔄 本轮未结算但有 " + toolCallCount + " 个工具调用，自动续命任务入池: SE="
-                                + String.format("%.3f", continuedSE)
-                                + ", text=" + (action.getActionText().length() > 60
-                                        ? action.getActionText().substring(0, 60) + "..." : action.getActionText()));
+                        log.info("[ActionLoop] 🔄 续命任务入池: srcPri={:.3f} (parent={:.3f}+bonus={:.3f}) text={}",
+                                continuedPri, parentWeight, CoreConfig.CONTINUED_BONUS,
+                                action.getActionText().length() > 60
+                                        ? action.getActionText().substring(0, 60) + "..." : action.getActionText());
                     } else {
                         log.info("[ActionLoop] ⚠️ 本轮未调用 finish_action，认知周期无正式结算");
                     }
@@ -904,13 +901,13 @@ public class ActionLoop implements MosireAPI {
                 CognitivePrepareUnit toolSummary = CognitivePrepareUnit.create(
                         aggregated.toString(),
                         action.getSourceUnit().getSourceIds(),
-                        action.getSourceUnit().getStimulateEnergy() * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER
+                        CoreConfig.TOOL_SUMMARY_SOURCE_PRIORITY
                 );
                 preparePool.push(toolSummary);
-                // ★ 工具执行结果也隐式驱动注意力态度
                 preparePool.boostMatchedFeelings(toolSummary,
-                        CoreConfig.ATTENTION_BOOST_SELECTED * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER);
-                log.info("[ActionLoop] 📦 工具执行汇总已注入准备池: " + toolResults.size() + " 条结果, SE=" + String.format("%.3f", action.getSourceUnit().getStimulateEnergy() * CoreConfig.TOOL_SUMMARY_SE_MULTIPLIER));
+                        CoreConfig.ATTENTION_BOOST_SELECTED * 0.3);
+                log.info("[ActionLoop] 📦 工具执行汇总入池: {} 条结果, srcPri={}",
+                        toolResults.size(), CoreConfig.TOOL_SUMMARY_SOURCE_PRIORITY);
             }
 
             // 5. 处理刺激的感觉维度（委托 FeelingsManager）
@@ -1065,11 +1062,11 @@ public class ActionLoop implements MosireAPI {
 
         // ★ 选择上下文：告诉 LLM 为什么这个单元被选中，各项因子的贡献
         CognitivePrepareUnit src = action.getSourceUnit();
-        data.put("selection_se", src.getStimulateEnergy());
+        data.put("selection_src_priority", src.getSourcePriority());
         data.put("selection_attention", src.getAttentionEnergy());
-        data.put("selection_ue", src.getUnderstandEnergy());
+        data.put("selection_semantic_weight", src.getSemanticWeight());
         data.put("selection_tick", src.getTick());
-        data.put("selection_total_energy", src.getStimulateEnergy() + src.getAttentionEnergy());
+        data.put("selection_practical_bonus", src.getSourcePriority() + src.getAttentionEnergy() + (1.0 + Math.log(src.getTick() + 1) / Math.log(2)));
         data.put("selection_is_endogenous", src.isEndogenous());
 
         // 生成可读的选择原因
@@ -1133,44 +1130,42 @@ public class ActionLoop implements MosireAPI {
      * 为 LLM 生成可读的"为什么这个单元被选中"解释。
      */
     private String buildSelectionReason(CognitivePrepareUnit src, CognitiveAction action) {
-        double se = src.getStimulateEnergy();
+        double srcPri = src.getSourcePriority();
         double attn = src.getAttentionEnergy();
-        double ue = src.getUnderstandEnergy();
+        double semW = src.getSemanticWeight();
         int tick = src.getTick();
         double cw = src.getContinueWeight();
         boolean endogenous = src.isEndogenous();
 
         StringBuilder reason = new StringBuilder();
 
-        // 主导因子判断
-        if (endogenous && attn > se) {
-            reason.append("这是一个你之前规划的内源任务，经过注意力系统 ");
-            reason.append(String.format("%.0f", attn / (se + attn) * 100));
-            reason.append("% 的能量注入后被选中。");
-        } else if (se > 1.0) {
-            reason.append("外部刺激强烈（SE=" + String.format("%.2f", se) + "），来自外界的输入驱动了本轮选择。");
+        double tickBonus = 1.0 + Math.log(tick + 1) / Math.log(2);
+        double practical = srcPri + tickBonus + attn;
+        double total = semW + practical;
+
+        if (endogenous && attn > srcPri) {
+            reason.append("内源任务，注意力蓄能占主导（attn=" + String.format("%.2f", attn) + "）。");
+        } else if (semW > 1.5) {
+            reason.append("语义高度匹配（semanticWeight=" + String.format("%.2f", semW) + "），与你的感觉体系高度共鸣。");
         } else if (tick > 10) {
-            reason.append("这个单元已在池中等待 " + tick + " 轮未被处理，累积的紧迫度使其被选中。");
-        } else if (ue > 3.0) {
-            reason.append("该任务与你的感觉维度网络高度匹配（UE=" + String.format("%.1f", ue) + "），说明你对这个领域有丰富的认知基础。");
+            reason.append("已在池中等待 " + tick + " 轮（tickBonus=" + String.format("%.2f", tickBonus) + "），累积紧迫度驱动。");
         } else if (cw > 1.0) {
-            reason.append("你之前通过 boost 手动提升了这个单元的权重，使其优先被选中。");
-        } else if (attn > 0.3) {
-            reason.append("注意力系统在多个 tick 中持续关注此单元，累积了足够的能量。");
+            reason.append("你之前手动 boost 了此单元的持续权重（CW=" + String.format("%.2f", cw) + "）。");
         } else {
-            reason.append("综合多项选择因子后，此单元得分最高。");
+            reason.append("综合选择得分最高（semantic=" + String.format("%.2f", semW)
+                    + " + practical=" + String.format("%.2f", practical)
+                    + " = " + String.format("%.2f", total) + "）。");
         }
 
-        // 补充认知评价
         double cf = action.getCognitiveFamiliarity();
         double accident = action.getAccidentDegree();
         if (cf > 3.0) {
-            reason.append(" 你对这个任务非常熟悉（CF=" + String.format("%.1f", cf) + "），可以依赖先验经验快速处理。");
+            reason.append(" 高熟悉度（CF=" + String.format("%.1f", cf) + "），可快速处理。");
         } else if (cf < 0.5) {
-            reason.append(" 这是一个相对新颖的任务（CF=" + String.format("%.2f", cf) + "），需要开放心态探索。");
+            reason.append(" 新颖任务（CF=" + String.format("%.2f", cf) + "），需探索。");
         }
         if (accident > 0.3) {
-            reason.append(" 意外度较高（" + String.format("%.2f", accident) + "），实际输入与预期有偏差，需要重新评估。");
+            reason.append(" 意外度偏高（" + String.format("%.2f", accident) + "）。");
         }
 
         return reason.toString();
@@ -1342,13 +1337,14 @@ public class ActionLoop implements MosireAPI {
         }
 
         CognitivePrepareUnit newCPU = CognitivePrepareUnit.create(text, sourceIds);
-        // 初始 SE 可以继承一部分，表示"上一轮未完成的事有点重要"
-        newCPU.setSE(currentAction.getSourceUnit().getStimulateEnergy() * CoreConfig.NEW_PREP_UNIT_SE_MULTIPLIER);
+        // 继承父权重 + 续命加成（与续命任务一致）
+        double parentWeight = currentAction.getSourceUnit().getParentWeight();
+        newCPU.setSourcePriority(parentWeight + CoreConfig.CONTINUED_BONUS);
 
         preparePool.push(newCPU);
         // ★ 未完成事项也隐式驱动注意力态度
         preparePool.boostMatchedFeelings(newCPU, CoreConfig.ATTENTION_BOOST_ENDOGENOUS);
-        log.info("[ActionLoop] 📝 LLM 创建新准备单元: " + newCPU + " (继承SE=" + String.format("%.3f", newCPU.getStimulateEnergy()) + ")");
+        log.info("[ActionLoop] 📝 LLM 创建新准备单元: " + newCPU + " (继承SE=" + String.format("%.3f", newCPU.getSourcePriority()) + ")");
     }
 
     // ==========================================

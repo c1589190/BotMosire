@@ -28,7 +28,7 @@ public class SelfCheckTickAction implements TickAction {
 
     public SelfCheckTickAction() {
         this.intervalTicks = CoreConfig.TICK_SELFCHECK_INTERVAL_TICKS;
-        this.baseSE = CoreConfig.TICK_SELFCHECK_BASE_SE;
+        this.baseSE = CoreConfig.TICK_SELFCHECK_SOURCE_PRIORITY;
         this.requireIdle = CoreConfig.TICK_SELFCHECK_REQUIRE_IDLE;
         this.idleThreshold = CoreConfig.TICK_SELFCHECK_IDLE_THRESHOLD;
 

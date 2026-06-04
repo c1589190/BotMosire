@@ -4,7 +4,7 @@
 # ==========================================
 
 # -- 认知准备池 --
-#v4.core.baselineThreshold=0.3
+#v4.core.baselineThreshold=1.0
 #v4.core.continueWeightDecay=0.9
 #v4.core.maxContinueWeight=5.0
 #v4.core.maxPoolSize=32
@@ -20,30 +20,27 @@
 #v4.core.bfsLayerDecay=0.7
 #v4.core.dedupThreshold=0.85
 
-# -- LLM 自主规划：next_actions 的 SE 系数 --
-# next_action SE = 源单元SE × seMultiplier × priority
-# 默认 1.3 → 优先回复的 SE 高于原始消息，避免被系统自检抢占
-#v4.nextAction.seMultiplier=1.3
-# 没有 finish_action 时的续命任务 SE 系数
-#v4.nextAction.continuedSeMultiplier=0.9
-# 没有 tool_calls 时的续命任务 SE 系数
-#v4.nextAction.noToolContinuedSeMultiplier=0.9
-# 工具执行结果汇总入池的 SE 系数
-#v4.nextAction.toolSummarySeMultiplier=0.3
-# new_prepare_unit 继承 SE 的系数
-#v4.nextAction.newPrepUnitSeMultiplier=0.7
-
-# -- 桌面巡视 --
+# -- 来源优先级（SourcePriority）——
+# 文件巡视的基础来源优先级
+#v4.source.filePriority=0.6
+# 文件巡视间隔（tick 数）
 #v4.file.surveyIntervalTicks=8
+# 文件巡视空闲阈值
 #v4.file.idlePoolThreshold=2
-#v4.file.inputBaseSE=0.6
+# 认知自检的基础来源优先级
+#v4.source.selfCheckPriority=0.5
 
-# -- 认知自检 --
+# -- 实践加成（PracticalBonus）——
+# next_action：LLM 规划的下一步 = 父(semanticW+srcPri) + 此值
+#v4.bonus.nextAction=0.2
+# 续命/new_prepare_unit：被动续命的加成
+#v4.bonus.continued=0.1
+# 工具执行结果汇总的固定来源优先级
+#v4.bonus.toolSummary=0.1
+
+# -- Tick 自检 ——
 #v4.tick.selfCheckIntervalTicks=30
-#v4.tick.selfCheckBaseSE=0.5
-# 是否只在池空闲时触发自检（true=空闲才触发，防止抢占用户消息处理）
 #v4.tick.selfCheckRequireIdle=true
-# 自检的空闲判断阈值（池大小低于此值才触发）
 #v4.tick.selfCheckIdleThreshold=3
 
 # -- 注意力机制 --

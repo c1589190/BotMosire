@@ -148,7 +148,7 @@ public class AttentionManager {
         double attr = 0.05; // 基线
 
         // 新颖度：UE 低 = 感觉图里匹配少 = 新颖，值得探索
-        double ue = unit.getUnderstandEnergy();
+        double ue = unit.getSemanticWeight();
         if (ue < 0.3) {
             attr += 0.25; // 高度新颖
         } else if (ue < 0.6) {

@@ -236,10 +236,10 @@ public class ChatMessageActionDeveloper {
     // ==========================================
 
     /**
-     * 计算刺激能量 SE。
+     * 计算来源优先级（外源消息的实践权重）。
      * 基础值 × 消息量因子 × @提及加成 × 私聊加成。
      */
-    private double computeSE(int messageCount, int atCount, boolean isPrivate) {
+    private double computeSourcePriority(int messageCount, int atCount, boolean isPrivate) {
         double baseSE = 0.5;
         double volumeFactor = 1.0 + Math.log1p(messageCount) * 0.5;
         double se = baseSE * volumeFactor;
@@ -295,7 +295,7 @@ public class ChatMessageActionDeveloper {
                 combined = messagesPart;
             }
 
-            double se = computeSE(messageCount, atMentionCount, isPrivate);
+            double se = computeSourcePriority(messageCount, atMentionCount, isPrivate);
 
             CognitivePrepareUnit unit = CognitivePrepareUnit.create(
                     combined, List.of(source), se);

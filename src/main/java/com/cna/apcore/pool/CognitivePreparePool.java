@@ -233,8 +233,8 @@ public class CognitivePreparePool {
         MentalStateLogger mlog = MentalStateLogger.getInstance();
         mlog.unitSelected(
                 best.getUuid().toString(), bestScore,
-                best.getStimulateEnergy(), best.getAttentionEnergy(),
-                best.getUnderstandEnergy(), tickFactor, best.getContinueWeight(),
+                best.getSourcePriority(), best.getAttentionEnergy(),
+                best.getSemanticWeight(), tickFactor, best.getContinueWeight(),
                 best.getUnitFatigue(), best.getAttentionAttitudeMultiplier(),
                 best.isEndogenous(),
                 best.getText(), pool.size());
@@ -256,8 +256,8 @@ public class CognitivePreparePool {
                 rankings[i] = mlog.createRankEntry(
                         u.getUuid().toString(),
                         u.selectionScore(CoreConfig.BASELINE_THRESHOLD),
-                        u.getStimulateEnergy(), u.getAttentionEnergy(),
-                        u.getUnderstandEnergy(), uTick, u.getContinueWeight(),
+                        u.getSourcePriority(), u.getAttentionEnergy(),
+                        u.getSemanticWeight(), uTick, u.getContinueWeight(),
                         u.getUnitFatigue(), u.getAttentionAttitudeMultiplier(),
                         u.isEndogenous());
             }
@@ -404,7 +404,7 @@ public class CognitivePreparePool {
 
         // 兜底：当感觉数据库为空（冷启动）时，给予基于 SE 的默认 UE，
         // 确保单元仍能通过 selectionScore 的 baselineThreshold 检查。
-        if (totalUE == 0.0 && unit.getStimulateEnergy() > 0) {
+        if (totalUE == 0.0 && unit.getSourcePriority() > 0) {
             totalUE = 0.6;
             allUEUnits.add(UEUnit.builder()
                     .dimId(-1)  // 合成节点，表示"无先验感觉匹配"
@@ -414,10 +414,10 @@ public class CognitivePreparePool {
                     .noveltyWeight(1.0)
                     .embedding(unitEmbedding)
                     .build());
-            log.debug("[Pool] UE 冷启动兜底: SE=" + String.format("%.3f", unit.getStimulateEnergy()) + " → UE=0.6 (合成节点)");
+            log.debug("[Pool] UE 冷启动兜底: SE=" + String.format("%.3f", unit.getSourcePriority()) + " → UE=0.6 (合成节点)");
         }
 
-        unit.setUE(totalUE, allUEUnits);
+        unit.setSemanticWeight(totalUE, allUEUnits);
         log.debug("[Pool] UE 计算完成: " + unit + " UE=" + String.format("%.3f", totalUE) + ", UEUnits=" + allUEUnits.size());
     }
 
@@ -437,7 +437,7 @@ public class CognitivePreparePool {
             return;
         }
 
-        double totalUE = unit.getUnderstandEnergy();
+        double totalUE = unit.getSemanticWeight();
         if (totalUE <= 0.0) {
             unit.setAttentionAttitudeMultiplier(1.0);
             return;
@@ -486,7 +486,7 @@ public class CognitivePreparePool {
         List<UEUnit> ueUnits = unit.getUeUnits();
         if (ueUnits == null || ueUnits.isEmpty()) return;
 
-        double totalUE = unit.getUnderstandEnergy();
+        double totalUE = unit.getSemanticWeight();
         if (totalUE <= 0.0) return;
 
         int boosted = 0;
@@ -655,13 +655,14 @@ public class CognitivePreparePool {
             }
             String tag = u.isEndogenous() ? "[内源]" : "";
             String uuidStr = u.getUuid().toString();
-            sb.append(String.format("  - %s[%s] '%s' SE=%.2f attn=%.2f UE=%.2f tick=%d cw=%.2f\n",
+            double tickBonus = 1.0 + Math.log(Math.max(1, u.getTick()) + 1) / Math.log(2);
+            sb.append(String.format("  - %s[%s] '%s' semW=%.2f srcPri=%.2f tickBonus=%.2f attn=%.2f cw=%.2f\n",
                     tag,
                     uuidStr,
                     displayText,
-                    u.getStimulateEnergy(), u.getAttentionEnergy(),
-                    u.getUnderstandEnergy(),
-                    u.getTick(), u.getContinueWeight()));
+                    u.getSemanticWeight(), u.getSourcePriority(),
+                    tickBonus, u.getAttentionEnergy(),
+                    u.getContinueWeight()));
         }
         return sb.toString();
     }
