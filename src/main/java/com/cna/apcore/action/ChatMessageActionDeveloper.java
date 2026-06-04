@@ -80,11 +80,18 @@ public class ChatMessageActionDeveloper {
                 continue;
             }
 
+            // 提取 ChatMessageInput 的 recentHistory（仅第一条消息的会被保留）
+            String recentHistory = "";
+            if (input instanceof ChatMessageInput chatMsg) {
+                String rh = chatMsg.getRecentHistory();
+                if (rh != null && !rh.isBlank()) recentHistory = rh;
+            }
+
             boolean isPrivate = source.contains("private") || source.contains("dm:");
             boolean hasAtMention = detectAtMention(text, input);
 
             Bucket bucket = buckets.computeIfAbsent(source, k -> new Bucket(source, isPrivate));
-            bucket.add(text, hasAtMention);
+            bucket.add(text, hasAtMention, recentHistory);
             bucketedCount++;
         }
 
@@ -256,6 +263,7 @@ public class ChatMessageActionDeveloper {
         final List<String> texts = new ArrayList<>();
         int messageCount;
         int atMentionCount;
+        String firstRecentHistory = "";  // 第一条消息附带的上下文史，flush 时只注入一次
 
         Bucket(String source, boolean isPrivate) {
             this.source = source;
@@ -263,16 +271,30 @@ public class ChatMessageActionDeveloper {
             this.firstMessageTime = System.currentTimeMillis();
         }
 
-        void add(String text, boolean hasAt) {
+        void add(String text, boolean hasAt, String recentHistory) {
             texts.add(text);
             messageCount++;
             if (hasAt) atMentionCount++;
+            // 只保留第一条消息的历史（群聊场景下所有消息拿到的历史是一样的）
+            if (firstRecentHistory.isEmpty() && recentHistory != null && !recentHistory.isBlank()) {
+                firstRecentHistory = recentHistory;
+            }
         }
 
         CognitivePrepareUnit flush() {
             if (texts.isEmpty()) return null;
 
-            String combined = String.join("\n---\n", texts);
+            String messagesPart = String.join("\n---\n", texts);
+
+            // 最近聊天历史只注一次（不重复在每条消息里）
+            String combined;
+            if (!firstRecentHistory.isBlank()) {
+                combined = "[最近聊天记录]\n" + firstRecentHistory
+                        + "\n--- 最新消息 ---\n" + messagesPart;
+            } else {
+                combined = messagesPart;
+            }
+
             double se = computeSE(messageCount, atMentionCount, isPrivate);
 
             CognitivePrepareUnit unit = CognitivePrepareUnit.create(

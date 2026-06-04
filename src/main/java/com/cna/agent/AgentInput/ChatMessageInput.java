@@ -105,6 +105,10 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
         this.recentHistory = history != null ? history : "";
     }
 
+    public String getRecentHistory() {
+        return recentHistory;
+    }
+
     /** 由 adapter 在创建 Input 时注入文件附件列表 */
     public void setFileAttachments(List<FileAttachment> attachments) {
         this.fileAttachments = attachments != null ? List.copyOf(attachments) : Collections.emptyList();
@@ -113,13 +117,6 @@ public class ChatMessageInput implements DefaultAgentInputUnit {
     @Override
     public String getInputText() {
         StringBuilder ret = new StringBuilder();
-
-        // 最近聊天历史（adapter 注入，提供完整上下文）
-        if (!recentHistory.isBlank()) {
-            ret.append("[最近聊天记录]\n");
-            ret.append(recentHistory);
-            ret.append("\n--- 最新消息 ---\n");
-        }
 
         ret.append(Utils.getNowPrecise()).append(",");
 

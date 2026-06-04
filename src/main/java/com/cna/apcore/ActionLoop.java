@@ -88,8 +88,9 @@ public class ActionLoop implements MosireAPI {
 
     // ★ Prompt 大小保护：防止 action_text/pool_summary/action_predicts_text
     //   组合后超过 API 上下文窗口导致 502
-    /** action_text 最大字符数（超长聊天历史截断），约 3000 tokens */
-    private static final int MAX_ACTION_TEXT_CHARS = 8000;
+    /** action_text 最大字符数（超长聊天历史截断），0=不截断 */
+    private static final int MAX_ACTION_TEXT_CHARS =
+            com.cna.apcore.config.CoreConfig.MAX_ACTION_TEXT_CHARS;
     /** pool_summary 最大单元数（200 条 ≈ ~10K chars，由 Adapter 层的 maxPromptChars 兜底截断） */
     private static final int MAX_POOL_SUMMARY_UNITS = 200;
     /** action_predicts_text 最大经验条数 */
