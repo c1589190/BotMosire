@@ -126,7 +126,7 @@ public class AssociationEngine {
         // 4. 按综合分数降序
         scored.sort((a, b) -> Double.compare(b.score, a.score));
 
-        // 5. 格式化输出
+        // 5. 格式化输出 — 紧凑工具链摘要模式
         int limit = Math.min(MAX_RELATED_EXPERIENCES, scored.size());
         StringBuilder sb = new StringBuilder();
         sb.append("【相关过往经验 — 类似感觉维度场景】\n");
@@ -150,13 +150,21 @@ public class AssociationEngine {
 
             sb.append(String.format("  [经验#%d] %s (匹配度: %.0f%%, helpful: %+.1f, 验证×%d)\n",
                     e.id, tag, se.score * 100, e.helpfulDegree, e.scoreCount));
-            sb.append(String.format("    感觉维度: %s\n", dimInfo));
-            for (String text : e.expTexts) {
-                if (text != null && !text.isBlank()) {
-                    String truncated = text.length() > CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS
-                            ? text.substring(0, CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS) + "..." : text;
-                    sb.append(String.format("    · %s\n", truncated));
+            sb.append(String.format("    感觉: %s\n", dimInfo));
+
+            // ★ 工具链：本轮使用的工具序列
+            String toolChain = e.toolNames.isEmpty() ? "(无工具调用)"
+                    : String.join(" → ", e.toolNames);
+            sb.append(String.format("    工具链: %s\n", toolChain));
+
+            // ★ 摘要：取第一条文本作为代表（通常是 LLM 的 thoughts），限制长度
+            String summary = e.expTexts.isEmpty() ? "" : e.expTexts.get(0);
+            if (summary != null && !summary.isBlank()) {
+                int maxLen = CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS;
+                if (summary.length() > maxLen) {
+                    summary = summary.substring(0, maxLen) + "...";
                 }
+                sb.append(String.format("    摘要: %s\n", summary));
             }
         }
 
@@ -231,7 +239,7 @@ public class AssociationEngine {
             return Double.compare(b.tiebreak, a.tiebreak);
         });
 
-        // 4. 格式化输出
+        // 4. 格式化输出 — 紧凑工具链摘要模式
         int limit = Math.min(MAX_RELATED_EXPERIENCES, candidates.size());
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("【预测 — 从 %d 条触发经验的顺序通道推断】\n", totalPredecessors));
@@ -251,13 +259,21 @@ public class AssociationEngine {
 
             sb.append(String.format("  [预测#%d] %s (提到%d次, 维度重合: %.0f%%)\n",
                     i + 1, tag, c.count, c.tiebreak * 100));
-            sb.append(String.format("    感觉维度: %s\n", dimInfo));
-            for (String text : e.expTexts) {
-                if (text != null && !text.isBlank()) {
-                    String truncated = text.length() > CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS
-                            ? text.substring(0, CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS) + "..." : text;
-                    sb.append(String.format("    · %s\n", truncated));
+            sb.append(String.format("    感觉: %s\n", dimInfo));
+
+            // ★ 工具链：预测的工具使用序列
+            String toolChain = e.toolNames.isEmpty() ? "(无工具调用)"
+                    : String.join(" → ", e.toolNames);
+            sb.append(String.format("    工具链: %s\n", toolChain));
+
+            // ★ 摘要：取第一条文本为代表
+            String summary = e.expTexts.isEmpty() ? "" : e.expTexts.get(0);
+            if (summary != null && !summary.isBlank()) {
+                int maxLen = CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS;
+                if (summary.length() > maxLen) {
+                    summary = summary.substring(0, maxLen) + "...";
                 }
+                sb.append(String.format("    摘要: %s\n", summary));
             }
         }
 

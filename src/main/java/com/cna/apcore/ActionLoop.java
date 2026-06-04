@@ -611,9 +611,6 @@ public class ActionLoop implements MosireAPI {
                     mutualExclusions, demandAnalysis, actionTemplatesText);
             ArrayNode toolsArray = buildToolsArray();
 
-            // 1.5. 分层截断：按优先级缩减 prompt 数据，防止超出上下文窗口
-            truncatePromptData(promptData, CoreConfig.PROMPT_MAX_CHARS);
-
             // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
             log.info("[ActionLoop] 🤖 调用大模型 (tools={})...", toolsArray.size());
             long llmStartMs = System.currentTimeMillis();
@@ -1043,94 +1040,6 @@ public class ActionLoop implements MosireAPI {
     // ==========================================
 
     /**
-     * 分层截断 prompt 数据中的各字段，按配置的优先级逐层缩减，
-     * 确保最终渲染出的 prompt 不超过上下文窗口限制。
-     *
-     * <p>优先级顺序由 {@link CoreConfig#PROMPT_TRUNCATION_PRIORITY} 控制：
-     * methodology → experiences → pool_summary。
-     * 每层被截断时记录 warning 日志。
-     *
-     * @param data     模板数据模型（原地修改）
-     * @param maxChars 目标最大字符数
-     */
-    private void truncatePromptData(Map<String, Object> data, int maxChars) {
-        // 快速估算：各字段字符数之和
-        int estimated = estimatePromptSize(data);
-        if (estimated <= maxChars) return;
-
-        log.warn("[ActionLoop] 📏 Prompt 估计大小 {} chars 超过上限 {} chars，启动分层截断",
-                estimated, maxChars);
-        int reductionTarget = estimated - maxChars;
-
-        // 优先级从 PROMPT_TRUNCATION_PRIORITY 读取，按逗号分隔
-        String[] priorities = CoreConfig.PROMPT_TRUNCATION_PRIORITY.split(",");
-        for (String field : priorities) {
-            field = field.trim();
-            if (reductionTarget <= 0) break;
-
-            switch (field) {
-                case "methodology" -> {
-                    String toolsGuide = (String) data.get("tools_guide");
-                    if (toolsGuide != null && toolsGuide.length() > 200) {
-                        int removed = toolsGuide.length() - 200;
-                        data.put("tools_guide",
-                                toolsGuide.substring(0, 200)
-                                + "\n\n[... 方法论已截断以控制 prompt 大小 ...]");
-                        reductionTarget -= removed;
-                        log.warn("[ActionLoop] 📏 截断 methodology: {} chars → 200 chars (减少 {} chars)",
-                                toolsGuide.length(), removed);
-                    }
-                }
-                case "experiences" -> {
-                    // 缩减经验区块：将相关经验和预测经验限制到更短
-                    for (String key : new String[]{"related_experiences_text", "predicted_experiences_text"}) {
-                        String text = (String) data.get(key);
-                        if (text != null && text.length() > 500) {
-                            int removed = text.length() - 500;
-                            data.put(key, text.substring(0, 500)
-                                    + "\n[... 经验已截断以控制 prompt 大小 ...]");
-                            reductionTarget -= removed;
-                            log.warn("[ActionLoop] 📏 截断 {}: {} chars → 500 chars (减少 {} chars)",
-                                    key, text.length(), removed);
-                        }
-                    }
-                }
-                case "pool_summary" -> {
-                    String poolSummary = (String) data.get("pool_summary");
-                    if (poolSummary != null && poolSummary.length() > 300) {
-                        int removed = poolSummary.length() - 300;
-                        // 缩减 pool summary 到前 300 字符
-                        data.put("pool_summary",
-                                poolSummary.substring(0, 300)
-                                + "\n[... 池摘要已截断 ...]");
-                        reductionTarget -= removed;
-                        log.warn("[ActionLoop] 📏 截断 pool_summary: {} chars → 300 chars (减少 {} chars)",
-                                poolSummary.length(), removed);
-                    }
-                }
-            }
-        }
-        log.info("[ActionLoop] 📏 分层截断完成，剩余需减少: {} chars", Math.max(0, reductionTarget));
-    }
-
-    /** 快速估算 prompt 数据模型中各文本字段的总字符数 */
-    private int estimatePromptSize(Map<String, Object> data) {
-        int total = 0;
-        for (Map.Entry<String, Object> e : data.entrySet()) {
-            Object v = e.getValue();
-            if (v instanceof String s) {
-                total += s.length();
-            } else if (v instanceof List<?> list) {
-                // 粗略估算：每个元素 toString 长度
-                for (Object item : list) {
-                    total += String.valueOf(item).length();
-                }
-            }
-        }
-        return total;
-    }
-
-    /**
      * 构建 FreeMarker 模板所需的数据模型。
      * 模板渲染由 {@link LLManager#render(String, Map)} 执行。
      */
@@ -1209,19 +1118,20 @@ public class ActionLoop implements MosireAPI {
             data.put("curiosity_context", curiosityContext);
         }
 
-        // 先验经验（每条截断到 ACTION_PREDICT_TEXT_MAX_CHARS，防止 prompt 爆炸）
+        // 先验经验 — 只展示 Top 3 最相似的经验，每条限制 200 字符
         StringBuilder predictsText = new StringBuilder();
         List<ActionPredict> predicts = action.getActionPredicts();
         if (!predicts.isEmpty()) {
-            int maxChars = CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS;
-            for (int i = 0; i < predicts.size(); i++) {
+            int maxPredicts = Math.min(predicts.size(), 3);
+            for (int i = 0; i < maxPredicts; i++) {
                 var p = predicts.get(i);
                 String text = p.getExpText() != null ? p.getExpText() : "";
-                if (text.length() > maxChars) {
-                    text = text.substring(0, maxChars) + "...";
+                if (text.length() > 200) {
+                    text = text.substring(0, 200) + "...";
                 }
-                predictsText.append(String.format("  [经验%d] (ID=%d, 相似度=%.3f, 有用度=%.1f): %s\n",
-                        i + 1, p.getExperienceId(), p.getSimilarity(),
+                String tag = p.getHelpfulDegree() > 0.3 ? "🟢" : (p.getHelpfulDegree() < -0.1 ? "🔴" : "⚪");
+                predictsText.append(String.format("  %s [经验%d] sim=%.2f helpful=%+.1f: %s\n",
+                        tag, p.getExperienceId(), p.getSimilarity(),
                         p.getHelpfulDegree(), text));
             }
         }
@@ -1358,6 +1268,21 @@ public class ActionLoop implements MosireAPI {
         return null;
     }
 
+    /**
+     * 将工具执行结果压缩为紧凑摘要（取首行/120字符），避免经验库中存储
+     * 网页全文、搜索结果等大体积原始输出。
+     */
+    private static String compactToolResult(String fullResult) {
+        if (fullResult == null || fullResult.isBlank()) return "(空)";
+        // 取第一个换行前的内容，限制 120 字符
+        int end = fullResult.indexOf('\n');
+        String firstLine = (end > 0) ? fullResult.substring(0, end) : fullResult;
+        if (firstLine.length() > 120) {
+            firstLine = firstLine.substring(0, 120) + "...";
+        }
+        return firstLine;
+    }
+
     // ==========================================
     // Step 7: 存储经验
     // ==========================================
@@ -1367,7 +1292,7 @@ public class ActionLoop implements MosireAPI {
                                  String newPrepareText, List<String> toolNames, String sourceType) {
         List<String> expTexts = new ArrayList<>();
 
-        // LLM 的想法
+        // LLM 的想法（完整保留，这是 LLM 的推理链）
         if (thoughts != null && !thoughts.isBlank()) {
             expTexts.add("想法: " + thoughts);
         }
@@ -1375,10 +1300,10 @@ public class ActionLoop implements MosireAPI {
         // 原始 ActionText
         expTexts.add("触发: " + action.getActionText());
 
-        // 工具执行结果
+        // ★ 工具执行结果：只存紧凑摘要（首行/120字），不存原始输出全文
         for (String tr : toolResults) {
             if (tr != null && !tr.isBlank()) {
-                expTexts.add("结果: " + tr);
+                expTexts.add("结果: " + compactToolResult(tr));
             }
         }
 

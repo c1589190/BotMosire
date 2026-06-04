@@ -301,15 +301,6 @@ public class LLManager {
                 String userPrompt = render(userTemplate, dataModel);
                 log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
 
-                // ★ 安全网：prompt 超长时智能截断（保留头尾），防止 API 400 错误
-                int maxChars = llm.getConfig().getMaxPromptChars();
-                if (userPrompt.length() > maxChars) {
-                    log.warn("[LLManager] ⚠️ Prompt 超长 ({} chars)，触发智能截断 → {} chars",
-                            userPrompt.length(), maxChars);
-                    userPrompt = llm.truncatePrompt(userPrompt, maxChars);
-                    log.info("[LLManager] 截断后 prompt 长度: {} chars", userPrompt.length());
-                }
-
                 ArrayNode workingMessages = GLOBAL_CACHE.messages.deepCopy();
                 ObjectNode userMsgNode = jsonMapper.createObjectNode();
                 userMsgNode.put("role", "user");
