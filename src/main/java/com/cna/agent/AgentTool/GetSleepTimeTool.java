@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.agent.SleepManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -25,16 +26,16 @@ public class GetSleepTimeTool implements DefaultAgentToolUnit {
         toolDef.put("type", "function");
 
         ObjectNode function = toolDef.putObject("function");
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
         function.put("name", getName());
-        function.put("description",
-                "查询 Agent 当前的每日休眠时间段设置。"
-                + "返回当前设定的休眠开始和结束时间，或提示未设置休眠。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
         params.putObject("properties");
         params.putArray("required");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

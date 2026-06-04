@@ -55,6 +55,7 @@ public class CodeGrepText implements DefaultAgentToolUnit {
         ArrayNode required = params.putArray("required");
         required.add("keyword");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

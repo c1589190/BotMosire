@@ -55,6 +55,7 @@ public class ReadDocument implements DefaultAgentToolUnit {
                 .put("description", "段落编号（从 0 开始），用于分段读取大文件。默认 0。");
 
         fn.with("parameters").putArray("required").add("path");
+        props.put("additionalProperties", false);
         return tool;
     }
 

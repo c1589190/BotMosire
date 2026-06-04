@@ -40,6 +40,7 @@ public class GetScheduled implements DefaultAgentToolUnit {
         // 该工具不需要大模型提供任何参数，因此 properties 为空
         parameters.putObject("properties");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

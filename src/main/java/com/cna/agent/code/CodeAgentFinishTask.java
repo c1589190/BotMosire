@@ -49,6 +49,7 @@ public class CodeAgentFinishTask implements DefaultAgentToolUnit {
         required.add("success");
         required.add("summary");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

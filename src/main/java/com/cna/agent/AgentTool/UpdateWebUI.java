@@ -68,6 +68,7 @@ public class UpdateWebUI implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("action");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

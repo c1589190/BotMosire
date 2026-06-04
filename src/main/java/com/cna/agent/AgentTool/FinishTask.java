@@ -136,6 +136,7 @@ public class FinishTask implements DefaultAgentToolUnit {
         required.add("summary");
         required.add("concepts");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

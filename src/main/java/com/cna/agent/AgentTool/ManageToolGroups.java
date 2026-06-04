@@ -81,6 +81,7 @@ public class ManageToolGroups implements DefaultAgentToolUnit {
         ArrayNode required = params.putArray("required");
         required.add("action");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

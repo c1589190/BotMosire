@@ -43,6 +43,7 @@ public class ToolUsageReader implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("tool_name");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

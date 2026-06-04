@@ -54,6 +54,7 @@ public class CodeZipFolder implements DefaultAgentToolUnit {
         required.add("source");
         required.add("output");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

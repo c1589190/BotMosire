@@ -63,6 +63,7 @@ public class Main {
         // ── 阶段 0: 配置初始化 ──
         log.info("[Main] 📋 阶段 0: 配置初始化...");
         ConfigsManager.init();
+        com.cna.apcore.config.CoreConfig.init();
         ConfigsLoader.loadAll();
         log.info("[Main] ✅ 配置加载完成 — DB_URL={}", ConfigsManager.DB_URL);
 

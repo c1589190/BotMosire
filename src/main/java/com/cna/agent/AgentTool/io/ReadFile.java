@@ -38,6 +38,7 @@ public class ReadFile implements DefaultAgentToolUnit {
                 .put("description", p.getCustomDescription("chunk_id"));
 
         fn.with("parameters").putArray("required").add("path");
+        props.put("additionalProperties", false);
         return tool;
     }
 

@@ -46,6 +46,7 @@ public class SendFileToChat implements DefaultAgentToolUnit {
                 .put("description", p.getCustomDescription("namespace"));
 
         fn.with("parameters").putArray("required").add("file_path").add("namespace");
+        props.put("additionalProperties", false);
         return tool;
     }
 

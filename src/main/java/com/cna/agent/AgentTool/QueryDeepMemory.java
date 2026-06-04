@@ -54,6 +54,7 @@ public class QueryDeepMemory implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("query");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

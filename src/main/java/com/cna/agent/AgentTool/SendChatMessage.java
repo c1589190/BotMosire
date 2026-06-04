@@ -53,6 +53,7 @@ public class SendChatMessage implements DefaultAgentToolUnit {
         required.add("target_namespace");
         required.add("messages"); // 对应修改为 messages
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

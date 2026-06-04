@@ -31,6 +31,7 @@ import com.cna.apcore.model.CognitivePrepareUnit;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
 import com.cna.db.FeelingDimensionManager;
+import com.cna.db.MDManager;
 import com.cna.db.FeelingHypergraphManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -610,6 +611,9 @@ public class ActionLoop implements MosireAPI {
                     mutualExclusions, demandAnalysis, actionTemplatesText);
             ArrayNode toolsArray = buildToolsArray();
 
+            // 1.5. 分层截断：按优先级缩减 prompt 数据，防止超出上下文窗口
+            truncatePromptData(promptData, CoreConfig.PROMPT_MAX_CHARS);
+
             // 2. 通过 LLManager 全局缓存执行 LLM 调用（模板渲染、缓存管理、截断、持久化全由 LLManager 负责）
             log.info("[ActionLoop] 🤖 调用大模型 (tools={})...", toolsArray.size());
             long llmStartMs = System.currentTimeMillis();
@@ -1039,6 +1043,94 @@ public class ActionLoop implements MosireAPI {
     // ==========================================
 
     /**
+     * 分层截断 prompt 数据中的各字段，按配置的优先级逐层缩减，
+     * 确保最终渲染出的 prompt 不超过上下文窗口限制。
+     *
+     * <p>优先级顺序由 {@link CoreConfig#PROMPT_TRUNCATION_PRIORITY} 控制：
+     * methodology → experiences → pool_summary。
+     * 每层被截断时记录 warning 日志。
+     *
+     * @param data     模板数据模型（原地修改）
+     * @param maxChars 目标最大字符数
+     */
+    private void truncatePromptData(Map<String, Object> data, int maxChars) {
+        // 快速估算：各字段字符数之和
+        int estimated = estimatePromptSize(data);
+        if (estimated <= maxChars) return;
+
+        log.warn("[ActionLoop] 📏 Prompt 估计大小 {} chars 超过上限 {} chars，启动分层截断",
+                estimated, maxChars);
+        int reductionTarget = estimated - maxChars;
+
+        // 优先级从 PROMPT_TRUNCATION_PRIORITY 读取，按逗号分隔
+        String[] priorities = CoreConfig.PROMPT_TRUNCATION_PRIORITY.split(",");
+        for (String field : priorities) {
+            field = field.trim();
+            if (reductionTarget <= 0) break;
+
+            switch (field) {
+                case "methodology" -> {
+                    String toolsGuide = (String) data.get("tools_guide");
+                    if (toolsGuide != null && toolsGuide.length() > 200) {
+                        int removed = toolsGuide.length() - 200;
+                        data.put("tools_guide",
+                                toolsGuide.substring(0, 200)
+                                + "\n\n[... 方法论已截断以控制 prompt 大小 ...]");
+                        reductionTarget -= removed;
+                        log.warn("[ActionLoop] 📏 截断 methodology: {} chars → 200 chars (减少 {} chars)",
+                                toolsGuide.length(), removed);
+                    }
+                }
+                case "experiences" -> {
+                    // 缩减经验区块：将相关经验和预测经验限制到更短
+                    for (String key : new String[]{"related_experiences_text", "predicted_experiences_text"}) {
+                        String text = (String) data.get(key);
+                        if (text != null && text.length() > 500) {
+                            int removed = text.length() - 500;
+                            data.put(key, text.substring(0, 500)
+                                    + "\n[... 经验已截断以控制 prompt 大小 ...]");
+                            reductionTarget -= removed;
+                            log.warn("[ActionLoop] 📏 截断 {}: {} chars → 500 chars (减少 {} chars)",
+                                    key, text.length(), removed);
+                        }
+                    }
+                }
+                case "pool_summary" -> {
+                    String poolSummary = (String) data.get("pool_summary");
+                    if (poolSummary != null && poolSummary.length() > 300) {
+                        int removed = poolSummary.length() - 300;
+                        // 缩减 pool summary 到前 300 字符
+                        data.put("pool_summary",
+                                poolSummary.substring(0, 300)
+                                + "\n[... 池摘要已截断 ...]");
+                        reductionTarget -= removed;
+                        log.warn("[ActionLoop] 📏 截断 pool_summary: {} chars → 300 chars (减少 {} chars)",
+                                poolSummary.length(), removed);
+                    }
+                }
+            }
+        }
+        log.info("[ActionLoop] 📏 分层截断完成，剩余需减少: {} chars", Math.max(0, reductionTarget));
+    }
+
+    /** 快速估算 prompt 数据模型中各文本字段的总字符数 */
+    private int estimatePromptSize(Map<String, Object> data) {
+        int total = 0;
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            Object v = e.getValue();
+            if (v instanceof String s) {
+                total += s.length();
+            } else if (v instanceof List<?> list) {
+                // 粗略估算：每个元素 toString 长度
+                for (Object item : list) {
+                    total += String.valueOf(item).length();
+                }
+            }
+        }
+        return total;
+    }
+
+    /**
      * 构建 FreeMarker 模板所需的数据模型。
      * 模板渲染由 {@link LLManager#render(String, Map)} 执行。
      */
@@ -1083,6 +1175,17 @@ public class ActionLoop implements MosireAPI {
             data.put("action_templates_text", actionTemplatesText);
         }
 
+        // ★ 工具方法论：V4 模式注入工具使用指南（包含工具组管理、常见协作模式等）
+        String toolsGuide = MDManager.read("prompts/toolsGuide.md", "");
+        if (toolsGuide != null && !toolsGuide.isBlank()) {
+            int maxChars = CoreConfig.MAX_METHODOLOGY_CHARS;
+            if (toolsGuide.length() > maxChars) {
+                toolsGuide = toolsGuide.substring(0, maxChars)
+                        + "\n\n[... 方法论已截断，完整内容见 prompts/toolsGuide.md ...]";
+            }
+            data.put("tools_guide", toolsGuide);
+        }
+
         // ★ 联想引擎：相关经验 + 顺序通道预测
         Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, experiencesDB, feelingsDB);
         data.put("related_experiences_text", associationBlock.getOrDefault("related_experiences", ""));
@@ -1124,8 +1227,8 @@ public class ActionLoop implements MosireAPI {
         }
         data.put("action_predicts_text", predictsText.toString());
 
-        // 准备池概况
-        String poolSummary = preparePool.buildPoolSummary();
+        // 准备池概况（限制最多显示 POOL_SUMMARY_MAX_UNITS 个单元，防止 prompt 爆炸）
+        String poolSummary = preparePool.buildPoolSummary(CoreConfig.POOL_SUMMARY_MAX_UNITS);
         data.put("pool_summary", poolSummary);
 
         // ★ 诊断日志：每个 Prompt 字段的字符数，方便定位膨胀源头

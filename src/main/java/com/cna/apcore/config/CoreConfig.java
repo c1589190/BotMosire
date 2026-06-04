@@ -246,11 +246,27 @@ public class CoreConfig {
     public static final boolean INTRATRIGGER_CLUSTER_ENABLED;
 
     // ==========================================
+    // Prompt 大小管理参数
+    // ==========================================
+
+    /** 发送给 LLM 之前，对渲染后 prompt 的最大字符数限制（超出则智能截断） */
+    public static final int PROMPT_MAX_CHARS;
+
+    /** 准备池摘要最多显示的单元数（控制 prompt 大小） */
+    public static final int POOL_SUMMARY_MAX_UNITS;
+
+    /** 方法论/工具指南文本最大字符数（注入 prompt 前截断到此值） */
+    public static final int MAX_METHODOLOGY_CHARS;
+
+    /** 截断优先级（逗号分隔：methodology,experiences,pool_summary） */
+    public static final String PROMPT_TRUNCATION_PRIORITY;
+
+    // ==========================================
     // 初始化
     // ==========================================
 
     static {
-        String configPath = "application.properties";
+        String configPath = "core.properties";
         Path path = Paths.get(configPath);
         if (Files.exists(path)) {
             try (InputStream input = Files.newInputStream(path);
@@ -277,7 +293,7 @@ public class CoreConfig {
 
         // —— 经验检索上限 ——
         MAX_ACTION_PREDICTS            = getInt("v4.core.maxActionPredicts", 15);
-        ACTION_PREDICT_TEXT_MAX_CHARS  = getInt("v4.core.predictTextMaxChars", 300);
+        ACTION_PREDICT_TEXT_MAX_CHARS  = getInt("v4.core.predictTextMaxChars", 2000);
 
         // —— 感觉维度 ——
         HABITUATION_LIMIT         = getInt("v4.core.habituationLimit", 10);
@@ -298,7 +314,7 @@ public class CoreConfig {
 
         // —— 调试/指标 ——
         ATTENTION_METRICS_ENABLED        = getBoolean("v4.debug.attentionMetrics", false);
-        ATTENTION_METRICS_BUFFER_SIZE    = getInt("v4.debug.attentionMetricsBuffer", 100);
+        ATTENTION_METRICS_BUFFER_SIZE    = getInt("v4.debug.attentionMetricsBufferSize", 100);
 
         // —— 实践加成（内源继承父权重 + 定值）——
         NEXT_ACTION_BONUS            = getDouble("v4.bonus.nextAction", 0.2);
@@ -346,12 +362,18 @@ public class CoreConfig {
         CHAT_BATCH_COOLDOWN_MS         = getLong("v4.chat.batchCooldownMs", 3000);
         CHAT_BATCH_PRIVATE_MIN_MESSAGES = getInt("v4.chat.batchPrivateMinMessages", 1);
 
+        // —— Prompt 大小管理 ——
+        PROMPT_MAX_CHARS          = getInt("v4.prompt.maxChars", 24000);
+        POOL_SUMMARY_MAX_UNITS    = getInt("v4.prompt.poolSummaryMaxUnits", 10);
+        MAX_METHODOLOGY_CHARS     = getInt("v4.prompt.maxMethodologyChars", 4000);
+        PROMPT_TRUNCATION_PRIORITY = getString("v4.prompt.truncationPriority", "methodology,experiences,pool_summary");
+
         // —— 调度 ——
         COGNITIVE_TICK_MS         = getInt("v4.core.cognitiveTickMs", 2000);
         SINGLE_BOOST_CAP           = getDouble("v4.core.singleBoostCap", 1.0);
 
-        log.info("[CoreConfig] V4 Core 配置初始化完毕: baselineThreshold={}, tickMs={}, poolSize={}",
-                BASELINE_THRESHOLD, COGNITIVE_TICK_MS, MAX_POOL_SIZE);
+        log.info("[CoreConfig] V4 Core 配置初始化完毕: baselineThreshold={}, tickMs={}, poolSize={}, predictChars={}, promptMax={}",
+                BASELINE_THRESHOLD, COGNITIVE_TICK_MS, MAX_POOL_SIZE, ACTION_PREDICT_TEXT_MAX_CHARS, PROMPT_MAX_CHARS);
     }
 
     /** 初始化（显式调用，保证 static 块已被触发） */

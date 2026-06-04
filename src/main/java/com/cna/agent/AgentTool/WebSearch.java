@@ -64,6 +64,7 @@ public class WebSearch implements DefaultAgentToolUnit {
         count.put("description", p.getCustomDescription("count"));
 
         parameters.putArray("required").add("query");
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

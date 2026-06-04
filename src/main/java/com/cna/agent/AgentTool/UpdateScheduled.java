@@ -44,6 +44,7 @@ public class UpdateScheduled implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("task_item");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

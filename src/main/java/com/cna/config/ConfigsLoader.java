@@ -23,6 +23,7 @@ public class ConfigsLoader {
     static {
         // 1. 基础配置文件 (模板 -> 实际配置)
         FILE_MAP.put("/application-template.properties", "application.properties");
+        FILE_MAP.put("/core-template.properties", "core.properties");
         FILE_MAP.put("/PromptScenesPath.properties", "PromptScenesPath.properties");
 
         // 2. 自动扫描 classpath 下的 /prompts/ 目录，不再手动维护白名单

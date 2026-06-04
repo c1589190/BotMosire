@@ -34,6 +34,7 @@ public class ListFiles implements DefaultAgentToolUnit {
                 .put("description", p.getCustomDescription("path"));
 
         // path 为可选参数，不加 required
+        props.put("additionalProperties", false);
         return tool;
     }
 

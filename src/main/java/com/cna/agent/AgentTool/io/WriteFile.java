@@ -46,6 +46,7 @@ public class WriteFile implements DefaultAgentToolUnit {
         props.with("mode").put("description", p.getCustomDescription("mode"));
 
         fn.with("parameters").putArray("required").add("path").add("content");
+        props.put("additionalProperties", false);
         return tool;
     }
 

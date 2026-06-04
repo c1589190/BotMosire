@@ -40,6 +40,7 @@ public class GetMoreCurrentMemorys implements DefaultAgentToolUnit {
         parameters.put("type", "object");
         parameters.putObject("properties");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

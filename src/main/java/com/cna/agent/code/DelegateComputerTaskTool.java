@@ -75,6 +75,7 @@ public class DelegateComputerTaskTool implements DefaultAgentToolUnit {
         ArrayNode required = params.putArray("required");
         required.add("task_description");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

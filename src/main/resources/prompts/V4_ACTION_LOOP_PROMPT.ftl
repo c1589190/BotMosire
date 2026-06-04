@@ -88,6 +88,11 @@ ${predicted_experiences_text}
 ${action_templates_text}
 </#if>
 
+<#if tools_guide?has_content>
+【工具使用指南】
+${tools_guide}
+
+</#if>
 ${pool_summary}
 
 ---

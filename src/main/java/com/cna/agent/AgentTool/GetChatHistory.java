@@ -47,6 +47,7 @@ public class GetChatHistory implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("target_namespace");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

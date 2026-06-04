@@ -60,6 +60,7 @@ public class CreatePendingChatTask implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("target_source").add("target_role").add("reason");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

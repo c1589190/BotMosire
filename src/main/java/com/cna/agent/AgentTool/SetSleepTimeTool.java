@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.agent.SleepManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -26,14 +27,9 @@ public class SetSleepTimeTool implements DefaultAgentToolUnit {
         toolDef.put("type", "function");
 
         ObjectNode function = toolDef.putObject("function");
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
         function.put("name", getName());
-        function.put("description",
-                "设置 Agent 每日的休眠时间段（24小时制）。"
-                + "设定后，每天到达开始时间自动进入休眠，到达结束时间自动唤醒。"
-                + "休眠期间 Agent 不接收或处理任何外部输入（聊天消息、Web事件等）。"
-                + "支持跨天时间段（如 22:00 ~ 06:00 表示晚上10点到第二天早上6点）。"
-                + "传入空字符串或 \"0\" 可清空休眠设置，让 Agent 始终保持唤醒。"
-                + "适合设定固定的夜间休息时间、或避开不希望被打扰的时段。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -41,14 +37,15 @@ public class SetSleepTimeTool implements DefaultAgentToolUnit {
         ObjectNode properties = params.putObject("properties");
         ObjectNode startProp = properties.putObject("start_time");
         startProp.put("type", "string");
-        startProp.put("description", "休眠开始时间，格式 HH:mm（如 \"02:00\"、\"22:30\"）。传空字符串或\"0\"则清空休眠设置。");
+        startProp.put("description", p.getCustomDescription("start_time"));
 
         ObjectNode endProp = properties.putObject("end_time");
         endProp.put("type", "string");
-        endProp.put("description", "休眠结束时间，格式 HH:mm（如 \"08:00\"、\"06:00\"）。须与 start_time 同时提供。");
+        endProp.put("description", p.getCustomDescription("end_time"));
 
         params.putArray("required").add("start_time").add("end_time");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

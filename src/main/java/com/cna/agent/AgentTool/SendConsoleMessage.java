@@ -45,6 +45,7 @@ public class SendConsoleMessage implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("message");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

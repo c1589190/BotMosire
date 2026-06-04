@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.Utils;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -26,11 +27,11 @@ public class GetNowTime implements DefaultAgentToolUnit {
         ObjectNode toolDef = mapper.createObjectNode();
         toolDef.put("type", "function");
 
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
+
         ObjectNode function = toolDef.putObject("function");
         function.put("name", getName());
-        function.put("description",
-                "获取当前系统的精确时间（精确到秒，格式如 2026年4月22日22:30:00）。"
-                + "当你需要知道具体的时分秒来执行定时任务、安排日程或记录时间节点时调用此工具。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -40,6 +41,7 @@ public class GetNowTime implements DefaultAgentToolUnit {
         ArrayNode required = params.putArray("required");
         // required 为空数组
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

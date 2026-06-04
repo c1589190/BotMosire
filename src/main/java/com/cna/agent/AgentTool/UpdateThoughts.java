@@ -49,6 +49,7 @@ public class UpdateThoughts implements DefaultAgentToolUnit {
         ArrayNode required = parameters.putArray("required");
         required.add("thought_item");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

@@ -2,6 +2,7 @@ package com.cna.agent.AgentTool;
 
 import com.cna.agent.AgentTask.DefaultAgentTaskUnit;
 import com.cna.agent.LivingLoop;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -37,11 +38,9 @@ public class CancelTask implements DefaultAgentToolUnit {
         toolDef.put("type", "function");
 
         ObjectNode function = toolDef.putObject("function");
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
         function.put("name", getName());
-        function.put("description",
-                "取消任务队列中的某个待处理任务。传入任务编号（[#N]，见任务队列概览）。"
-                + "当你判断某个排队的任务已经不再有意义、被其他任务覆盖、或情况已变化时使用。"
-                + "注意：不能取消当前正在执行的任务——如果当前任务需要终止，请使用 finish_task。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -50,16 +49,17 @@ public class CancelTask implements DefaultAgentToolUnit {
 
         ObjectNode idProp = properties.putObject("task_id");
         idProp.put("type", "integer");
-        idProp.put("description", "要取消的任务在队列中的展示编号 [#N]。可先调用 get_task_queue 确认编号。不能取消正在执行的任务 [#1]。");
+        idProp.put("description", p.getCustomDescription("task_id"));
 
         ObjectNode reasonProp = properties.putObject("reason");
         reasonProp.put("type", "string");
-        reasonProp.put("description", "取消原因，供日志和记忆记录");
+        reasonProp.put("description", p.getCustomDescription("reason"));
 
         ArrayNode required = params.putArray("required");
         required.add("task_id");
         required.add("reason");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

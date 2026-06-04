@@ -2,6 +2,7 @@ package com.cna.agent.AgentTool;
 
 import com.cna.agent.LivingLoop;
 import com.cna.config.ConfigsManager;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -35,11 +36,11 @@ public class AdjustTaskPriorityTool implements DefaultAgentToolUnit {
         double range = ConfigsManager.TASK_PRIORITY_ADJUSTMENT_RANGE;
 
         ObjectNode function = toolDef.putObject("function");
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
         function.put("name", getName());
         function.put("description",
-                "调整任务队列中指定任务的优先级权重。传入任务编号（[#N]，见任务队列概览）和调整量（正数=降低优先级延后处理，负数=提高优先级提前处理）。"
-                + "单次调整幅度上限为 ±" + String.format("%.1f", range) + "，优先级最低不低于 0.1。"
-                + "当你判断当前正在执行的任务不如待处理队列中的某个任务紧急，或某个挂起任务需要被推迟时使用。");
+                p.getToolDescription()
+                + " 单次调整幅度上限为 ±" + String.format("%.1f", range) + "，优先级最低不低于 0.1。");
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
@@ -48,16 +49,18 @@ public class AdjustTaskPriorityTool implements DefaultAgentToolUnit {
 
         ObjectNode taskIdProp = properties.putObject("task_id");
         taskIdProp.put("type", "integer");
-        taskIdProp.put("description", "目标任务在队列中的展示编号 [#N]，例如 1、2、3。可先调用 get_task_queue 确认编号。");
+        taskIdProp.put("description", p.getCustomDescription("task_id"));
 
         ObjectNode deltaProp = properties.putObject("delta");
         deltaProp.put("type", "number");
-        deltaProp.put("description", "优先级调整量。正数=降低优先级（往后排），负数=提高优先级（往前排）。范围 [" + String.format("%.1f", -range) + ", " + String.format("%.1f", range) + "]");
+        deltaProp.put("description", p.getCustomDescription("delta")
+                + " 范围 [" + String.format("%.1f", -range) + ", " + String.format("%.1f", range) + "]");
 
         ArrayNode required = params.putArray("required");
         required.add("task_id");
         required.add("delta");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

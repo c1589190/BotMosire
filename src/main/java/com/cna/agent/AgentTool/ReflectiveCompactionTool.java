@@ -48,6 +48,7 @@ public class ReflectiveCompactionTool implements DefaultAgentToolUnit {
         // 设为空数组，代表参数都是可选的，大模型可以按需覆写
         parameters.putArray("required");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

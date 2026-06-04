@@ -33,6 +33,7 @@ public class CdWorkspace implements DefaultAgentToolUnit {
                 .put("description", p.getCustomDescription("path"));
 
         fn.with("parameters").putArray("required").add("path");
+        props.put("additionalProperties", false);
         return tool;
     }
 

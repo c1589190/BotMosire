@@ -68,6 +68,7 @@ public class DownloadFile implements DefaultAgentToolUnit {
                 .put("description", "（可选）保存的文件名。不填则从链接中自动提取。");
 
         fn.with("parameters").putArray("required").add("url");
+        props.put("additionalProperties", false);
         return tool;
     }
 

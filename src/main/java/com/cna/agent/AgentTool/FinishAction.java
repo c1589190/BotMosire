@@ -56,6 +56,7 @@ public class FinishAction implements DefaultAgentToolUnit {
         scoring.put("description", p.getCustomDescription("experience_scoring"));
         ObjectNode items = scoring.putObject("items");
         items.put("type", "object");
+        items.put("additionalProperties", false);
         ObjectNode itemProps = items.putObject("properties");
         ObjectNode expId = itemProps.putObject("experience_id");
         expId.put("type", "integer");
@@ -73,6 +74,7 @@ public class FinishAction implements DefaultAgentToolUnit {
                 + "由池的选择机制决定执行顺序。必须至少包含 1 项（即使只是\"继续监控\"）。");
         ObjectNode naItems = nextActions.putObject("items");
         naItems.put("type", "object");
+        naItems.put("additionalProperties", false);
         ObjectNode naProps = naItems.putObject("properties");
         ObjectNode naText = naProps.putObject("text");
         naText.put("type", "string");
@@ -89,6 +91,7 @@ public class FinishAction implements DefaultAgentToolUnit {
         actionFeelings.put("description", p.getCustomDescription("action_feelings"));
         ObjectNode afItems = actionFeelings.putObject("items");
         afItems.put("type", "object");
+        afItems.put("additionalProperties", false);
         ObjectNode afProps = afItems.putObject("properties");
         ObjectNode afDimId = afProps.putObject("dim_id");
         afDimId.put("type", "integer");
@@ -112,6 +115,7 @@ public class FinishAction implements DefaultAgentToolUnit {
                 + "无特别值得记录的感觉时传空数组 []。");
         ObjectNode sfItems = stimFeelings.putObject("items");
         sfItems.put("type", "object");
+        sfItems.put("additionalProperties", false);
         ObjectNode sfProps = sfItems.putObject("properties");
         ObjectNode sfConcept = sfProps.putObject("concept");
         sfConcept.put("type", "string");
@@ -174,6 +178,7 @@ public class FinishAction implements DefaultAgentToolUnit {
         required.add("experience_scoring");
         required.add("next_actions");
 
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

@@ -58,6 +58,7 @@ public class ReadWebPage implements DefaultAgentToolUnit {
         maxChars.put("description", p.getCustomDescription("max_chars"));
 
         parameters.putArray("required").add("url");
+        parameters.put("additionalProperties", false);
         return tool;
     }
 

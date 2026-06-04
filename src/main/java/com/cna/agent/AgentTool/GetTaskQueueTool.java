@@ -1,6 +1,7 @@
 package com.cna.agent.AgentTool;
 
 import com.cna.agent.LivingLoop;
+import com.cna.config.ToolPromptsManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -30,16 +31,16 @@ public class GetTaskQueueTool implements DefaultAgentToolUnit {
         toolDef.put("type", "function");
 
         ObjectNode function = toolDef.putObject("function");
+        ToolPromptsManager p = new ToolPromptsManager(this.getClass().getName());
         function.put("name", getName());
-        function.put("description",
-                "查询当前任务队列的完整详情，包括所有待处理和正在执行的任务、各自优先级、入队时间、当前轮数等。"
-                + "当你需要了解当前工作负载、判断是否有更紧急的任务待处理、或决定是否应该 finish 当前任务时使用。");
+        function.put("description", p.getToolDescription());
 
         ObjectNode params = function.putObject("parameters");
         params.put("type", "object");
         params.putObject("properties");
         params.putArray("required");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 

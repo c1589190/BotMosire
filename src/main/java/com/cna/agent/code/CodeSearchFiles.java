@@ -50,6 +50,7 @@ public class CodeSearchFiles implements DefaultAgentToolUnit {
         ArrayNode required = params.putArray("required");
         required.add("pattern");
 
+        params.put("additionalProperties", false);
         return toolDef;
     }
 
