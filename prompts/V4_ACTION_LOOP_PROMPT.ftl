@@ -32,11 +32,32 @@ ${demand_analysis}
 维度ID: ${ue_dim_ids?join(", ")}<#if ue_dim_ids?size == 0>（无）</#if>
 
 <#if mutual_exclusions?has_content>
-【互斥感觉维度 — 与当前场景语义相斥的已有概念】
-以下是你认知体系中已建立、但与当前输入高度不匹配的感觉概念，
-可能指向矛盾情境、认知盲区或情境转变：
+【认知失调检测 — 同一场景触发但彼此语义遥远的感受维度】
+当前 ActionText 同时触发了以下感受，但它们在被激活的感受群中处于孤立/远距位置，
+可能指向认知矛盾、情境冲突或需要整合的认知盲区：
+
 <#list mutual_exclusions as m>
-  · 【${m.concept}】 (dim_id=${m.dim_id}, 相似度=${m.similarity}, 已激活${m.activation_count}次)
+  <#if m.dissonance_type == "isolated">
+  · ⚡孤立触发感: 【${m.concept}】
+    到其他触发感觉的平均距离: ${m.avg_peer_distance}（越低越近，越高越孤）
+    与action的相似度: ${m.sim_to_action}
+    近距同伴: <#if m.close_peers?has_content>${m.close_peers?join(", ")}<#else>（无）</#if>
+    远距同伴: <#if m.distant_peers?has_content>${m.distant_peers?join(", ")}<#else>（无）</#if>
+    超图中与同伴的连接边: ${m.graph_edge_to_peers} 条
+    <#if m.graph_edge_to_peers gt 0>⚠️ 虽然超图中有连接但语义距离远，可能指向深层矛盾</#if>
+
+  <#elseif m.dissonance_type == "dissonant_pair">
+  · 🔗 远距触发对: 【${m.concept}】 ⟷ 【${m.pair_concept}】
+    两感之间的相似度: ${m.pair_similarity}（越低越远）
+    超图边: <#if m.pair_has_hypergraph_edge>有（历史上共现过但语义远→熟悉张力）<#else>无（首次被同一action拉到一起→新颖张力）</#if>
+
+  <#elseif m.dissonance_type == "cluster_separation">
+  · 🧩 跨簇分离: ${m.num_clusters}个触发感群，簇间距离 ${m.inter_cluster_distance}
+    A簇 (${m.cluster_a_size}个): ${m.cluster_a_concepts?join(", ")}
+    B簇 (${m.cluster_b_size}个): ${m.cluster_b_concepts?join(", ")}
+    这两簇被同一action同时触发但语义遥远，可能指示一个需要桥接的认知裂缝
+
+  </#if>
 </#list>
 </#if>
 

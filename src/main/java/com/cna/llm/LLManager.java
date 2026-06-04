@@ -307,6 +307,16 @@ public class LLManager {
                 userMsgNode.put("content", userPrompt);
                 workingMessages.add(userMsgNode);
 
+                // ★ 诊断：计算实际发送给 LLM 的消息总大小
+                long totalChars = 0;
+                for (int i = 0; i < workingMessages.size(); i++) {
+                    String c = workingMessages.get(i).path("content").asText("");
+                    totalChars += c.length();
+                }
+                log.info("[LLManager] 📏 发送给 LLM: userPrompt={} chars, 总消息数={}, 历史累积={} chars, 合计={} chars",
+                        userPrompt.length(), workingMessages.size(),
+                        totalChars - userPrompt.length(), totalChars);
+
                 ArrayNode toolsParam = (tools != null) ? tools : jsonMapper.createArrayNode();
                 CallResult result = llm.generateResponseWithTools(workingMessages, toolsParam);
 

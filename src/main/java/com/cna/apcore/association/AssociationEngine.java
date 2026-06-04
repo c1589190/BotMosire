@@ -1,5 +1,6 @@
 package com.cna.apcore.association;
 
+import com.cna.apcore.config.CoreConfig;
 import com.cna.apcore.db.CognitiveDB;
 import com.cna.apcore.db.ExperiencesDB;
 import com.cna.apcore.db.FeelingsDB;
@@ -152,7 +153,9 @@ public class AssociationEngine {
             sb.append(String.format("    感觉维度: %s\n", dimInfo));
             for (String text : e.expTexts) {
                 if (text != null && !text.isBlank()) {
-                    sb.append(String.format("    · %s\n", text));
+                    String truncated = text.length() > CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS
+                            ? text.substring(0, CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS) + "..." : text;
+                    sb.append(String.format("    · %s\n", truncated));
                 }
             }
         }
@@ -251,7 +254,9 @@ public class AssociationEngine {
             sb.append(String.format("    感觉维度: %s\n", dimInfo));
             for (String text : e.expTexts) {
                 if (text != null && !text.isBlank()) {
-                    sb.append(String.format("    · %s\n", text));
+                    String truncated = text.length() > CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS
+                            ? text.substring(0, CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS) + "..." : text;
+                    sb.append(String.format("    · %s\n", truncated));
                 }
             }
         }

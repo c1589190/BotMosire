@@ -94,19 +94,20 @@ public class DemandManager {
         // 2. 惊 = max(0, UE - CF)，意料之外的程度
         double surprise = Math.max(0.0, ue - cf);
 
-        // 3. 违和感 = mutualExclusions 加权
+        // 3. 违和感 = mutualExclusions v2 dissonance_strength 加权
         double dissonance = 0.0;
         int mxCount = 0;
         if (mutualExclusions != null && !mutualExclusions.isEmpty()) {
             mxCount = mutualExclusions.size();
-            double mxSimSum = 0.0;
+            double mxStrengthSum = 0.0;
             for (Map<String, Object> mx : mutualExclusions) {
-                Object sim = mx.get("similarity");
-                if (sim instanceof Number) {
-                    mxSimSum += ((Number) sim).doubleValue();
+                Object strength = mx.get("dissonance_strength");
+                if (strength instanceof Number) {
+                    mxStrengthSum += ((Number) strength).doubleValue();
                 }
             }
-            dissonance = mxCount * (mxSimSum / mxCount); // count × avgSimilarity
+            // dissonance = 平均失调强度 × count，归一化到合理范围
+            dissonance = mxCount > 0 ? mxStrengthSum / mxCount : 0.0;
         }
 
         // 4. 合理感 = 共鸣节点占比 (resonant / total)

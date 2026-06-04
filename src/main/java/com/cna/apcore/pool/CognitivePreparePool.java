@@ -274,11 +274,12 @@ public class CognitivePreparePool {
         action.computeAccidentDegree();
         // continueWeight 已在 CognitiveAction.from() 中从 sourceUnit 继承
 
-        // 检索先验经验
+        // 检索先验经验（数量上限防止 prompt 爆炸）
         List<Integer> topDimIds = getTopDimIds(best.getUeUnits(), CoreConfig.TOP_N_ACTION_PREDICTS);
         if (!topDimIds.isEmpty() && experiencesDB != null) {
+            int maxPredicts = Math.min(action.getScale(), CoreConfig.MAX_ACTION_PREDICTS);
             List<ActionPredict> predicts = experiencesDB.queryByFeelings(
-                    topDimIds, actionTextEmb, action.getScale());
+                    topDimIds, actionTextEmb, maxPredicts);
             action.setPredicts(predicts);
         }
         // ActionPressure 暂为 0（TODO）

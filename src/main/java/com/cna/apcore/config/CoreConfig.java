@@ -50,6 +50,12 @@ public class CoreConfig {
     /** 每个 UE 节点增加多少条经验请求量 */
     public static final int SCALE_PER_UE_NODE;
 
+    /** 先验经验最大条数上限（防止 prompt 爆炸） */
+    public static final int MAX_ACTION_PREDICTS;
+
+    /** 每条先验经验文本最大字符数 */
+    public static final int ACTION_PREDICT_TEXT_MAX_CHARS;
+
     // ==========================================
     // 感觉维度参数
     // ==========================================
@@ -94,6 +100,16 @@ public class CoreConfig {
 
     /** 自我检查空闲判断阈值（池大小低于此值才触发） */
     public static final int TICK_SELFCHECK_IDLE_THRESHOLD;
+
+    // ==========================================
+    // 调试/指标参数
+    // ==========================================
+
+    /** 是否启用注意力指标记录 */
+    public static final boolean ATTENTION_METRICS_ENABLED;
+
+    /** 注意力指标环形缓冲区容量 */
+    public static final int ATTENTION_METRICS_BUFFER_SIZE;
 
     // ==========================================
     // 实践加成（practicalBonus）— 内源任务继承父权重 + 定值
@@ -205,6 +221,31 @@ public class CoreConfig {
     public static final int FATIGUE_MAX_AGE_TICKS;
 
     // ==========================================
+    // 互斥检测 v2 参数（触发内距离法 / Intra-Triggered Dissonance）
+    // ==========================================
+
+    /** 触发相似度下限：余弦相似度达到此值的感觉视为被 action 触发 */
+    public static final double INTRATRIGGER_TRIGGER_THRESHOLD;
+
+    /** 最多分析几个触发感觉 */
+    public static final int INTRATRIGGER_MAX_TRIGGERED;
+
+    /** 最少需要几个触发感觉才做分析（太少无意义） */
+    public static final int INTRATRIGGER_MIN_TRIGGERED;
+
+    /** 孤立阈值：触发感觉到其他 peer 的平均距离超过此值视为"触发但孤立" */
+    public static final double INTRATRIGGER_ISOLATION_THRESHOLD;
+
+    /** 远距对阈值：两个触发感觉的相似度低于此值视为"远距触发对" */
+    public static final double INTRATRIGGER_PAIR_THRESHOLD;
+
+    /** 最多报告几个互斥/失调候选 */
+    public static final int INTRATRIGGER_MAX_REPORT;
+
+    /** 是否启用触发感觉聚类检测 */
+    public static final boolean INTRATRIGGER_CLUSTER_ENABLED;
+
+    // ==========================================
     // 初始化
     // ==========================================
 
@@ -234,6 +275,10 @@ public class CoreConfig {
         TOP_N_ACTION_PREDICTS     = getInt("v4.core.topNActionPredicts", 5);
         SCALE_PER_UE_NODE         = getInt("v4.core.scalePerUENode", 2);
 
+        // —— 经验检索上限 ——
+        MAX_ACTION_PREDICTS            = getInt("v4.core.maxActionPredicts", 15);
+        ACTION_PREDICT_TEXT_MAX_CHARS  = getInt("v4.core.predictTextMaxChars", 300);
+
         // —— 感觉维度 ——
         HABITUATION_LIMIT         = getInt("v4.core.habituationLimit", 10);
         BFS_MAX_LAYERS            = getInt("v4.core.bfsMaxLayers", 3);
@@ -250,6 +295,10 @@ public class CoreConfig {
         TICK_SELFCHECK_INTERVAL_TICKS       = getInt("v4.tick.selfCheckIntervalTicks", 30);
         TICK_SELFCHECK_REQUIRE_IDLE         = getBoolean("v4.tick.selfCheckRequireIdle", true);
         TICK_SELFCHECK_IDLE_THRESHOLD       = getInt("v4.tick.selfCheckIdleThreshold", 3);
+
+        // —— 调试/指标 ——
+        ATTENTION_METRICS_ENABLED        = getBoolean("v4.debug.attentionMetrics", false);
+        ATTENTION_METRICS_BUFFER_SIZE    = getInt("v4.debug.attentionMetricsBuffer", 100);
 
         // —— 实践加成（内源继承父权重 + 定值）——
         NEXT_ACTION_BONUS            = getDouble("v4.bonus.nextAction", 0.2);
@@ -281,6 +330,15 @@ public class CoreConfig {
         FATIGUE_DECAY_RATE           = getDouble("v4.fatigue.decayRate", 0.08);
         FATIGUE_SENSITIVITY          = getDouble("v4.fatigue.sensitivity", 2.5);
         FATIGUE_MAX_AGE_TICKS        = getInt("v4.fatigue.maxAgeTicks", 200);
+
+        // —— 互斥检测 v2（触发内距离法）——
+        INTRATRIGGER_TRIGGER_THRESHOLD   = getDouble("v4.intratrigger.triggerThreshold", 0.4);
+        INTRATRIGGER_MAX_TRIGGERED       = getInt("v4.intratrigger.maxTriggered", 20);
+        INTRATRIGGER_MIN_TRIGGERED       = getInt("v4.intratrigger.minTriggered", 4);
+        INTRATRIGGER_ISOLATION_THRESHOLD = getDouble("v4.intratrigger.isolationThreshold", 0.6);
+        INTRATRIGGER_PAIR_THRESHOLD      = getDouble("v4.intratrigger.pairThreshold", 0.15);
+        INTRATRIGGER_MAX_REPORT          = getInt("v4.intratrigger.maxReport", 8);
+        INTRATRIGGER_CLUSTER_ENABLED     = getBoolean("v4.intratrigger.clusterEnabled", true);
 
         // —— Chat 消息聚合 ——
         CHAT_BATCH_MIN_MESSAGES        = getInt("v4.chat.batchMinMessages", 3);

@@ -1106,15 +1106,20 @@ public class ActionLoop implements MosireAPI {
             data.put("curiosity_context", curiosityContext);
         }
 
-        // 先验经验
+        // 先验经验（每条截断到 ACTION_PREDICT_TEXT_MAX_CHARS，防止 prompt 爆炸）
         StringBuilder predictsText = new StringBuilder();
         List<ActionPredict> predicts = action.getActionPredicts();
         if (!predicts.isEmpty()) {
+            int maxChars = CoreConfig.ACTION_PREDICT_TEXT_MAX_CHARS;
             for (int i = 0; i < predicts.size(); i++) {
                 var p = predicts.get(i);
+                String text = p.getExpText() != null ? p.getExpText() : "";
+                if (text.length() > maxChars) {
+                    text = text.substring(0, maxChars) + "...";
+                }
                 predictsText.append(String.format("  [经验%d] (ID=%d, 相似度=%.3f, 有用度=%.1f): %s\n",
                         i + 1, p.getExperienceId(), p.getSimilarity(),
-                        p.getHelpfulDegree(), p.getExpText() != null ? p.getExpText() : ""));
+                        p.getHelpfulDegree(), text));
             }
         }
         data.put("action_predicts_text", predictsText.toString());
@@ -1123,7 +1128,37 @@ public class ActionLoop implements MosireAPI {
         String poolSummary = preparePool.buildPoolSummary();
         data.put("pool_summary", poolSummary);
 
+        // ★ 诊断日志：每个 Prompt 字段的字符数，方便定位膨胀源头
+        if (log.isInfoEnabled()) {
+            StringBuilder sizeLog = new StringBuilder("[ActionLoop] 📏 Prompt 字段尺寸: ");
+            sizeLog.append("action_text=").append(nullSafeLen(action.getActionText()));
+            sizeLog.append(", pool_summary=").append(nullSafeLen(poolSummary));
+            sizeLog.append(", demand_analysis=").append(nullSafeLen(demandAnalysis));
+            sizeLog.append(", feeling_resonance=").append(nullSafeLen(feelingResonanceBlock));
+            sizeLog.append(", action_predicts=").append(nullSafeLen(predictsText.toString()));
+            sizeLog.append(", related_exps=").append(nullSafeLen(associationBlock.getOrDefault("related_experiences", "")));
+            sizeLog.append(", predicted_exps=").append(nullSafeLen(associationBlock.getOrDefault("predicted_experiences", "")));
+            sizeLog.append(", curiosity=").append(nullSafeLen(curiosityContext));
+            sizeLog.append(", templates=").append(nullSafeLen(actionTemplatesText));
+            sizeLog.append(", mutual_ex=").append(mutualExclusions != null ? mutualExclusions.size() : 0);
+            sizeLog.append(" | TOTAL_EST=").append(
+                    nullSafeLen(action.getActionText())
+                    + nullSafeLen(poolSummary)
+                    + nullSafeLen(demandAnalysis)
+                    + nullSafeLen(feelingResonanceBlock)
+                    + nullSafeLen(predictsText.toString())
+                    + nullSafeLen(associationBlock.getOrDefault("related_experiences", ""))
+                    + nullSafeLen(associationBlock.getOrDefault("predicted_experiences", ""))
+                    + nullSafeLen(curiosityContext)
+                    + nullSafeLen(actionTemplatesText));
+            log.info(sizeLog.toString());
+        }
+
         return data;
+    }
+
+    private static int nullSafeLen(String s) {
+        return s == null ? 0 : s.length();
     }
 
     /**
