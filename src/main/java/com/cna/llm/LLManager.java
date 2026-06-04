@@ -265,6 +265,9 @@ public class LLManager {
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
+                // 缓存轮数超限时清空（保留 system），防止无限膨胀
+                truncateGlobalCacheIfNeeded();
+
                 // 仅在上下文被清空后的首轮注入长期记忆和当前想法
                 // 正常运行期间由 GLOBAL_CACHE 承载任务内上下文
                 boolean needInjection = GLOBAL_CACHE.wasContextCleared;
@@ -385,6 +388,20 @@ public class LLManager {
             GLOBAL_CACHE.messages.add(toolMsg);
             log.info("[LLManager] feedToolResult -> 全局缓存压入工具结果: tool={}, callId={}, 消息总数: {}",
                     toolName, toolCallId, GLOBAL_CACHE.messages.size());
+        }
+    }
+
+    /** 缓存消息超过上限时清空（保留 system），防止无限膨胀导致 prompt 超长 */
+    private static void truncateGlobalCacheIfNeeded() {
+        int size = GLOBAL_CACHE.messages.size();
+        if (size > MAX_CONTEXT_CACHE_ROUNDS) {
+            ArrayNode fresh = jsonMapper.createArrayNode();
+            fresh.add(GLOBAL_CACHE.messages.get(0)); // 保留 system 消息
+            GLOBAL_CACHE.messages = fresh;
+            GLOBAL_CACHE.roundCount.set(0);
+            GLOBAL_CACHE.wasContextCleared = true;
+            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已清空（保留 system）→ 新消息数 1",
+                    size, MAX_CONTEXT_CACHE_ROUNDS);
         }
     }
 

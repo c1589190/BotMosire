@@ -35,7 +35,9 @@ public class AssociationEngine {
     private static volatile AssociationEngine INSTANCE;
 
     /** 最多返回的相关经验条数 */
-    private static final int MAX_RELATED_EXPERIENCES = 8;
+    private static final int MAX_RELATED_EXPERIENCES = 3;
+    /** 最多返回的预测经验条数 */
+    private static final int MAX_PREDICTED_EXPERIENCES = 3;
     /** score_count 置信度上限（达到此值即满分） */
     private static final int SCORE_COUNT_CAP = 10;
 
@@ -240,7 +242,7 @@ public class AssociationEngine {
         });
 
         // 4. 格式化输出 — 紧凑工具链摘要模式
-        int limit = Math.min(MAX_RELATED_EXPERIENCES, candidates.size());
+        int limit = Math.min(MAX_PREDICTED_EXPERIENCES, candidates.size());
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("【预测 — 从 %d 条触发经验的顺序通道推断】\n", totalPredecessors));
 

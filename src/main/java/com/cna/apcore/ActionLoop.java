@@ -31,7 +31,7 @@ import com.cna.apcore.model.CognitivePrepareUnit;
 import com.cna.apcore.pool.CognitivePreparePool;
 import com.cna.config.ConfigsManager;
 import com.cna.db.FeelingDimensionManager;
-import com.cna.db.MDManager;
+
 import com.cna.db.FeelingHypergraphManager;
 import com.cna.llm.LLMAdapter;
 import com.cna.llm.LLManager;
@@ -1050,75 +1050,21 @@ public class ActionLoop implements MosireAPI {
         Map<String, Object> data = new HashMap<>();
 
         data.put("action_text", action.getActionText());
-        // 显式传递来源标识，确保 LLM 知道消息来自哪个平台/会话
         data.put("source_ids", action.getSourceUnit().getSourceIds());
-        data.put("cognitive_familiarity", action.getCognitiveFamiliarity());
-        data.put("scale", action.getScale());
-        data.put("accident_degree", action.getAccidentDegree());
-        data.put("action_pressure", action.getActionPressure());
-        data.put("continue_weight", action.getContinueWeight());
         data.put("ue_concepts", action.getUEConcepts());
         data.put("ue_dim_ids", action.getUEDimIds());
         data.put("now_time", Utils.getNowPrecise());
 
-        // ★ 选择上下文：告诉 LLM 为什么这个单元被选中，各项因子的贡献
-        CognitivePrepareUnit src = action.getSourceUnit();
-        data.put("selection_src_priority", src.getSourcePriority());
-        data.put("selection_attention", src.getAttentionEnergy());
-        data.put("selection_semantic_weight", src.getSemanticWeight());
-        data.put("selection_tick", src.getTick());
-        data.put("selection_practical_bonus", src.getSourcePriority() + src.getAttentionEnergy() + (1.0 + Math.log(src.getTick() + 1) / Math.log(2)));
-        data.put("selection_is_endogenous", src.isEndogenous());
-
-        // 生成可读的选择原因
-        String selectionReason = buildSelectionReason(src, action);
-        data.put("selection_reason", selectionReason);
-
-        // ★ 动机分析（DemandManager 六维认知感受 → 人话翻译）
-        if (demandAnalysis != null && !demandAnalysis.isBlank()) {
-            data.put("demand_analysis", demandAnalysis);
-        }
-
-        // ★ 行动模板匹配：从历史经验中统计出的高频工具建议
+        // 行动模板：历史高频工具建议
         if (actionTemplatesText != null && !actionTemplatesText.isBlank()) {
             data.put("action_templates_text", actionTemplatesText);
         }
 
-        // ★ 工具方法论：V4 模式注入工具使用指南（包含工具组管理、常见协作模式等）
-        String toolsGuide = MDManager.read("prompts/toolsGuide.md", "");
-        if (toolsGuide != null && !toolsGuide.isBlank()) {
-            int maxChars = CoreConfig.MAX_METHODOLOGY_CHARS;
-            if (toolsGuide.length() > maxChars) {
-                toolsGuide = toolsGuide.substring(0, maxChars)
-                        + "\n\n[... 方法论已截断，完整内容见 prompts/toolsGuide.md ...]";
-            }
-            data.put("tools_guide", toolsGuide);
-        }
-
-        // ★ 联想引擎：相关经验 + 顺序通道预测
+        // 联想引擎：顺序通道预测（3 条）
         Map<String, String> associationBlock = associationEngine.buildPromptBlock(action, experiencesDB, feelingsDB);
-        data.put("related_experiences_text", associationBlock.getOrDefault("related_experiences", ""));
         data.put("predicted_experiences_text", associationBlock.getOrDefault("predicted_experiences", ""));
 
-        // ★ 互斥感觉维度（与当前 action 语义相斥的已有感觉）
-        if (mutualExclusions != null && !mutualExclusions.isEmpty()) {
-            data.put("mutual_exclusions", mutualExclusions);
-        }
-
-        // ★ 感觉谐振分析结果（违和/一致感觉维度）
-        if (feelingResonanceBlock != null && !feelingResonanceBlock.isBlank()) {
-            data.put("feeling_resonance", feelingResonanceBlock);
-        }
-
-        // ★ 好奇心上下文（V4：从 CuriosityListManager 直接注入，不经过旧 Current_Memorys）
-        String curiosityContext = com.cna.agent.CuriosityListManager.getInstance() != null
-                ? com.cna.agent.CuriosityListManager.getInstance().buildCuriosityPromptBlock()
-                : "";
-        if (!curiosityContext.isBlank()) {
-            data.put("curiosity_context", curiosityContext);
-        }
-
-        // 先验经验 — 只展示 Top 3 最相似的经验，每条限制 200 字符
+        // 先验经验：Top 3，每条 ≤ 200 字符
         StringBuilder predictsText = new StringBuilder();
         List<ActionPredict> predicts = action.getActionPredicts();
         if (!predicts.isEmpty()) {
@@ -1137,34 +1083,13 @@ public class ActionLoop implements MosireAPI {
         }
         data.put("action_predicts_text", predictsText.toString());
 
-        // 准备池概况（限制最多显示 POOL_SUMMARY_MAX_UNITS 个单元，防止 prompt 爆炸）
-        String poolSummary = preparePool.buildPoolSummary(CoreConfig.POOL_SUMMARY_MAX_UNITS);
-        data.put("pool_summary", poolSummary);
-
-        // ★ 诊断日志：每个 Prompt 字段的字符数，方便定位膨胀源头
+        // 诊断日志
         if (log.isInfoEnabled()) {
-            StringBuilder sizeLog = new StringBuilder("[ActionLoop] 📏 Prompt 字段尺寸: ");
-            sizeLog.append("action_text=").append(nullSafeLen(action.getActionText()));
-            sizeLog.append(", pool_summary=").append(nullSafeLen(poolSummary));
-            sizeLog.append(", demand_analysis=").append(nullSafeLen(demandAnalysis));
-            sizeLog.append(", feeling_resonance=").append(nullSafeLen(feelingResonanceBlock));
-            sizeLog.append(", action_predicts=").append(nullSafeLen(predictsText.toString()));
-            sizeLog.append(", related_exps=").append(nullSafeLen(associationBlock.getOrDefault("related_experiences", "")));
-            sizeLog.append(", predicted_exps=").append(nullSafeLen(associationBlock.getOrDefault("predicted_experiences", "")));
-            sizeLog.append(", curiosity=").append(nullSafeLen(curiosityContext));
-            sizeLog.append(", templates=").append(nullSafeLen(actionTemplatesText));
-            sizeLog.append(", mutual_ex=").append(mutualExclusions != null ? mutualExclusions.size() : 0);
-            sizeLog.append(" | TOTAL_EST=").append(
-                    nullSafeLen(action.getActionText())
-                    + nullSafeLen(poolSummary)
-                    + nullSafeLen(demandAnalysis)
-                    + nullSafeLen(feelingResonanceBlock)
-                    + nullSafeLen(predictsText.toString())
-                    + nullSafeLen(associationBlock.getOrDefault("related_experiences", ""))
-                    + nullSafeLen(associationBlock.getOrDefault("predicted_experiences", ""))
-                    + nullSafeLen(curiosityContext)
-                    + nullSafeLen(actionTemplatesText));
-            log.info(sizeLog.toString());
+            log.info("[ActionLoop] 📏 Prompt 字段: action={}, predicts={}, predicted={}, templates={}",
+                    nullSafeLen(action.getActionText()),
+                    nullSafeLen(predictsText.toString()),
+                    nullSafeLen(associationBlock.getOrDefault("predicted_experiences", "")),
+                    nullSafeLen(actionTemplatesText));
         }
 
         return data;
@@ -1172,51 +1097,6 @@ public class ActionLoop implements MosireAPI {
 
     private static int nullSafeLen(String s) {
         return s == null ? 0 : s.length();
-    }
-
-    /**
-     * 为 LLM 生成可读的"为什么这个单元被选中"解释。
-     */
-    private String buildSelectionReason(CognitivePrepareUnit src, CognitiveAction action) {
-        double srcPri = src.getSourcePriority();
-        double attn = src.getAttentionEnergy();
-        double semW = src.getSemanticWeight();
-        int tick = src.getTick();
-        double cw = src.getContinueWeight();
-        boolean endogenous = src.isEndogenous();
-
-        StringBuilder reason = new StringBuilder();
-
-        double tickBonus = 1.0 + Math.log(tick + 1) / Math.log(2);
-        double practical = srcPri + tickBonus + attn;
-        double total = semW + practical;
-
-        if (endogenous && attn > srcPri) {
-            reason.append("内源任务，注意力蓄能占主导（attn=" + String.format("%.2f", attn) + "）。");
-        } else if (semW > 1.5) {
-            reason.append("语义高度匹配（semanticWeight=" + String.format("%.2f", semW) + "），与你的感觉体系高度共鸣。");
-        } else if (tick > 10) {
-            reason.append("已在池中等待 " + tick + " 轮（tickBonus=" + String.format("%.2f", tickBonus) + "），累积紧迫度驱动。");
-        } else if (cw > 1.0) {
-            reason.append("你之前手动 boost 了此单元的持续权重（CW=" + String.format("%.2f", cw) + "）。");
-        } else {
-            reason.append("综合选择得分最高（semantic=" + String.format("%.2f", semW)
-                    + " + practical=" + String.format("%.2f", practical)
-                    + " = " + String.format("%.2f", total) + "）。");
-        }
-
-        double cf = action.getCognitiveFamiliarity();
-        double accident = action.getAccidentDegree();
-        if (cf > 3.0) {
-            reason.append(" 高熟悉度（CF=" + String.format("%.1f", cf) + "），可快速处理。");
-        } else if (cf < 0.5) {
-            reason.append(" 新颖任务（CF=" + String.format("%.2f", cf) + "），需探索。");
-        }
-        if (accident > 0.3) {
-            reason.append(" 意外度偏高（" + String.format("%.2f", accident) + "）。");
-        }
-
-        return reason.toString();
     }
 
     private ArrayNode buildToolsArray() {
