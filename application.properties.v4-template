@@ -10,8 +10,6 @@
 #v4.core.maxPoolSize=32
 #v4.core.maxTicksWithoutSelect=20
 #v4.core.cognitiveTickMs=2000
-# action_text 最大字符数，0=不截断（推荐）
-#v4.core.maxActionTextChars=0
 #v4.core.topNActionPredicts=5
 #v4.core.scalePerUENode=2
 #v4.core.singleBoostCap=1.0

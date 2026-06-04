@@ -114,14 +114,7 @@ public class LLManager {
             Map<String, Object> dataModel,
             ArrayNode tools) {
         String userPrompt = render(userTemplate, dataModel);
-        // ★ 智能截断：由 LLMAdapter 根据模型配置的 maxPromptChars 处理超长 prompt
-        int maxChars = llm.getConfig().getMaxPromptChars();
-        if (maxChars > 0 && userPrompt.length() > maxChars) {
-            userPrompt = llm.truncatePrompt(userPrompt, maxChars);
-        }
-        log.info("[LLManager 无状态] Prompt 渲染完毕, 长度: {} chars{}",
-                userPrompt.length(),
-                userPrompt.length() > maxChars ? " (已截断)" : "");
+        log.info("[LLManager 无状态] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
 
         ArrayNode messages = jsonMapper.createArrayNode();
         ObjectNode sysMsg = messages.addObject();
@@ -272,10 +265,6 @@ public class LLManager {
                     log.info("[LLManager] 🧠 初始化全局共享上下文");
                 }
 
-                // 在回合开始的干净边界做截断：此刻缓存必为完整的 assistant+tool 配对，
-                // 截断不会留下孤儿 tool 消息（修复 mid-round 截断导致的 API 400）
-                truncateGlobalCacheIfNeeded();
-
                 // 仅在上下文被清空后的首轮注入长期记忆和当前想法
                 // 正常运行期间由 GLOBAL_CACHE 承载任务内上下文
                 boolean needInjection = GLOBAL_CACHE.wasContextCleared;
@@ -310,13 +299,7 @@ public class LLManager {
                 dataModel.put("now_time", Utils.getNowPrecise());
 
                 String userPrompt = render(userTemplate, dataModel);
-                int maxChars = llm.getConfig().getMaxPromptChars();
-                if (maxChars > 0 && userPrompt.length() > maxChars) {
-                    userPrompt = llm.truncatePrompt(userPrompt, maxChars);
-                }
-                log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars{}",
-                        userPrompt.length(),
-                        userPrompt.length() > maxChars ? " (已截断)" : "");
+                log.info("[LLManager 全局缓存] Prompt 渲染完毕, 长度: {} chars", userPrompt.length());
 
                 ArrayNode workingMessages = GLOBAL_CACHE.messages.deepCopy();
                 ObjectNode userMsgNode = jsonMapper.createObjectNode();
@@ -392,52 +375,6 @@ public class LLManager {
             GLOBAL_CACHE.messages.add(toolMsg);
             log.info("[LLManager] feedToolResult -> 全局缓存压入工具结果: tool={}, callId={}, 消息总数: {}",
                     toolName, toolCallId, GLOBAL_CACHE.messages.size());
-
-            // 不在此处截断：回合中途截断会删掉 assistant 却留下孤儿 tool 消息 → API 400。
-            // 截断统一在下一回合 executeSceneAsyncWithCache 开头进行。
-        }
-    }
-
-    private static void truncateGlobalCacheIfNeeded() {
-        int size = GLOBAL_CACHE.messages.size();
-        if (size > MAX_CONTEXT_CACHE_ROUNDS) {
-            double ratio = ConfigsManager.CONTEXT_RETENTION_RATIO;
-
-            ArrayNode newMessages = jsonMapper.createArrayNode();
-            // 始终保留 system 消息
-            newMessages.add(GLOBAL_CACHE.messages.get(0));
-
-            if (ratio > 0) {
-                // ratio 控制摘要的总长度上限。ratio=0.3 → 3000字, ratio=1.0 → 10000字
-                int maxSummaryChars = (int) (ratio * 10000);
-                StringBuilder sb = new StringBuilder(Math.min(maxSummaryChars, 1024));
-                sb.append("[上下文回顾] 以下是你更早的内部活动记录（已压缩）：\n");
-                for (int i = 1; i < size && sb.length() < maxSummaryChars; i++) {
-                    JsonNode msg = GLOBAL_CACHE.messages.get(i);
-                    String role = msg.path("role").asText("");
-                    if (!"user".equals(role) && !"assistant".equals(role)) continue;
-                    String content = msg.path("content").asText("");
-                    if (content.isBlank()) continue;
-                    String shortContent = content.length() > 150
-                            ? content.substring(0, 150) + "…"
-                            : content;
-                    sb.append('[').append(role).append("] ").append(shortContent).append('\n');
-                }
-
-                if (sb.length() > 60) {
-                    ObjectNode ctxMsg = jsonMapper.createObjectNode();
-                    ctxMsg.put("role", "user");
-                    ctxMsg.put("content", sb.toString());
-                    newMessages.add(ctxMsg);
-                }
-            }
-            // ratio == 0 → 仅保留 system，不注入摘要
-
-            GLOBAL_CACHE.messages = newMessages;
-            GLOBAL_CACHE.roundCount.set(0);
-            GLOBAL_CACHE.wasContextCleared = true;
-            log.info("[LLManager] 全局缓存消息数 {} 超过上限 {}，已截断(ratio={}) → 新消息数 {}",
-                    size, MAX_CONTEXT_CACHE_ROUNDS, String.format("%.0f%%", ratio * 100), newMessages.size());
         }
     }
 

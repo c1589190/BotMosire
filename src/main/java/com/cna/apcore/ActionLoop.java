@@ -86,15 +86,7 @@ public class ActionLoop implements MosireAPI {
     private final AtomicInteger experienceStoredCount = new AtomicInteger(0);
     private final AtomicInteger feelingStimulatedCount = new AtomicInteger(0);
 
-    // ★ Prompt 大小保护：防止 action_text/pool_summary/action_predicts_text
-    //   组合后超过 API 上下文窗口导致 502
-    /** action_text 最大字符数（超长聊天历史截断），0=不截断 */
-    private static final int MAX_ACTION_TEXT_CHARS =
-            com.cna.apcore.config.CoreConfig.MAX_ACTION_TEXT_CHARS;
-    /** pool_summary 最大单元数（200 条 ≈ ~10K chars，由 Adapter 层的 maxPromptChars 兜底截断） */
-    private static final int MAX_POOL_SUMMARY_UNITS = 200;
-    /** action_predicts_text 最大经验条数 */
-    private static final int MAX_PREDICT_EXPERIENCES = 15;
+    // Prompt 大小保护已移除 — 超量处理是 LLMAdapter 的事
 
     // ★ 感觉维度管理器（封装互斥检测、刺激处理、打分传播、谐振分析、违和积累）
     private final FeelingsManager feelingsManager;
@@ -1052,9 +1044,6 @@ public class ActionLoop implements MosireAPI {
     /**
      * 构建 FreeMarker 模板所需的数据模型。
      * 模板渲染由 {@link LLManager#render(String, Map)} 执行。
-     *
-     * ★ 内含 prompt 大小保护：对 action_text、pool_summary 等大字段做截断，
-     *    防止组合 prompt 超过 API 上下文窗口导致 502 错误。
      */
     private Map<String, Object> buildActionPromptData(CognitiveAction action, String feelingResonanceBlock,
                                                        List<Map<String, Object>> mutualExclusions,
@@ -1062,15 +1051,7 @@ public class ActionLoop implements MosireAPI {
                                                        String actionTemplatesText) {
         Map<String, Object> data = new HashMap<>();
 
-        // ★ action_text 上限：防止超长聊天历史撑爆上下文窗口
-        String actionText = action.getActionText();
-        if (actionText != null && actionText.length() > MAX_ACTION_TEXT_CHARS) {
-            actionText = actionText.substring(0, MAX_ACTION_TEXT_CHARS)
-                    + "\n\n[... 后续内容已被截断，原始长度 " + actionText.length() + " 字符 ...]";
-            log.warn("[ActionLoop] ⚠️ action_text 超长 ({} → {} chars)，已截断",
-                    action.getActionText().length(), MAX_ACTION_TEXT_CHARS);
-        }
-        data.put("action_text", actionText);
+        data.put("action_text", action.getActionText());
         // 显式传递来源标识，确保 LLM 知道消息来自哪个平台/会话
         data.put("source_ids", action.getSourceUnit().getSourceIds());
         data.put("cognitive_familiarity", action.getCognitiveFamiliarity());
@@ -1128,29 +1109,21 @@ public class ActionLoop implements MosireAPI {
             data.put("curiosity_context", curiosityContext);
         }
 
-        // 先验经验（★ 截断保护：最多 MAX_PREDICT_EXPERIENCES 条）
+        // 先验经验
         StringBuilder predictsText = new StringBuilder();
         List<ActionPredict> predicts = action.getActionPredicts();
         if (!predicts.isEmpty()) {
-            int limit = Math.min(predicts.size(), MAX_PREDICT_EXPERIENCES);
-            for (int i = 0; i < limit; i++) {
+            for (int i = 0; i < predicts.size(); i++) {
                 var p = predicts.get(i);
-                String expText = p.getExpText();
-                if (expText != null && expText.length() > 300) {
-                    expText = expText.substring(0, 300) + "...";
-                }
                 predictsText.append(String.format("  [经验%d] (ID=%d, 相似度=%.3f, 有用度=%.1f): %s\n",
                         i + 1, p.getExperienceId(), p.getSimilarity(),
-                        p.getHelpfulDegree(), expText));
-            }
-            if (predicts.size() > limit) {
-                predictsText.append(String.format("  ... 还有 %d 条经验未显示\n", predicts.size() - limit));
+                        p.getHelpfulDegree(), p.getExpText() != null ? p.getExpText() : ""));
             }
         }
         data.put("action_predicts_text", predictsText.toString());
 
-        // 准备池概况（★ 截断保护：最多显示 MAX_POOL_SUMMARY_UNITS 个单元）
-        String poolSummary = preparePool.buildPoolSummary(MAX_POOL_SUMMARY_UNITS);
+        // 准备池概况
+        String poolSummary = preparePool.buildPoolSummary();
         data.put("pool_summary", poolSummary);
 
         return data;

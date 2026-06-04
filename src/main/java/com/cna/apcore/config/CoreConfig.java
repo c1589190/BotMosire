@@ -173,9 +173,6 @@ public class CoreConfig {
     /** LLM 单次 boost ContinueWeight 的上限 */
     public static final double SINGLE_BOOST_CAP;
 
-    /** action_text 最大字符数，超出部分截断，0=不截断 */
-    public static final int MAX_ACTION_TEXT_CHARS;
-
     // ==========================================
     // 注意力态度参数（感觉驱动的注意力倍率引擎）
     // ==========================================
@@ -308,7 +305,6 @@ public class CoreConfig {
         // —— 调度 ——
         COGNITIVE_TICK_MS         = getInt("v4.core.cognitiveTickMs", 2000);
         SINGLE_BOOST_CAP           = getDouble("v4.core.singleBoostCap", 1.0);
-        MAX_ACTION_TEXT_CHARS      = getInt("v4.core.maxActionTextChars", 0);
 
         log.info("[CoreConfig] V4 Core 配置初始化完毕: baselineThreshold={}, tickMs={}, poolSize={}",
                 BASELINE_THRESHOLD, COGNITIVE_TICK_MS, MAX_POOL_SIZE);
